@@ -9,11 +9,11 @@
  * looking forward), so in RM — no door enable — this is how the driver knows
  * the side.
  *
- * The scale follows the distance still to go: the end door (and a little
- * beyond) is always at the right edge, so far out the whole platform and train
- * are in view, and the picture closes in on the cab and the last pillar as the
- * train comes to a stand (26 px/m over the last couple of metres). Only the
- * length is scaled; the widths across the track stay as drawn.
+ * Far out the scale follows the distance still to go, with the eye at the left
+ * and the end door (and a little beyond) at the right edge, so the whole
+ * platform and train are in view. Once the cab reaches PSD door 2-5 the zoom
+ * stops (用户决定): from there on the scale is fixed and the train runs across
+ * the picture towards the last pillar, so its distance and speed read true.
  *
  * Geometry is approximate 【假设】: cars of 23.25 m (8 × = 186 m), five doors
  * per side at 4.6 m pitch from 3 m behind the car front, the driver's eye 1.8 m
@@ -29,11 +29,10 @@ import { FONT_CN } from './theme';
 const W = 760;
 const H = 200;
 const FONT = `Arial, "Helvetica Neue", Helvetica, sans-serif, ${FONT_CN}`;
-/** closest scale (px per metre), over the last metres */
-const PX_NEAR = 26;
-/** screen x of the driver's eye at the closest scale, and furthest left */
-const XE_NEAR = 600;
+/** screen x of the driver's eye while the view still zooms */
 const XE_FAR = 176;
+/** PSD door (car-door) the cab passes when the zoom stops */
+const FREEZE_AT = { car: 2, door: 5 };
 /** screen x kept for the end of the view ahead: the end door and a little beyond */
 const X_AHEAD = W - 24;
 /** across the track the picture shrinks with the scale (true proportions), down to this */
@@ -96,16 +95,20 @@ const C = {
 /** door centres of a car, measured from its front end (m, negative = back) */
 const doorsOf = (front: number) => Array.from({ length: DOORS }, (_, k) => front - FIRST_DOOR - k * DOOR_PITCH);
 
+/** metres still to go when the eye stands at the FREEZE_AT door */
+export const FREEZE_REM = (FREEZE_AT.car - 1) * CAR + FIRST_DOOR + (FREEZE_AT.door - 1) * DOOR_PITCH - EYE;
+/** the fixed scale from there on: that door to BEYOND past the mark fills the view */
+const PX_NEAR = (X_AHEAD - XE_FAR) / (FREEZE_REM + BEYOND);
+
 /**
- * Scale and the eye's screen position for `rem` metres still to go. The eye
- * moves right as the train closes in, reaching XE_NEAR at the mark; the scale
- * then fits everything up to BEYOND past the mark between the eye and X_AHEAD.
+ * Scale and the eye's screen position for `rem` metres still to go. Beyond
+ * FREEZE_REM the eye stays at XE_FAR and the scale fits everything up to
+ * BEYOND past the mark into the view; within it the scale is fixed and the
+ * eye moves right, reaching the mark's fixed screen position at the stop.
  */
 export function stopViewScale(rem: number): { px: number; xe: number } {
-  const s = Math.sqrt(Math.min(1, Math.max(0, (rem - 2) / 150)));
-  const xe = XE_NEAR - (XE_NEAR - XE_FAR) * s;
-  const px = Math.min(PX_NEAR, (X_AHEAD - xe) / (Math.max(0, rem) + BEYOND));
-  return { px, xe };
+  if (rem >= FREEZE_REM) return { px: (X_AHEAD - XE_FAR) / (rem + BEYOND), xe: XE_FAR };
+  return { px: PX_NEAR, xe: XE_FAR + (FREEZE_REM - rem) * PX_NEAR };
 }
 
 /** a step of `base` metres, coarsened so that marks stay at least `minPx` apart */
@@ -146,7 +149,7 @@ export class StopView {
     const { px: PX, xe: XE } = stopViewScale(rem);
     // drawn for a platform on top (driver's left); mirrored otherwise
     const top = t.platSide === 'L';
-    // across the track: true proportions with the scale (26 px/m is 3 m of car = 78 px), not below K_MIN
+    // across the track: as drawn at the fixed near scale, thinner further out, not below K_MIN
     const k = Math.max(K_MIN, Math.min(1, PX / PX_NEAR));
     const Y = (y: number) => Y0 + (y - Y0) * k;
     /** screen y of a point drawn at y (design units) */
