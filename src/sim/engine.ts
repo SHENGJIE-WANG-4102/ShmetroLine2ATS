@@ -8,7 +8,7 @@ import { gradePermille } from './gradient';
 import { buildTopology, linkChain, type Topology } from './topology';
 import { computeRunTimes, type RunTimes } from './dynamics';
 import {
-  generatePlan, initialDepotStock, type PlanContext,
+  generatePlan, initialDepotStock, terminalReuseRejections, type PlanContext,
 } from './timetable';
 import type {
   ActiveRoute, AlarmLevel, Command, DayType, Fault, Plan, PlatformState, SectionState, SignalState, SimConfig,
@@ -228,6 +228,8 @@ export class Sim {
       initPossessions(this);
       this.rngState = keep;
     }
+    // planning decisions the dispatcher should see: duties not joined on the line (D99)
+    for (const text of terminalReuseRejections(this.plan)) this.log('I', '运营', `运行图：${text}`);
     // set the automatic (fleeting) routes
     for (const r of topo.routes) if (r.fleeting && this.sig[r.start].route < 0) trySetRoute(this, r.id, { fleeting: true });
     for (const s of this.sw) s.moveUntil = 0;

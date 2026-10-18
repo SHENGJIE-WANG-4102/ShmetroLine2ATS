@@ -3325,7 +3325,8 @@ export function applyOverlay(ctx: PlanContext, plan: Plan, preset: { id: string;
       const duty = plan.blocks[trip.block];
       const next = duty && trips[duty.trips[duty.trips.indexOf(trip.id) + 1]];
       const turn = next && next.dir !== trip.dir ? turnbackAt(ctx.topo, trip.to, trip.dir) : undefined;
-      return !storedPlatformsClear(ctx.topo, plan, trip, turn?.kind === 'rear' ? turn.berths[0] : undefined);
+      // (only the berth being restored: a conflict elsewhere is not this car's)
+      return !storedPlatformsClear(ctx.topo, plan, trip, turn?.kind === 'rear' ? turn.berths[0] : undefined, x.block);
     });
     // (an added turnback now needs the slot: the car stays on its way to the
     // yard and the ledger reports the berth short, rather than a conflict)
@@ -3964,8 +3965,8 @@ function turnbackOccupancy(topo: Topology, plan: Plan) {
 
 /** Main-platform overnight stock also protects through and feeder moves;
  * a rear-platform arrival branches off before the main platform. */
-function storedPlatformsClear(topo: Topology, plan: Plan, trip: Pick<Trip,'dir'|'to'|'stops'>, arrivalBerth?: number) {
-  for (const block of plan.blocks) {
+function storedPlatformsClear(topo: Topology, plan: Plan, trip: Pick<Trip,'dir'|'to'|'stops'>, arrivalBerth?: number, only?: Block) {
+  for (const block of only ? [only] : plan.blocks) {
     if (block.withdrawal) continue;
     for (const hold of overnightHolds(block, liveTrips(plan, block))) {
       // (a headway's margin after the morning departure / before the evening arrival)

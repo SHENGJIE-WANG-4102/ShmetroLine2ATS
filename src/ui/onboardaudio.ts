@@ -7,7 +7,7 @@ import { STATIONS } from '../data/line2';
 import { onboardAnnouncement, onboardDoorSide } from '../data/onboardbank';
 import { PLT, type Snapshot, type TrainSnap, type Plan } from '../sim/model';
 import type { Topology } from '../sim/topology';
-import { RecordedSoundPlayer, automatic, audioTrain, predictStationStop, VVVF_MAX_RATE, STATION_ALIGNMENT_S,
+import { RecordedSoundPlayer, automatic, audioTrain, stopEstimate, VVVF_MAX_RATE, STATION_ALIGNMENT_S,
   type StationTrain, type StationSoundCommand } from './stationaudio';
 
 export interface OnboardAudioFrame {
@@ -31,6 +31,10 @@ export function onboardFrame(snap: Snapshot, heard: TrainSnap | null, topo: Topo
 export function onboardSoundEnabled(frame: OnboardAudioFrame): boolean {
   return !!frame.train && frame.enabled && !frame.muted && !frame.paused && frame.rate > 0 && frame.rate <= VVVF_MAX_RATE;
 }
+/** The car's PA follows position and doors, whoever drives (DTO/AM/CM/RM):
+ * only a revenue train in working order announces. An emergency brake starts
+ * nothing new but does not cut a phrase already playing. */
+const announces = (tr: StationTrain) => tr.inService && !tr.failed;
 const visit = (tr: StationTrain) => `${tr.id}|${tr.trip}|${tr.direction}|${tr.nextStation}`;
 export function cabinVolumes(v: number): { rolling: number; idle: number } {
   const fraction = Math.min(1, Math.max(0, v) / (80 / 3.6));
@@ -65,11 +69,12 @@ export class OnboardSoundPlanner {
     this.selected = tr.id; this.time = frame.t; this.rate = frame.rate;
     const call = `${visit(tr)}|${frame.destination}|${frame.doorSide}`;
     const slot = onboardAnnouncement(STATIONS[tr.nextStation]?.name, tr.direction, frame.destination, frame.doorSide, this.announcements);
-    const seconds = frame.willStop && automatic(tr) ? predictStationStop(tr) : null;
+    const seconds = frame.willStop && announces(tr) ? stopEstimate(tr) : null;
     const predicted = seconds === null ? null : frame.t + seconds;
     for (const [key, sound] of this.active) {
-      const invalid = sound.speech && (!automatic(tr) || !frame.willStop || sound.target !== call ||
-        (sound.predicted !== undefined && tr.phase === 'run' && (predicted === null || Math.abs(predicted - sound.predicted) > STATION_ALIGNMENT_S)));
+      // (only an ATO approach is predictable enough to fade a drifting phrase)
+      const invalid = sound.speech && (!announces(tr) || !frame.willStop || sound.target !== call ||
+        (automatic(tr) && sound.predicted !== undefined && tr.phase === 'run' && (predicted === null || Math.abs(predicted - sound.predicted) > STATION_ALIGNMENT_S)));
       if (invalid || frame.t >= sound.until) { commands.push(invalid ? { kind: 'stop', key, fadeS: .5 } : { kind: 'stop', key }); this.active.delete(key); }
     }
     const play = (key: string, clips: SoundClip[], offsetS: number, volume: number, loop = false, expected?: number) => {
@@ -86,9 +91,9 @@ export class OnboardSoundPlanner {
       if (!this.active.has(key)) play(key, [clip], 0, volume, true);
       else commands.push({ kind: 'volume', key, volume });
     }
-    if (!automatic(tr)) { this.pending = null; this.departing = null; this.armed = false; }
-    if (automatic(tr) && tr.phase === 'dwell' && tr.v <= .05) { this.armed = true; this.origin = tr.nextStation; }
-    if (this.armed && automatic(tr) && tr.phase === 'run' && tr.v > .001 && !tr.doors) {
+    if (!announces(tr)) { this.pending = null; this.departing = null; this.armed = false; }
+    if (announces(tr) && tr.phase === 'dwell' && tr.v <= .05) { this.armed = true; this.origin = tr.nextStation; }
+    if (this.armed && announces(tr) && tr.phase === 'run' && tr.v > .001 && !tr.doors) {
       this.armed = false;
       // The worker retains the departing stop until its first movement has
       // cleared it. Capture the real onset, then wait for the new nextStation.
@@ -103,7 +108,7 @@ export class OnboardSoundPlanner {
       }
     }
     if (this.pending && (!frame.willStop || this.pending.direction !== tr.direction || this.pending.key !== `next|${call}`)) this.pending = null;
-    if (this.pending && frame.t >= this.pending.at && automatic(tr)) {
+    if (this.pending && frame.t >= this.pending.at && announces(tr) && !tr.eb) {
       const pending = this.pending; this.pending = null;
       const offset = Math.max(0, frame.t - pending.at);
       const clip = this.bank.find(c => c.id === pending.next?.clipId && c.station === STATIONS[tr.nextStation]?.name && c.direction === tr.direction);
@@ -111,7 +116,7 @@ export class OnboardSoundPlanner {
         this.done.add(pending.key); play(pending.key, [clip], offset, 1);
       }
     }
-    if (slot?.arrived && predicted !== null && automatic(tr) && frame.willStop && tr.phase === 'run') {
+    if (slot?.arrived && predicted !== null && announces(tr) && !tr.eb && frame.willStop && tr.phase === 'run') {
       const arrival = slot.arrived;
       const advance = arrival.measuredAdvance ? arrival.advanceS : this.arrivalAdvanceS;
       const offset = Math.abs(frame.t - (predicted - advance)) < 1e-6 ? 0 : frame.t - (predicted - advance);

@@ -1611,3 +1611,18 @@ violations []
 - 最终验证：`npx tsc --noEmit`通过；`npx vitest run tests/timetable.test.ts tests/round3.test.ts --maxWorkers=1`为69 passed；`npx vitest run tests/features.test.ts -t 'wind restricts' --maxWorkers=1`为1 passed；`npx vitest run tests/core.test.ts -t 'relieves a late train' --maxWorkers=1`为1 passed。两日型`validate-plan`均0 error，`firstlast`和`gaode-compare`输出与改前完全一致，`git diff --check`通过。新增6项共用线回归，覆盖两日型入/出段与折返待发的重叠、出清边界、取消车次、4091/4089窗口及配属上限；原有测试预期值未改。
 - 日志及冻结计划：`work/probe/shared-lead/`；改前原图检查为`audit-before.log`，拒绝候选及库存/客运逐项比较为`compare-final.log`。未跑全量、soak或simday。
 - 人工120×重点：工作日09:30–10:15远东大道下行，4091现回川沙、4148独立出段，观察4089回段与后续下行；再看08:40–09:00淞虹路上行回段，确认另一条线上折返不导致白等。
+- 审阅后补充两处：
+  - 晚间加开后，把车恢复回过夜泊位前检查有没有车要通过，范围原来是全图所有过夜泊位，现在只看正在恢复的这一个（`storedPlatformsClear` 增加可选参数，只查指定车底）。
+  - 被拒绝的接续，开机时以 I 级「运营」事件写进事件日志，`validate-plan` 也逐条打印成 `info TURN_REJECTED`，不计入 issues。
+
+## D100 车内报站不分驾驶模式
+
+- 用户决定：CM、RM、人工驾驶照常车内报站。D71 那批实现写的「人工、CM、RM 不播自动报站」没有依据，只是为了让对时算法好写，这次撤回。车载广播由车辆按位置和车门事件触发，与谁驾驶无关。
+- 「下一站」：任何模式下，都在车门关闭、列车起动后延时播放。
+- 「到站」：仍按实测的提前量起播。起播时刻用同一个停稳估算 `stopEstimate`（按规划制动 0.75 m/s² 加冲击率修正），等于把 ATO 起播的位置当成触发点。ATO 下起播时刻与原来完全一样。
+- 播放中途预测停稳时刻偏移超过 3 s 就淡出，这条只对 ATO 生效。人工驾驶的制动不可预测，已经开播的不打断。
+- 仍不播的情况：
+  - 非载客、故障车不播；
+  - 紧急制动时不新开播，但已经在播的不打断；
+  - 通过或跳停不播。
+- 站台上的录音（进站车声、站台广播）仍只在 ATO 下播，因为那些素材本身是按 ATO 进站录的。

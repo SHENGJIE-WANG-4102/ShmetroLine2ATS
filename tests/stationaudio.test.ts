@@ -395,8 +395,18 @@ describe('selected train interior audio', () => {
     const commands = speech(p.update(onboard(100, countdown(34.5, { nextStation: target }))));
     expect(commands[0].clips[0].id).toBe('test-arrival'); expect(commands[0].offsetS).toBeCloseTo(.5);
   });
-  it.each([{ manual: true }, { mode: 'RM' as const }, { rm: true }, { mode: 'CM' as const }])('does not announce under manual/restricted operation %j', patch => {
+  it.each([{ manual: true }, { mode: 'RM' as const }, { rm: true }, { mode: 'CM' as const }])('announces at the same position under manual/restricted driving %j', patch => {
+    const commands = speech(planner().update(onboard(100, countdown(34.5, { nextStation: target, ...patch }))));
+    expect(commands[0].clips[0].id).toBe('test-arrival'); expect(commands[0].offsetS).toBeCloseTo(.5);
+  });
+  it.each([{ failed: true }, { inService: false }, { eb: true }])('starts no announcement for a failed, empty or emergency-braked train %j', patch => {
     expect(speech(planner().update(onboard(100, countdown(35, { nextStation: target, ...patch }))))).toEqual([]);
+  });
+  it('lets a manual driver brake differently without cutting the phrase', () => {
+    const p = planner();
+    expect(speech(p.update(onboard(100, countdown(35, { nextStation: target, mode: 'CM', manual: true }))))).toHaveLength(1);
+    const late = countdown(20, { nextStation: target, mode: 'CM', manual: true });
+    expect(p.update(onboard(100.2, late)).filter(c => c.kind === 'stop' && c.fadeS)).toEqual([]);
   });
   it('does not announce passing calls, unavailable stations, or the unrecorded direction', () => {
     expect(speech(planner().update(onboard(100, countdown(35, { nextStation: target }), { willStop: false })))).toEqual([]);

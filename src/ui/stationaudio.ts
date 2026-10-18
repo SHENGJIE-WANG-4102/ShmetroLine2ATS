@@ -56,7 +56,12 @@ export function automatic(tr: StationTrain): boolean {
  * The empirical probe decides whether this UI approximation is sufficient.
  */
 export function predictStationStop(tr: StationTrain): number | null {
-  if (!automatic(tr) || tr.phase !== 'run' || !Number.isFinite(tr.v) || !Number.isFinite(tr.a) || tr.v <= .2 || !Number.isFinite(tr.distance) || tr.distance <= 0) return null;
+  return automatic(tr) ? stopEstimate(tr) : null;
+}
+/** The same estimate for any driving mode: under manual driving it places a
+ * position-triggered announcement where an ATO train would start it. */
+export function stopEstimate(tr: StationTrain): number | null {
+  if (tr.phase !== 'run' || !Number.isFinite(tr.v) || !Number.isFinite(tr.a) || tr.v <= .2 || !Number.isFinite(tr.distance) || tr.distance <= 0) return null;
   const b = PERF.bPlan;
   const brakeDistance = tr.v * tr.v / (2 * b);
   if (brakeDistance > tr.distance + tr.v * STATION_ALIGNMENT_S) return null;
