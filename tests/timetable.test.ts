@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/engine';
-import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, allocateTerminalServices, buildStops, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, type ServiceRequest } from '../src/sim/timetable';
+import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, allocateTerminalServices, buildStops, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, depotMoves, terminalReuseRejections, type ServiceRequest } from '../src/sim/timetable';
 import { buildTopology } from '../src/sim/topology';
 import { computeRunTimes } from '../src/sim/dynamics';
 import { plannedDwell } from '../src/sim/calibration';
@@ -63,6 +63,52 @@ describe('daily depot homes', () => {
       const issues = validatePlan(sim.planCtx, plan);
       expect(issues.some(issue => issue.code === 'YARD_CAPACITY')).toBe(true);
       expect(issues.some(issue => issue.code === 'YARD_BALANCE')).toBe(false);
+    });
+  }
+});
+
+describe('shared depot lead turnbacks', () => {
+  for (const dayType of ['weekday', 'weekend'] as const) {
+    const sim = new Sim({ dayType, dateLabel: 'shared lead', startTime: 14400, seed: 1 });
+    for (const delta of [1, -1]) it(`${dayType}: rejects a turn waiting across a shared-lead ${delta > 0 ? 'entry' : 'exit'}`, () => {
+      const plan = structuredClone(sim.plan);
+      const yard = sim.topo.depots.find(yard => yard.key === 'CSD')!;
+      const move = depotMoves(plan.blocks, plan.trips, sim.planCtx).find(move => move.depot === yard.id
+        && move.delta === delta && move.window && move.link !== undefined)!;
+      expect(move).toBeDefined();
+      const [start, end] = move.window!;
+      const id = plan.trips.length, block = plan.blocks.length, station = yard.station;
+      const a = { ...structuredClone(plan.trips[0]), id, no: 'test-arrival', block, dir: 'DN' as const,
+        from: station - 1, to: station, stops: [{ st: station, arr: start - 60, dep: start - 60, stop: true }] };
+      const d = { ...a, id: id + 1, no: 'test-departure', dir: 'UP' as const, from: station, to: station - 1,
+        stops: [{ st: station, arr: end + 60, dep: end + 60, stop: true }] };
+      plan.trips.push(a, d);
+      plan.blocks.push({ id: block, svc: 'test', start: { kind: 'stable', station: a.from }, end: { kind: 'none' }, trips: [id, id + 1] });
+      const turn = terminalOccupancy(plan, sim.topo).get(station)!.find(hold => hold.block === block)!;
+      expect(sim.topo.berths[turn.berths![0]].link).toBe(move.link);
+      const conflict = () => validatePlan(sim.planCtx, plan).filter(issue => issue.code === 'DEPOT_CONFLICT'
+        && issue.blocks?.[0] === move.block && issue.blocks[1] === block);
+      expect(conflict()).toHaveLength(1);
+      expect(conflict()[0].text).toContain('test-arrival→test-departure');
+      // A hold starting at the resource's clearing boundary no longer overlaps.
+      a.stops[0].arr = a.stops[0].dep = end;
+      expect(conflict()).toEqual([]);
+      plan.trips[a.id].cancelled = true;
+      expect(terminalOccupancy(plan, sim.topo).get(station)?.some(hold => hold.block === block) ?? false).toBe(false);
+    });
+    it(`${dayType}: keeps depot return windows and the published fleet feasible`, () => {
+      const moves = depotMoves(sim.plan.blocks, sim.plan.trips, sim.planCtx).filter(move => move.delta > 0 && move.window
+        && ['4091', '4089'].includes(sim.plan.trips[move.trip!].no));
+      if (dayType === 'weekday') expect(moves).toHaveLength(2);
+      for (let i = 0; i < moves.length; i++) for (let j = i + 1; j < moves.length; j++) {
+        const a = moves[i], b = moves[j];
+        if (a.link !== b.link) continue;
+        expect(a.window![0] >= b.window![1] || b.window![0] >= a.window![1],
+          `${sim.plan.trips[a.trip!].no}/${sim.plan.trips[b.trip!].no}`).toBe(true);
+      }
+      expect(validatePlan(sim.planCtx, sim.plan).filter(issue => issue.severity === 'error')).toEqual([]);
+      expect(sim.plan.fleetPeak).toBeLessThanOrEqual(LINE_INFO.fleet);
+      if (dayType === 'weekday') expect(terminalReuseRejections(sim.plan).some(text => text.startsWith('4091→4148：') && text.includes('4089'))).toBe(true);
     });
   }
 });

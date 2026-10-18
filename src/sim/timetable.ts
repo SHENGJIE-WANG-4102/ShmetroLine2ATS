@@ -390,6 +390,7 @@ export function plannedRunLevel(dayType: DayType, departure: number): number {
 // ---------------------------------------------------------------- generation
 
 interface GenTrip extends Trip { next?: number; prev?: number }
+type DiagramClocks = { original: Map<number, number>; protected: ReadonlySet<number> };
 /** Candidate depot moves dropped during matching have never been published. */
 const UNUSED_DEPOT_MOVE = -2;
 /** Select a route while drafting service data, before train matching. */
@@ -405,6 +406,14 @@ function trimRoute(trip: Pick<ServiceRequest, 'from' | 'to' | 'kind' | 'stops'>,
 type ServiceIdentity = Pick<Trip, 'dir' | 'from' | 'to' | 'kind'> & { stations: number[] };
 const laidOutService = new WeakMap<Plan, Map<Trip, ServiceIdentity>>();
 const generationIssues = new WeakMap<Plan, PlanIssue[]>();
+type RejectedTurn = { arrival: GenTrip; departure: GenTrip; conflicts: Trip[] };
+const draftRejectedTurns = new WeakMap<Block[], RejectedTurn[]>();
+const rejectedTurns = new WeakMap<Plan, string[]>();
+
+/** Matching diagnostics, numbered only after publishing the retained trips. */
+export function terminalReuseRejections(plan: Plan): readonly string[] {
+  return rejectedTurns.get(plan) ?? [];
+}
 
 function serviceIdentity(trip: Trip): ServiceIdentity {
   return { dir: trip.dir, from: trip.from, to: trip.to, kind: trip.kind, stations: trip.stops.map(p => p.st) };
@@ -444,19 +453,32 @@ export interface OverlayReuse {
 /** a train returning to the yard is counted in stock this long after its last arrival (s) */
 export const DEPOT_ENTRY_CLEAR = 300;
 
-export interface YardMove { time: number; depot: number; delta: number; block: number }
+export interface YardMove { time: number; depot: number; delta: number; block: number; trip?: number; berth?: number; link?: number; window?: [number, number] }
 
 /** The yard exits and entries of every duty that still runs: an exit at its
  * start, an entry DEPOT_ENTRY_CLEAR after its last live arrival, or at its
  * actual withdrawal. One definition for planning, validation and live stock. */
-export function depotMoves(blocks: readonly Block[], trips: readonly Trip[]): YardMove[] {
+export function depotMoves(blocks: readonly Block[], trips: readonly Trip[], ctx?: Pick<PlanContext, 'topo'>): YardMove[] {
   const out: YardMove[] = [];
   for (const block of blocks) {
     const live = block.trips.map(id => trips[id]).filter(trip => !trip.cancelled);
     if (!live.length && !block.withdrawal) continue;
-    if (block.start.kind === 'depot') out.push({ time: block.start.time, depot: block.start.depot, delta: -1, block: block.id });
+    if (block.start.kind === 'depot') out.push({ time: block.start.time, depot: block.start.depot, delta: -1, block: block.id, trip: live[0]?.id });
     if (block.withdrawal) out.push({ time: block.withdrawal.at, depot: block.withdrawal.depot, delta: 1, block: block.id });
-    else if (block.end.kind === 'depot') out.push({ time: live.at(-1)!.stops.at(-1)!.arr + DEPOT_ENTRY_CLEAR, depot: block.end.depot, delta: 1, block: block.id });
+    else if (block.end.kind === 'depot') out.push({ time: live.at(-1)!.stops.at(-1)!.arr + DEPOT_ENTRY_CLEAR, depot: block.end.depot, delta: 1, block: block.id, trip: live.at(-1)!.id });
+  }
+  if (ctx) for (const move of out) {
+    const trip = move.trip === undefined ? undefined : trips[move.trip];
+    if (!trip) continue; // A live withdrawal has no scheduled approach window.
+    const yard = ctx.topo.depots[move.depot];
+    const portal = (move.delta > 0 ? yard.portals.entry : yard.portals.exit)[trip.dir];
+    const path = yard.transferPaths[portal.path];
+    if (path.flow !== 'shared') continue;
+    // Entry tasks select this berth, which identifies the actual lead.
+    if (move.delta > 0) move.berth = yard.entryBerths[portal.path];
+    move.link = path.stub;
+    move.window = move.delta > 0 ? inboundWindow(ctx.topo, move.depot, trip) : outboundWindow(ctx, move.depot, trip);
+    if (move.delta < 0) move.window[0] = move.time;
   }
   return sortDepotMoves(out);
 }
@@ -1088,15 +1110,18 @@ export function generatePlan(ctx: PlanContext, shift?: number[], stock?: number[
   const anchors = new Set(published);
   for (const trip of drafts) if (isPublishedOrigin(ctx, trip)) anchors.add(trip.id);
   spaceServiceDepartures(drafts, anchors);
-  const blocks = circulate(ctx, drafts, [...new Set([W, E, 4, 22, 1, 19, 28, ...overnightPlaces(topo).map(place => place.station)])], periods, undefined, undefined, 0, undefined, undefined, shift, stock, supply);
+  const clocks = { original: new Map(requestedDepartures), protected: anchors };
+  const blocks = circulate(ctx, drafts, [...new Set([W, E, 4, 22, 1, 19, 28, ...overnightPlaces(topo).map(place => place.station)])], periods, undefined, undefined, 0, undefined, undefined, shift, stock, supply, clocks);
   addIntermediateStandbys(ctx, drafts, blocks);
   // This is the publication boundary. Matching above selects retirement
   // destinations; subsequent conflict handling cannot change those choices.
   const trips = drafts.map(trip => ({ ...trip, stops: trip.stops.map(stop => ({ ...stop })) }));
+  const rejected = (draftRejectedTurns.get(blocks) ?? []).filter(r => r.arrival.next !== r.departure.id)
+    .map(r => ({ arrival: trips[r.arrival.id], departure: trips[r.departure.id], conflicts: r.conflicts.map(t => trips[t.id]) }));
   const firstService = trips.filter(trip => published.has(trip.id));
   const anchorTrips = trips.filter(trip => anchors.has(trip.id));
-  const originalDepartures = new Map(trips.filter(trip => requestedDepartures.has(trip.id))
-    .map(trip => [trip, requestedDepartures.get(trip.id)!]));
+  const originalDepartures = new Map(trips.filter(trip => clocks.original.has(trip.id))
+    .map(trip => [trip, clocks.original.get(trip.id)!]));
   for (const trip of trips.slice(0, services.length)) serviceStructure.set(trip, serviceIdentity(trip));
   finishDepotMoves(trips, blocks);
   resolveTimingConflicts(ctx, trips, blocks, new Set(anchorTrips.map(t => t.id)), originalDepartures);
@@ -1132,6 +1157,7 @@ export function generatePlan(ctx: PlanContext, shift?: number[], stock?: number[
   laidOutService.set(plan, serviceStructure);
   generationIssues.set(plan, [...requestIssues, ...serviceStructureIssues(plan)]);
   numberPlan(plan);
+  rejectedTurns.set(plan, [...new Set(rejected.map(r => `${r.arrival.no}→${r.departure.no}：折返待发与 ${r.conflicts.map(t => t.no).join('、')} 出入段共用线路或咽喉冲突，不采用该正线接续`))]);
   plan.fleetPeak = fleetPeak(plan);
   if (!shift) {
     const need = yardNeed(topo, plan);
@@ -1463,7 +1489,7 @@ function addFixedRuns(ctx: PlanContext, trips: GenTrip[], blocks: Block[], runs:
  * withdrawals and terminal stabling. Mutates `trips` (adds new trips) and
  * returns the new blocks.
  */
-function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], periods: Period[], overlay?: string, baseTrips?: Trip[], blockBase = 0, baseOcc?: Map<number, { from: number; to: number; block?: number }[]>, reuse?: OverlayReuse, shift?: number[], stock?: number[], supply?: EndSupply): Block[] {
+function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], periods: Period[], overlay?: string, baseTrips?: Trip[], blockBase = 0, baseOcc?: Map<number, { from: number; to: number; block?: number }[]>, reuse?: OverlayReuse, shift?: number[], stock?: number[], supply?: EndSupply, clocks?: DiagramClocks): Block[] {
   const { topo } = ctx;
   const factorAt = (t: number) => dwellFactorAt(ctx.dayType, t);
   const pool = trips.filter((t) => t.overlay === overlay && !t.cancelled);
@@ -2402,7 +2428,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
   if (!overlay) relieveTerminals(ctx, blocks, trips, new Set(pool.map(t => t.id)));
   if (!overlay) fitOpeningFeeders(ctx, blocks, trips, new Set(pool.map(t => t.id)));
   if (!overlay) relieveTerminals(ctx, blocks, trips, new Set(pool.map(t => t.id)));
-  if (!overlay) reuseTerminalReturns(ctx, blocks, trips, new Set(pool.map(t => t.id)));
+  if (!overlay) reuseTerminalReturns(ctx, blocks, trips, new Set(pool.map(t => t.id)), clocks);
   if (!overlay) reorderTerminalTurns(blocks, trips, [0, topo.stations.length - 1]);
   if (!overlay) {
     const requests = new Set(pool.map(trip => trip.id));
@@ -2555,7 +2581,10 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
 /** A returning service replaces an earlier depot feeder for the same duty.
  * Run after feeder fitting/FIFO assignment as well: their order may change.
  * 【假设】 D79: keep the arriving train in service instead of a needless yard swap. */
-function reuseTerminalReturns(ctx: PlanContext, blocks: Block[], trips: GenTrip[], fixed: Set<number>) {
+function reuseTerminalReturns(ctx: PlanContext, blocks: Block[], trips: GenTrip[], fixed: Set<number>, clocks?: DiagramClocks) {
+  if (clocks) for (const trip of trips) if (!clocks.original.has(trip.id)) clocks.original.set(trip.id, trip.stops[0].dep);
+  const rejected: RejectedTurn[] = [];
+  draftRejectedTurns.set(blocks, rejected);
   const ends = [0, ctx.topo.stations.length - 1, ...ctx.topo.depots.map(d => d.station)];
   for (let round = 0; round < blocks.length; round++) {
     let changed = false;
@@ -2573,17 +2602,66 @@ function reuseTerminalReturns(ctx: PlanContext, blocks: Block[], trips: GenTrip[
         .map(block => {
           const first = trips[block.trips[0]];
           const feeder = !fixed.has(first.id) && ['ins', 'empty'].includes(first.kind) && first.to === terminal ? first : undefined;
-          return { block, feeder, departure: feeder ? trips[block.trips[1]] : first };
+          return { block, feeder, departure: feeder ? trips[block.trips[1]] : first,
+            shift: undefined as { trip: GenTrip; stops: PlanStop[] } | undefined };
         })
-        .filter(({ block, feeder, departure }) => departure && departure.from === terminal && departure.dir !== arrival.dir
+        .filter(option => {
+          const { block, feeder, departure } = option;
+          if (!(departure && departure.from === terminal && departure.dir !== arrival.dir
           && (feeder ? feeder.stops.at(-1)!.arr <= at : ctx.topo.depots[(block.start as {depot:number}).depot].station === terminal)
           && departure.stops[0].dep >= at + minTurn(terminal) && departure.stops[0].dep <= at + MAX_LAYOVER
           && frontTurnClear(ctx, trips.filter(t => t.block !== UNUSED_DEPOT_MOVE), arrival, departure.stops[0].dep, new Set([...incoming.trips, ...block.trips]))
           && !terminalOverflows(ctx.topo, terminal, [...(terminalOccupancy({blocks,trips} as Plan).get(terminal) ?? []),
-            {from:at,to:departure.stops[0].dep}]).length)
+            {from:at,to:departure.stops[0].dep}]).length)) return false;
+          // Test the proposed duty before linking it: its old return/feeder
+          // cease to exist, but every other shared-lead move still reserves it.
+          const continued = { ...incoming, end: block.end,
+            trips: [...incoming.trips.slice(0, index + 1), ...block.trips.slice(feeder ? 1 : 0)] };
+          const proposed = { trips, blocks: blocks.filter(b => b !== block).map(b => b === incoming ? continued : b) } as Plan;
+          const berth = dutyTurnBerths(ctx.topo, proposed, continued, arrival, departure)[0];
+          const conflicts = berth === undefined ? [] : depotMoves(proposed.blocks, trips, ctx).filter(move => move.block !== incoming.id
+            && turnLeadConflict(ctx.topo, move, trips, arrival, departure, berth));
+          if (conflicts.length && clocks) {
+            const running = proposed.blocks.flatMap(b => b.trips.map(id => trips[id]));
+            // Try the available physical routes first (dutyTurnBerths above),
+            // then bounded whole-trip shifts before refusing this match.
+            for (let amount = 1; amount <= MAX_DIAGRAM_SHIFT_S; amount++) for (const sign of [-1, 1]) {
+              for (const trip of [arrival, departure]) {
+                if (clocks.protected.has(trip.id)) continue;
+                const stops = trip.stops, delta = amount * sign;
+                if (Math.abs(stops[0].dep + delta - (clocks.original.get(trip.id) ?? stops[0].dep)) > MAX_DIAGRAM_SHIFT_S) continue;
+                if (!headwayClear(running, trip, delta, MIN_HEADWAY)) continue;
+                trip.stops = stops.map(stop => ({ ...stop, arr: stop.arr + delta, dep: stop.dep + delta }));
+                const movements = depotMoves(proposed.blocks, trips, ctx);
+                const occupancy = terminalOccupancy(proposed, ctx.topo);
+                const holds = [...occupancy.values()].flat().filter(hold => hold.block === incoming.id
+                  && (hold.arrival === trip.id || hold.departure === trip.id));
+                const continuous = continued.trips.every((id, i) => {
+                  const a = trips[id], d = trips[continued.trips[i + 1]];
+                  return !d || a !== trip && d !== trip
+                    || d.stops[0].dep >= a.stops.at(-1)!.arr + (a.dir === d.dir ? 0 : minTurn(a.to));
+                });
+                const clear = continuous && holds.every(hold => {
+                  const a = trips[hold.arrival!], d = trips[hold.departure!], berth = hold.berths?.[0];
+                  return hold.to >= hold.from + minTurn(a.to)
+                    && frontTurnClear(ctx, running, a, hold.to, new Set(continued.trips))
+                    && !terminalOverflows(ctx.topo, a.to, occupancy.get(a.to)!).length
+                    && (berth === undefined || !movements.some(move => move.block !== incoming.id
+                      && turnLeadConflict(ctx.topo, move, trips, a, d, berth)));
+                });
+                const shifted = trip.stops;
+                trip.stops = stops;
+                if (clear) { option.shift = { trip, stops: shifted }; return true; }
+              }
+            }
+          }
+          if (conflicts.length) rejected.push({ arrival, departure, conflicts: conflicts.map(move => trips[move.trip!]) });
+          return !conflicts.length;
+        })
         .sort((a, b) => a.departure.stops[0].dep - b.departure.stops[0].dep)[0];
       if (!candidate) continue;
-      const { block, feeder, departure } = candidate;
+      const { block, feeder, departure, shift } = candidate;
+      if (shift) shift.trip.stops = shift.stops;
       for (const trip of [...tail, ...(feeder ? [feeder] : [])]) {
         trip.prev = undefined;
         trip.next = undefined;
@@ -2901,7 +2979,7 @@ export function inboundWindow(topo: Topology, depot: number, last: Pick<Trip, 't
  * clear its junction platform. The yard's nominal exitTime alone omits the
  * change of ends and can place a return in front of the exiting car.
  * 【假设】 Retain the inbound model's 25 s clearing margin after departure. */
-export function outboundWindow(ctx: PlanContext, depot: number, first: Pick<Trip, 'dir' | 'stops'>): [number, number] {
+export function outboundWindow(ctx: Pick<PlanContext, 'topo'>, depot: number, first: Pick<Trip, 'dir' | 'stops'>): [number, number] {
   const yard = ctx.topo.depots[depot];
   const start = depotStartTime(ctx, depot, first);
   const portal = yard.portals.exit[first.dir];
@@ -2909,7 +2987,7 @@ export function outboundWindow(ctx: PlanContext, depot: number, first: Pick<Trip
 }
 
 /** time a train must leave the depot gate to make its first departure */
-export function depotStartTime(ctx: PlanContext, depot: number, first: Pick<Trip, 'stops'> & { dir?: TrackDir }): number {
+export function depotStartTime(ctx: Pick<PlanContext, 'topo'>, depot: number, first: Pick<Trip, 'stops'> & { dir?: TrackDir }): number {
   const { topo } = ctx;
   const J = topo.depots[depot].junctionChain;
   const st0 = first.stops[0].st;
@@ -3242,9 +3320,16 @@ export function applyOverlay(ctx: PlanContext, plan: Plan, preset: { id: string;
     const link = ctx.topo.berths[x.place.arrivalBerth].link;
     const slot = storageOccupancy(ctx.topo, plan).filter(o => o.link === link);
     const own = slot.find(o => o.block === x.block.id);
+    const platformBlocked = trips.some(trip => {
+      if (trip.cancelled || trip.block === x.block.id) return false;
+      const duty = plan.blocks[trip.block];
+      const next = duty && trips[duty.trips[duty.trips.indexOf(trip.id) + 1]];
+      const turn = next && next.dir !== trip.dir ? turnbackAt(ctx.topo, trip.to, trip.dir) : undefined;
+      return !storedPlatformsClear(ctx.topo, plan, trip, turn?.kind === 'rear' ? turn.berths[0] : undefined);
+    });
     // (an added turnback now needs the slot: the car stays on its way to the
     // yard and the ledger reports the berth short, rather than a conflict)
-    if (own && slot.some(o => o.block !== x.block.id && o.from < own.to && own.from < o.to)) {
+    if (platformBlocked || own && slot.some(o => o.block !== x.block.id && o.from < own.to && own.from < o.to)) {
       x.block.trips = moved; x.block.end = end;
       continue;
     }
@@ -3343,7 +3428,12 @@ function restoreCancelledHomes(ctx: PlanContext, plan: Plan, now: number) {
     const lastUse = Math.max(OPENING.dayStart, ...trips.filter(t => !t.cancelled && t.dir === dir)
       .flatMap(t => t.stops.filter(s => s.st === station).map(s => s.dep)));
     const desired = Math.max(trips[b.trips.at(-1)!].stops.at(-1)!.arr, lastUse + MIN_HEADWAY);
-    for (const depot of topo.depots.filter(d => ledger.final[d.id] > ledger.initial[d.id])) {
+    // Prefer the surplus yard, but a nearer yard can deliver the slot and
+    // receive a real balancing transfer below. Its latest departure need not
+    // precede a distant surplus yard's earlier capacity peak.
+    const sources = topo.depots.slice().sort((a, b) => Number(ledger.final[b.id] > ledger.initial[b.id])
+      - Number(ledger.final[a.id] > ledger.initial[a.id]));
+    for (const depot of sources) {
       const run = buildStops(ctx, dir, exitStation(topo, depot.id, dir), b.end.station, desired, false, 1, () => true).at(-1)!.arr - desired;
       const stops = fitMove(depot.id, b.end.station, dir, desired - run, b.end);
       if (!stops) continue;
@@ -3539,7 +3629,7 @@ export function platformBerth(topo: Topology, station: number, dir: TrackDir): n
 /** Existing depot leads may also serve as turnback tracks. Reserve the
  * other lead while a direct return needs one, in both tasks and validation. */
 const DEPOT_TURN_CLEAR = 120;
-function dutyTurnBerths(topo: Topology, plan: Plan, block: Block, arrival: Trip, departure: Trip): number[] {
+function dutyTurnBerths(topo: Topology, plan: Plan, block: Block, arrival: Trip, departure: Trip, plannedMoves?: YardMove[]): number[] {
   const turn = turnbackAt(topo, arrival.to, arrival.dir);
   if (turn?.kind !== 'rear') return [];
   let berths = turn.berths;
@@ -3552,20 +3642,28 @@ function dutyTurnBerths(topo: Topology, plan: Plan, block: Block, arrival: Trip,
     }));
     if (busy) berths = berths.filter(b => topo.berths[b].link !== topo.berths[hot.berth].link);
   }
-  for (const depot of topo.depots.filter(depot => depot.station === arrival.to && !depot.portals.entry[arrival.dir].reverse)) {
-    const portal = depot.portals.entry[arrival.dir];
-    const stub = depot.transferPaths[portal.path].stub;
-    const returning = plan.blocks.some(other => {
-      if (other === block || other.end.kind !== 'depot' || other.end.depot !== depot.id) return false;
-      const last = plan.trips[other.trips.at(-1)!];
-      return last && !last.cancelled && last.dir === arrival.dir && last.to === arrival.to
-        && last.stops.at(-1)!.arr >= arrival.stops.at(-1)!.arr - DEPOT_TURN_CLEAR
-        && last.stops.at(-1)!.arr <= departure.stops[0].dep + minTurn(arrival.to);
-    });
-    const alternatives = berths.filter(berth => topo.berths[berth].link !== stub);
-    if (returning && alternatives.length) berths = alternatives;
-  }
+  if (!berths.some(berth => topo.depots.some(yard => yard.transferPaths.some(path => path.flow === 'shared'
+    && path.stub === topo.berths[berth].link)))) return berths;
+  const moves = plannedMoves ?? depotMoves(plan.blocks, plan.trips, { topo });
+  const clear = berths.filter(berth => !moves.some(move => move.block !== block.id
+    && turnLeadConflict(topo, move, plan.trips, arrival, departure, berth)));
+  // Keep an infeasible choice visible to validation rather than substituting
+  // an unmodelled route or silently dropping the duty.
+  if (clear.length) berths = clear;
   return berths;
+}
+
+/** One resource rule for turnback choice, duty matching and validation. */
+function turnLeadConflict(topo: Topology, move: YardMove, trips: readonly Trip[], arrival: Trip, departure: Trip, berth: number): boolean {
+  if (move.link === undefined || !move.window || move.trip === undefined) return false;
+  const [start, clear] = move.window;
+  const from = arrival.stops.at(-1)!.arr, to = departure.stops[0].dep;
+  if (topo.berths[berth].link === move.link && from < clear - .001 && start < to - .001) return true;
+  const moving = trips[move.trip], yard = topo.depots[move.depot];
+  return move.delta > 0 && !yard.portals.entry[moving.dir].reverse
+    && moving.to === arrival.to && moving.dir === arrival.dir && from < moving.stops.at(-1)!.arr
+    && Math.abs(moving.stops.at(-1)!.arr - to) < DEPOT_TURN_CLEAR
+    && returnSharesTurnExit(topo, move.depot, moving, departure, berth);
 }
 
 /** Check the actual interlocking sections. SHR2 -> DN and UP -> SHR1 are
@@ -3819,8 +3917,9 @@ export function terminalOverflows(topo: Topology, st: number, list: { from: numb
 }
 
 /** time intervals trains spend turning back / laying over at each station (between two trips in opposite directions) */
-export function terminalOccupancy(plan: Plan): Map<number, { from: number; to: number; block: number }[]> {
-  const occ = new Map<number, { from: number; to: number; block: number }[]>();
+export function terminalOccupancy(plan: Plan, topo?: Topology): Map<number, { from: number; to: number; block: number; arrival?: number; departure?: number; berths?: number[] }[]> {
+  const occ = new Map<number, { from: number; to: number; block: number; arrival?: number; departure?: number; berths?: number[] }[]>();
+  const moves = topo ? depotMoves(plan.blocks, plan.trips, { topo }) : undefined;
   for (const b of plan.blocks) {
     const ts = b.trips.map((i) => plan.trips[i]).filter((t) => !t.cancelled);
     for (let i = 0; i + 1 < ts.length; i++) {
@@ -3828,7 +3927,8 @@ export function terminalOccupancy(plan: Plan): Map<number, { from: number; to: n
       const d = ts[i + 1];
       if (a.to !== d.from || a.dir === d.dir) continue;
       if (!occ.has(a.to)) occ.set(a.to, []);
-      occ.get(a.to)!.push({ from: a.stops[a.stops.length - 1].arr, to: d.stops[0].dep, block: b.id });
+      occ.get(a.to)!.push({ from: a.stops[a.stops.length - 1].arr, to: d.stops[0].dep, block: b.id,
+        arrival: a.id, departure: d.id, ...(topo ? { berths: dutyTurnBerths(topo, plan, b, a, d, moves) } : {}) });
     }
   }
   return occ;
@@ -4019,7 +4119,7 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
     }
   }
   // blocks: continuity, turn time, terminal occupancy
-  const occ = terminalOccupancy(plan);
+  const occ = terminalOccupancy(plan, topo);
   for (const b of plan.blocks) {
     const ts = b.trips.map((i) => plan.trips[i]).filter((t) => !t.cancelled);
     for (let i = 0; i + 1 < ts.length; i++) {
@@ -4072,50 +4172,23 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
       out.push({ severity: 'error', code: 'TERMINAL_FULL', t, blocks, text: `${name(st)} 同时折返/待发 ${cur} 列，超过能力 ${cap} 列` });
     }
   }
-  // BZL/CSD share their conversion track. A returning added train receives
-  // physical priority inside 1500 m; reserve that approach and its low-speed
-  // entry against planned yard exits, rather than delaying a peak origin.
-  // LYD's independent inbound/outbound tracks have no such conflict.
-  for (const depot of topo.depots) {
-    if (!sharedLead(topo, depot.id)) continue;
-    const exits = plan.blocks.filter(b => b.start.kind==='depot' && b.start.depot===depot.id
-      && b.trips.some(id => !plan.trips[id].cancelled));
-    for (const inbound of plan.blocks) {
-      if (inbound.end.kind!=='depot' || inbound.end.depot!==depot.id) continue;
-      const trips = inbound.trips.map(id => plan.trips[id]).filter(trip => !trip.cancelled);
-      const last = trips.at(-1);if (!last) continue;
-      const [approach, clear] = inboundWindow(topo, depot.id, last);
-      for (const outbound of exits) {
-        if (outbound===inbound || outbound.start.kind!=='depot') continue;
-        const first = plan.trips[outbound.trips.find(id => !plan.trips[id].cancelled)!];
-        const portal = depot.portals.exit[first.dir];
-        if (portal.path !== depot.portals.entry[last.dir].path) continue;
-        const exitClear = Math.max(outbound.start.time + depot.exitTime, portal.reverse ? first.stops[0].dep + 25 : -Infinity);
-        if (outbound.start.time < clear && exitClear > approach)
-          out.push({severity:'error',code:'DEPOT_CONFLICT',t:Math.max(approach,outbound.start.time),blocks:[inbound.id,outbound.id],
-            text:`${depot.name} 回段接近与出段共用转换轨时隙冲突`});
-      }
+  const moves = depotMoves(plan.blocks, plan.trips, ctx).filter(move => move.link !== undefined && move.window);
+  for (const inbound of moves.filter(move => move.delta > 0)) {
+    for (const outbound of moves.filter(move => move.delta < 0)) {
+      if (inbound.block === outbound.block || inbound.link !== outbound.link) continue;
+      const [approach, clear] = inbound.window!, [start, end] = outbound.window!;
+      if (start < clear && end > approach)
+        out.push({ severity: 'error', code: 'DEPOT_CONFLICT', t: Math.max(approach, start), blocks: [inbound.block, outbound.block],
+          text: `${topo.depots[inbound.depot].name} 回段接近与出段共用转换轨时隙冲突` });
     }
   }
-  // 【假设】 D79: an UP return into BZL uses SHR's west throat while a
-  // reversing train leaves it. Separate their planned station events by
-  // 120 s; a same-direction station headway alone does not cover this move.
-  for (const block of plan.blocks) {
-    if (block.end.kind !== 'depot' || topo.depots[block.end.depot].key !== 'BZL') continue;
-    const returning = plan.trips[block.trips.at(-1)!];
-    if (!returning || returning.dir !== 'UP' || returning.to !== 4 || returning.cancelled) continue;
-    for (const other of plan.blocks) {
-      if (other === block) continue;
-      for (let k = 1; k < other.trips.length; k++) {
-        const arrival = plan.trips[other.trips[k - 1]], departure = plan.trips[other.trips[k]];
-        if (!arrival || !departure || arrival.cancelled || departure.cancelled
-          || arrival.to !== 4 || departure.from !== 4 || arrival.dir !== 'UP' || departure.dir !== 'DN') continue;
-        const at = returning.stops.at(-1)!.arr, dep = departure.stops[0].dep;
-        if (Math.abs(at - dep) < DEPOT_TURN_CLEAR && arrival.stops.at(-1)!.arr < at
-          && dutyTurnBerths(topo, plan, other, arrival, departure).every(berth => returnSharesTurnExit(topo, block.end.kind === 'depot' ? block.end.depot : -1, returning, departure, berth)))
-          out.push({ severity: 'error', code: 'DEPOT_CONFLICT', t: at, blocks: [block.id, other.id], text: '淞虹路回段到达与折返发车共用咽喉不足120 s' });
-      }
-    }
+  for (const move of moves) for (const holds of occ.values()) for (const hold of holds) {
+    if (hold.block === move.block || hold.arrival === undefined || hold.departure === undefined) continue;
+    const arrival = plan.trips[hold.arrival], departure = plan.trips[hold.departure], berth = hold.berths?.[0];
+    if (berth === undefined || !turnLeadConflict(topo, move, plan.trips, arrival, departure, berth)) continue;
+    const moving = plan.trips[move.trip!];
+    out.push({ severity: 'error', code: 'DEPOT_CONFLICT', t: Math.max(move.window![0], hold.from), blocks: [move.block, hold.block],
+      text: `${topo.depots[move.depot].name} ${moving.no} ${move.delta > 0 ? '回段' : '出段'}与 ${arrival.no}→${departure.no} 折返待发共用出入段线或咽喉冲突` });
   }
   // station headways per direction (passing / departing)
   for (const dir of ['DN', 'UP'] as TrackDir[]) {
