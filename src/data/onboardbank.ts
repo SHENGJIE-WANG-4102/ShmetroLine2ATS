@@ -31,6 +31,8 @@ export const VOICE_SOURCES = [
   { id: 'door-reference', filename: '嘉定北~江苏路车内110561录音.wav', durationS: 2684.84 },
   // User decisions (D89/D90): use the cabin video for BXJ and corrected SHR.
   { id: 'cabin-reference', filename: 'VID_20261016_195626_DOLBY.mp4', durationS: 203.244563 },
+  // User-supplied 2025-06-13 cabin video: only the unplanned-stop PA (D102).
+  { id: 'hold-reference', filename: 'VID_20250613_141329_DOLBY.mp4', durationS: 28.864 },
 ] as const;
 /** D89/D90: missing western names, terminal sentences and corrected SHR cuts.
  * 【假设】 repeated PA phrases match the stock voice separately
@@ -393,6 +395,17 @@ export const FIELD_1016_TERMINAL_CLIP: SoundClip = {
   range: [907.20, 934.80], both: false, confidence: 'medium', provenance: 'original',
   recordedDestination: '蟠祥路·国家会计学院', doorSide: 'L',
 };
+/** D102: "本次列车因故将稍作停留" with its English, one whole original PA
+ * (CN 4.8-10.6 s, EN 10.8-18.7 s by local word timing; the cut opens 0.2 s
+ * before the first voiced energy). Recording station unknown: station is catalogue metadata only.
+ * User decision: the PA starts after 5 s standing and repeats every 45 s. */
+export const ONBOARD_HOLD_CLIP: SoundClip = {
+  id: 'original-hold', file: 'original-hold.mp3', kind: 'interior-special',
+  station: '江苏路', direction: 'shared', side: 'shared', source: 'hold-reference',
+  range: [3.80, 19.20], both: false, confidence: 'high', provenance: 'original',
+};
+export const ONBOARD_HOLD_DELAY_S = 5;
+export const ONBOARD_HOLD_REPEAT_S = 45;
 // Western slots use the same original-first policy as the central stations.
 // Missing names suppress the affected language, allowing an independently
 // available English sentence when no usable complete recording exists.

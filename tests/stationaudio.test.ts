@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SOUND_BANK, clipDuration, ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S } from '../src/data/soundbank';
+import { SOUND_BANK, clipDuration, ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S,
+  ONBOARD_HOLD_CLIP, ONBOARD_HOLD_DELAY_S, ONBOARD_HOLD_REPEAT_S } from '../src/data/soundbank';
 import { StationAudio, StationSoundPlanner, compatibleBoth, platformAnnouncement, predictStationStop, stationFrame, stationSoundEnabled,
   isUndergroundStation, RecordedSoundPlayer, type StationAudioFrame, type StationTrain, type StationSoundCommand } from '../src/ui/stationaudio';
 import { OnboardAudio, OnboardSoundPlanner, cabinVolumes, onboardFrame, type OnboardAudioFrame } from '../src/ui/onboardaudio';
@@ -327,7 +328,7 @@ describe('Web Audio lifecycle', () => {
     expect(sources[0].stop).toHaveBeenCalledWith(5.5); expect(gains[0].disconnect).not.toHaveBeenCalled();
     audio.reset(); expect(sources[0].stop).toHaveBeenLastCalledWith(); expect(gains[0].disconnect).toHaveBeenCalledOnce();
   });
-  it('preloads only the selected carriage call and its two loops', async () => {
+  it('preloads only the selected carriage call, the stop PA and its two loops', async () => {
     const request = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(1) }));
     vi.stubGlobal('fetch', request);
     const { ctx, sources } = context(), audio = new OnboardAudio(ctx, {} as AudioNode);
@@ -335,7 +336,7 @@ describe('Web Audio lifecycle', () => {
     const selected: OnboardAudioFrame = { t: 100, rate: 1, paused: false, muted: false, enabled: true,
       train: tr({ nextStation: STATIONS.findIndex(s => s.id === 'JAS'), v: 4, distance: 1000 }), willStop: true, destination: '广兰路', doorSide: 'L' };
     audio.update(selected); await ready(); audio.update({ ...selected, t: 100.2 });
-    expect(request).toHaveBeenCalledTimes(4); expect((sources as unknown as AudioBufferSourceNode[]).filter(s => s.loop)).toHaveLength(2);
+    expect(request).toHaveBeenCalledTimes(5); expect((sources as unknown as AudioBufferSourceNode[]).filter(s => s.loop)).toHaveLength(2);
     audio.reset();
   });
   it('scales existing voices and future plays by the same volume tier', async () => {
@@ -407,6 +408,46 @@ describe('selected train interior audio', () => {
     expect(speech(p.update(onboard(100, countdown(35, { nextStation: target, mode: 'CM', manual: true }))))).toHaveLength(1);
     const late = countdown(20, { nextStation: target, mode: 'CM', manual: true });
     expect(p.update(onboard(100.2, late)).filter(c => c.kind === 'stop' && c.fadeS)).toEqual([]);
+  });
+  const holds = (c: StationSoundCommand[]) => speech(c).filter(c => c.clips[0]?.id === ONBOARD_HOLD_CLIP.id);
+  const standing = { phase: 'run' as const, v: 0, a: 0, distance: 500 };
+  it('asks passengers to wait after standing between stations, then repeats', () => {
+    const p = planner(), at = 100 + ONBOARD_HOLD_DELAY_S;
+    for (let t = 100; t < at; t += .5) expect(holds(p.update(onboard(t, standing)))).toEqual([]);
+    expect(holds(p.update(onboard(at, standing)))).toHaveLength(1);
+    for (let t = at + .5; t < at + ONBOARD_HOLD_REPEAT_S; t += .5) expect(holds(p.update(onboard(t, standing)))).toEqual([]);
+    expect(holds(p.update(onboard(at + ONBOARD_HOLD_REPEAT_S, standing)))).toHaveLength(1);
+  });
+  // (the planner resets across a gap in frames, so standing is fed in steps)
+  const stand = (p: OnboardSoundPlanner, from: number, to: number, patch: Partial<StationTrain> = {}) => {
+    let n = 0;
+    for (let t = from; t <= to + 1e-9; t += .5) n += holds(p.update(onboard(t, { ...standing, ...patch }))).length;
+    return n;
+  };
+  it.each([{ failed: true, phase: 'failed' as const }, { eb: true }, { mode: 'RM' as const, manual: true }])('also announces a stop by failure, emergency brake or manual driving %j', patch => {
+    expect(stand(planner(), 100, 100 + ONBOARD_HOLD_DELAY_S, patch)).toBe(1);
+  });
+  it('keeps quiet at a station stop, for an empty train, and restarts the wait after moving', () => {
+    expect(stand(planner(), 100, 200, { phase: 'dwell' })).toBe(0);
+    expect(stand(planner(), 100, 200, { inService: false })).toBe(0);
+    const p = planner();
+    const moved = 100 + ONBOARD_HOLD_DELAY_S / 2;
+    expect(stand(p, 100, moved - .5)).toBe(0);
+    p.update(onboard(moved, { ...standing, v: 2 }));
+    expect(stand(p, moved + .5, moved + ONBOARD_HOLD_DELAY_S)).toBe(0);
+    expect(stand(p, moved + .5 + ONBOARD_HOLD_DELAY_S, moved + .5 + ONBOARD_HOLD_DELAY_S)).toBe(1);
+  });
+  it('is not cut when the train moves off, and waits for a phrase already playing', () => {
+    const p = planner();
+    expect(stand(p, 100, 100 + ONBOARD_HOLD_DELAY_S)).toBe(1);
+    const moving = p.update(onboard(100.5 + ONBOARD_HOLD_DELAY_S, { v: 4, distance: 1000 }, { willStop: false }));
+    expect(moving.filter(c => c.kind === 'stop' && c.key === 'hold')).toEqual([]);
+    // a manual driver stops short while a long arrival phrase is still playing
+    const long = bank.map(c => c.id === 'test-arrival' ? { ...c, range: [91, 131] as [number, number] } : c);
+    const q = new OnboardSoundPlanner(long, [slot], 10, 35), manual = { mode: 'CM' as const, manual: true };
+    expect(speech(q.update(onboard(100, countdown(35, { nextStation: target, ...manual }))))).toHaveLength(1);
+    expect(stand(q, 100.5, 139.5, manual)).toBe(0);
+    expect(stand(q, 140, 140, manual)).toBe(1);
   });
   it('does not announce passing calls, unavailable stations, or the unrecorded direction', () => {
     expect(speech(planner().update(onboard(100, countdown(35, { nextStation: target }), { willStop: false })))).toEqual([]);

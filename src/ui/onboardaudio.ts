@@ -2,6 +2,7 @@
  * Original whole PA wins; exact-name, same-speaker compositions are pre-rendered.
  */
 import { SOUND_BANK, ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S,
+  ONBOARD_HOLD_CLIP, ONBOARD_HOLD_DELAY_S, ONBOARD_HOLD_REPEAT_S,
   clipDuration, type SoundClip, type OnboardAnnouncement, type AnnouncementDoorSide } from '../data/soundbank';
 import { STATIONS } from '../data/line2';
 import { onboardAnnouncement, onboardDoorSide } from '../data/onboardbank';
@@ -35,6 +36,9 @@ export function onboardSoundEnabled(frame: OnboardAudioFrame): boolean {
  * only a revenue train in working order announces. An emergency brake starts
  * nothing new but does not cut a phrase already playing. */
 const announces = (tr: StationTrain) => tr.inService && !tr.failed;
+/** Standing still away from a station stop (signal, EB, failure): D102.
+ * A failed revenue train still has its PA, unlike the station calls. */
+const held = (tr: StationTrain) => tr.inService && tr.v <= .05 && (tr.phase === 'run' || tr.phase === 'failed');
 const visit = (tr: StationTrain) => `${tr.id}|${tr.trip}|${tr.direction}|${tr.nextStation}`;
 export function cabinVolumes(v: number): { rolling: number; idle: number } {
   const fraction = Math.min(1, Math.max(0, v) / (80 / 3.6));
@@ -48,17 +52,18 @@ export class OnboardSoundPlanner {
   private rate = 0;
   private armed = false;
   private origin = -1;
+  private nextHold = NaN;
   private departing: { at: number; from: number; trip: string; direction: 'DN' | 'UP' } | null = null;
   private pending: { key: string; at: number; next: OnboardAnnouncement['next']; direction: 'DN' | 'UP' } | null = null;
   private done = new Set<string>();
-  private active = new Map<string, { until: number; predicted?: number; target?: string; speech: boolean }>();
+  private active = new Map<string, { until: number; predicted?: number; target?: string; speech: boolean; hold?: boolean }>();
   constructor(private bank: readonly SoundClip[] = SOUND_BANK,
     private announcements: readonly OnboardAnnouncement[] = ONBOARD_ANNOUNCEMENTS,
     private nextDelayS = ONBOARD_NEXT_DELAY_S, private arrivalAdvanceS = ONBOARD_ARRIVAL_ADVANCE_S) {}
   reset(): StationSoundCommand[] {
     const commands: StationSoundCommand[] = [...this.active.keys()].map(key => ({ kind: 'stop', key }));
     this.active.clear(); this.done.clear(); this.pending = null; this.departing = null;
-    this.selected = -1; this.time = NaN; this.rate = 0; this.armed = false; this.origin = -1;
+    this.selected = -1; this.time = NaN; this.rate = 0; this.armed = false; this.origin = -1; this.nextHold = NaN;
     return commands;
   }
   update(frame: OnboardAudioFrame): StationSoundCommand[] {
@@ -73,15 +78,15 @@ export class OnboardSoundPlanner {
     const predicted = seconds === null ? null : frame.t + seconds;
     for (const [key, sound] of this.active) {
       // (only an ATO approach is predictable enough to fade a drifting phrase)
-      const invalid = sound.speech && (!announces(tr) || !frame.willStop || sound.target !== call ||
+      const invalid = sound.speech && !sound.hold && (!announces(tr) || !frame.willStop || sound.target !== call ||
         (automatic(tr) && sound.predicted !== undefined && tr.phase === 'run' && (predicted === null || Math.abs(predicted - sound.predicted) > STATION_ALIGNMENT_S)));
       if (invalid || frame.t >= sound.until) { commands.push(invalid ? { kind: 'stop', key, fadeS: .5 } : { kind: 'stop', key }); this.active.delete(key); }
     }
-    const play = (key: string, clips: SoundClip[], offsetS: number, volume: number, loop = false, expected?: number) => {
+    const play = (key: string, clips: SoundClip[], offsetS: number, volume: number, loop = false, expected?: number, hold = false) => {
       const length = clips.reduce((sum, c) => sum + clipDuration(c), 0);
       if (offsetS < 0 || offsetS >= length) return;
       commands.push({ kind: 'play', key, clips, offsetS, rate: frame.rate, volume, loop });
-      this.active.set(key, { until: loop ? Infinity : frame.t + length - offsetS, predicted: expected, target: call, speech: !loop });
+      this.active.set(key, { until: loop ? Infinity : frame.t + length - offsetS, predicted: expected, target: call, speech: !loop, hold });
     };
     const levels = cabinVolumes(tr.v);
     for (const kind of ['interior-rolling', 'interior-idle'] as const) {
@@ -90,6 +95,15 @@ export class OnboardSoundPlanner {
       const volume = kind === 'interior-rolling' ? levels.rolling : levels.idle;
       if (!this.active.has(key)) play(key, [clip], 0, volume, true);
       else commands.push({ kind: 'volume', key, volume });
+    }
+    // The stop PA is not tied to a call: moving on does not cut it, and it
+    // waits for any phrase already playing rather than talking over it.
+    if (!held(tr)) this.nextHold = NaN;
+    else if (Number.isNaN(this.nextHold)) this.nextHold = frame.t + ONBOARD_HOLD_DELAY_S;
+    const hold = this.bank.find(c => c.id === ONBOARD_HOLD_CLIP.id);
+    if (hold && frame.t >= this.nextHold && ![...this.active.values()].some(s => s.speech)) {
+      play('hold', [hold], 0, 1, false, undefined, true);
+      this.nextHold = frame.t + ONBOARD_HOLD_REPEAT_S;
     }
     if (!announces(tr)) { this.pending = null; this.departing = null; this.armed = false; }
     if (announces(tr) && tr.phase === 'dwell' && tr.v <= .05) { this.armed = true; this.origin = tr.nextStation; }
@@ -147,7 +161,7 @@ export class OnboardAudio extends RecordedSoundPlayer {
     const context = `${frame.train!.id}|${frame.rate}`;
     if (this.context !== context || frame.t < this.time) this.reset();
     const slot = onboardAnnouncement(STATIONS[frame.train!.nextStation]?.name, frame.train!.direction, frame.destination, frame.doorSide);
-    this.preload(this.bank.filter(c => c.id === slot?.next?.clipId || c.id === slot?.arrived?.clipId || c.kind === 'interior-rolling' || c.kind === 'interior-idle'));
+    this.preload(this.bank.filter(c => c.id === slot?.next?.clipId || c.id === slot?.arrived?.clipId || c.id === ONBOARD_HOLD_CLIP.id || c.kind === 'interior-rolling' || c.kind === 'interior-idle'));
     this.context = context; this.time = frame.t; this.apply(this.planner.update(frame));
   }
 }

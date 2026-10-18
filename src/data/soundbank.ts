@@ -1,7 +1,7 @@
-import { ONBOARD_RENDER_BANK, FIELD_1016_TERMINAL_CLIP } from './onboardbank';
+import { ONBOARD_RENDER_BANK, FIELD_1016_TERMINAL_CLIP, ONBOARD_HOLD_CLIP } from './onboardbank';
 import { DOOR_BANK } from './doorbank';
 import type { RecordingId } from './ridelog';
-export { ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S } from './onboardbank';
+export { ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S, ONBOARD_HOLD_CLIP, ONBOARD_HOLD_DELAY_S, ONBOARD_HOLD_REPEAT_S } from './onboardbank';
 export type { OnboardAnnouncement } from './onboardbank';
 /** Local recordings only; files are not distributed with the repository (D71).
  * Cut ranges are seconds in the original WAV; anchors are seconds in the clip.
@@ -20,7 +20,7 @@ export type AnnouncementDoorSide = 'L' | 'R' | 'B';
 export interface SoundClip {
   id: string; file: string; kind: SoundKind; station: string; direction: SoundDirection;
   side: 'east' | 'west' | 'both' | 'shared';
-  source: RecordingId | 'door-reference' | 'cabin-reference';
+  source: RecordingId | 'door-reference' | 'cabin-reference' | 'hold-reference';
   /** Original range; for composed clips this is only the first library part.
    * All constituent source clocks/ranges are resolved through composition;
    * composed duration is durationS, never the first part's range length. */
@@ -73,6 +73,7 @@ export const SOUND_BANK: readonly SoundClip[] = [
   { id: 'platform-close', file: 'platform-close.mp3', kind: 'close', station: '江苏路', direction: 'shared', side: 'shared', source: 'platform-03', range: [15.35, 18.80], voiceRange: [15.54, 18.62], both: false, confidence: 'high' },
   ...ONBOARD_RENDER_BANK,
   FIELD_1016_TERMINAL_CLIP,
+  ONBOARD_HOLD_CLIP,
   ...DOOR_BANK,
   {"id":"onboard-rolling","file":"onboard-rolling.mp3","kind":"interior-rolling","station":"浦东南路","direction":"shared","side":"shared","source":"ride-east","range":[947,963],"loopCrossfadeS":1,"effects":"rolling-noise","both":false,"confidence":"medium"},
   {"id":"onboard-idle","file":"onboard-idle.mp3","kind":"interior-idle","station":"静安寺","direction":"shared","side":"shared","source":"ride-east","range":[134,146],"loopCrossfadeS":1,"effects":"cabin-floor","both":false,"confidence":"medium"},
