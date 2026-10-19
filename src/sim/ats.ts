@@ -896,6 +896,8 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
   if (tr.doorSide) return { ok: false, msg: `${word(tr.doorSide)}车门未关闭` };
   const rm = tr.mode === 'RM';
   if (!st || !tr.doorsAwait || !plat) {
+    // stopped at the mark of a call with no passenger work (an empty run): no enable either
+    if (!rm && st && plat && !stopNeedsDoors(tr, st)) return { ok: false, msg: '无门使能：本站不办理客运（非载客车次）' };
     if (!rm) return { ok: false, msg: '无门使能：列车未在站台停车窗内停稳' };
     return wrongDoor(sim, tr, side, '区间或非停车位置');
   }

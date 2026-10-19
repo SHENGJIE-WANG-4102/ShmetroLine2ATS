@@ -184,6 +184,23 @@ describe('driver doors and the acceleration limit', () => {
     expect(sim.speedCap()).toBe(Infinity);
   });
 
+  it('CM: an empty run stopping at its mark gets no door enable, and says why', () => {
+    const sim = makeSim('weekday', H);
+    const tr = dwellingDN(sim);
+    expect(sim.command({ c: 'manual', train: tr.id, mode: 'CM' }).ok).toBe(true);
+    runFor(sim, 120, check);
+    // the next call made into one with no passenger work, on an empty train
+    const next = tr.tasks.find((t, i) => i > 0 && t.k === 'stop') as { doors: boolean; revenue: boolean };
+    next.doors = false; next.revenue = false;
+    tr.load = 0;
+    driveToNextStop(sim, tr);
+    expect(tr.phase).toBe('dwell');
+    expect(tr.doorsAwait).toBe(false);
+    const r = sim.command({ c: 'door', train: tr.id, side: platSideOf(sim, tr) });
+    expect(r.ok).toBe(false);
+    expect(r.msg).toContain('不办理客运');
+  });
+
   it('RM: no door enable — the wrong side opens and is an incident; the PSD is worked from the PSL', () => {
     const sim = makeSim('weekday', H);
     const tr = dwellingDN(sim);
