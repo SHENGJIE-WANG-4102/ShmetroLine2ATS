@@ -1074,24 +1074,11 @@ export class TrackView {
     const list = snap.trains.slice().sort((a, b) => (geom.linkPoint(a.link,a.off)?.x??0)-(geom.linkPoint(b.link,b.off)?.x??0)||prio(b)-prio(a));
     for (const tg of this.trains.values()) tg.box.visible = false;
     const prepared = list.flatMap(tr => { const p = this.prepareTrainWindow(tr); return p ? [p] : []; });
-    // A train off the main tracks (turnback, storage) has no side of its own:
-    // its window goes where fewer windows compete, so two trains side by side
-    // in the middle tracks do not crowd one band while the other stays empty.
-    for (const p of prepared) {
-      if (!p.free) continue;
-      const near = (side: 1 | -1) => prepared.filter(q => q !== p && q.row === p.row && q.side === side
-        && Math.abs(q.head.x - p.head.x) < (p.width + q.width) / 2 + 10).length;
-      if (near(p.side === 1 ? -1 : 1) < near(p.side)) p.side = p.side === 1 ? -1 : 1;
-    }
-    const bands = new Map<string, { band: Rect; inputs: typeof prepared }>();
-    for (const input of prepared) {
-      const key = `${input.row}/${input.side}`;
-      if (!bands.has(key)) bands.set(key, { band: this.trainWindowBand(input.row, input.side), inputs: [] });
-      bands.get(key)!.inputs.push(input);
-    }
+    const rows = new Map<number, typeof prepared>();
+    for (const input of prepared) rows.set(input.row, [...rows.get(input.row) ?? [], input]);
     const taken = idx.placed.map(o => o.r);
-    const placed = [...bands.values()].map(({ band, inputs }) => {
-      const ps = placeTrainWindows(inputs, band, taken);
+    const placed = [...rows].map(([row, inputs]) => {
+      const ps = placeTrainWindows(inputs, { [-1]: this.trainWindowBand(row, -1), [1]: this.trainWindowBand(row, 1) }, taken);
       taken.push(...ps.map(p => p.r));
       return { inputs, ps };
     });
@@ -1183,11 +1170,13 @@ export class TrackView {
     const a = geom.pos[l.a]!;
     const b = geom.pos[l.b]!;
     const right = (b.x - a.x) * tr.dir >= 0;
-    // side: by track for mains, by direction elsewhere; depot moves above
-    let side: 1 | -1 = right ? 1 : -1;
-    if (l.track === 'DN') side = 1;
-    else if (l.track === 'UP') side = -1;
-    else if (l.track === 'DEP') side = -1;
+    // Bands: those whose leader crosses the fewest main lines (UP above, DN
+    // below, depot leads above; the middle tracks reach both), nearer first.
+    const top = geom.rows[head.row].top, lines = [top + this.L.upY, top + this.L.dnY];
+    const crossed = (side: 1 | -1) => lines.filter(y => (y - head.y) * side > 1).length;
+    const least = Math.min(crossed(-1), crossed(1));
+    const sides = ([-1, 1] as const).filter(s => crossed(s) === least)
+      .sort((p, q) => Math.abs(lines[p < 0 ? 0 : 1] - head.y) - Math.abs(lines[q < 0 ? 0 : 1] - head.y));
     // texts
     const full = `${tr.svc}-${tr.trip}`;
     let chips = '';
@@ -1208,8 +1197,7 @@ export class TrackView {
     const compactWidth = trainWindowWidth(charW * tr.trip.length, chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
     const keep = !!chips || (this.store.selection?.kind === 'train' && this.store.selection.id === tr.id);
-    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, trip: tr.trip, chips, status, right,
-      free: l.track !== 'DN' && l.track !== 'UP' && l.track !== 'DEP' };
+    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side: sides[0], sides, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, trip: tr.trip, chips, status, right };
   }
 
   private drawWindow(tg: TrainGfx, tr: TrainSnap, text: string, chips: string, r: Rect, status: number, right: boolean) {

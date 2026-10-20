@@ -62,8 +62,9 @@ export const LATE_SHOWN_S = 120;
 export const lateText = (delay: number) => delay > LATE_SHOWN_S ? `+${Math.floor(delay / 60)}'` : '';
 
 /** `delay` is service lateness (0 out of service). `keep`: an abnormal or
- * selected train whose number must stay visible, never folded into a group. */
-export interface TrainWindowInput { id: number; head: {x:number;y:number}; side: 1|-1; width: number; delay: number; keep?: boolean;
+ * selected train whose number must stay visible, never folded into a group.
+ * `sides`: the bands its window may use, best first (default: `side` alone). */
+export interface TrainWindowInput { id: number; head: {x:number;y:number}; side: 1|-1; sides?: (1|-1)[]; width: number; delay: number; keep?: boolean;
   /** width with the trip number alone (no 表号), used where windows collide */
   compactWidth?: number;
   /** the trip number, written on a group of this train alone */
@@ -71,25 +72,34 @@ export interface TrainWindowInput { id: number; head: {x:number;y:number}; side:
 export interface TrainWindowPlacement { ids: number[]; r: Rect; leader: Leader; text?: string; compact?: boolean }
 export const trainGroupText = (count: number, delay: number) =>
   `+${count} 列${delay > LATE_SHOWN_S ? ` · 最晚 ${Math.floor(delay / 60)}分` : ''}`;
+export type TrainWindowBands = Partial<Record<1|-1, Rect>>;
 
-/** One bounded band, with capacity reserved for the overflow group. Never
- * add more vertical layers to make a queue fit into the next station row.
- * Abnormal trains claim their windows first. Where windows collide, the
- * normal trains of that spot show the trip number alone (no 表号); only what
- * still does not fit is folded into a group next to its trains. The rest of
- * the view keeps full windows, so a passing crowd does not flip the picture. */
-export function placeTrainWindows(inputs: TrainWindowInput[], band: Rect, obstacles: Rect[]): TrainWindowPlacement[] {
+/** One row: its two bounded bands, each with capacity reserved for overflow
+ * groups. Never add more vertical layers to make a queue fit into the next
+ * station row. One ladder everywhere, applied only where windows collide:
+ * full window → trip number alone (no 表号) → folded into a group next to its
+ * trains. A window may take any band its train reaches (`sides`); the most
+ * constrained trains choose first: abnormal ones, then those with fewer bands. */
+export function placeTrainWindows(inputs: TrainWindowInput[], bands: TrainWindowBands, obstacles: Rect[]): TrainWindowPlacement[] {
   const out: TrainWindowPlacement[] = [], hidden: TrainWindowInput[] = [];
-  const layers = Math.max(1, Math.ceil(band.h / 44));
   const byId = new Map(inputs.map(t => [t.id, t]));
+  const sidesOf = (t: TrainWindowInput) => (t.sides ?? [t.side]).filter(s => bands[s]);
   const short = new Set<number>();
   const width = (t: TrainWindowInput) => short.has(t.id) ? t.compactWidth! : t.width;
-  const place = (t: TrainWindowInput, shifts?: number[]) => {
-    const p = placeTrainLabel(t.head, t.side, width(t), out, obstacles, layers, [], band, shifts);
-    if (p) out.push({ ...p, ids: [t.id] });
-    return !!p;
+  const at = (head: {x:number;y:number}, side: 1|-1, w: number, shifts?: number[]) => {
+    const band = bands[side]!;
+    return placeTrainLabel(head, side, w, out, obstacles, Math.max(1, Math.ceil(band.h / 44)), [], band, shifts);
   };
-  for (const t of [...inputs.filter(t => t.keep), ...inputs.filter(t => !t.keep)]) if (!place(t)) hidden.push(t);
+  // straight over the head in any band before stepping aside in one
+  const place = (t: TrainWindowInput, shifts?: number[]) => {
+    for (const s of shifts ? [shifts] : [[0], undefined]) for (const side of sidesOf(t)) {
+      const p = at(t.head, side, width(t), s);
+      if (p) { out.push({ ...p, ids: [t.id] }); return true; }
+    }
+    return false;
+  };
+  const constrained = (a: TrainWindowInput, b: TrainWindowInput) => Number(!!b.keep) - Number(!!a.keep) || sidesOf(a).length - sidesOf(b).length;
+  for (const t of inputs.slice().sort(constrained)) if (!place(t)) hidden.push(t);
   const clusters: TrainWindowInput[][] = [];
   for (const t of hidden.sort((a, b) => a.head.x - b.head.x)) {
     const last = clusters.at(-1)?.at(-1);
@@ -100,8 +110,13 @@ export function placeTrainWindows(inputs: TrainWindowInput[], band: Rect, obstac
     const cx = c.reduce((n, t) => n + t.head.x, 0) / c.length;
     // a "group" of one names its train: no narrower than "+1 列", and says more
     const text = c.length === 1 && c[0].trip ? c[0].trip + lateText(c[0].delay) : trainGroupText(c.length, Math.max(...c.map(t => t.delay)));
-    const p = placeTrainLabel({ x: cx, y: c[0].head.y }, c[0].side, textWidth(text, 24) + 24, out, obstacles, layers, [], band);
-    return p && { ...p, ids: c.map(t => t.id), text };
+    // the band most of its trains reach
+    const reach = (s: 1|-1) => c.filter(t => sidesOf(t).includes(s));
+    for (const side of ([-1, 1] as const).filter(s => reach(s).length).sort((a, b) => reach(b).length - reach(a).length)) {
+      const p = at({ x: cx, y: reach(side)[0].head.y }, side, textWidth(text, 24) + 24);
+      if (p) return { ...p, ids: c.map(t => t.id), text };
+    }
+    return null;
   };
   while (clusters.length) {
     const c = clusters.shift()!;
@@ -114,8 +129,7 @@ export function placeTrainWindows(inputs: TrainWindowInput[], band: Rect, obstac
     if (!lifted.length && out.length) lifted = [out.reduce((a, b) => dist(a.r.x + a.r.w / 2) <= dist(b.r.x + b.r.w / 2) ? a : b)];
     for (const o of lifted) out.splice(out.indexOf(o), 1);
     const members = [...new Map([...c, ...lifted.flatMap(o => o.ids.map(id => byId.get(id)!))].map(t => [t.id, t])).values()]
-      // abnormal first, then nearest
-      .sort((a, b) => Number(!!b.keep) - Number(!!a.keep) || dist(a.head.x) - dist(b.head.x));
+      .sort((a, b) => constrained(a, b) || dist(a.head.x) - dist(b.head.x));
     for (const t of members) if (!t.keep && t.compactWidth) short.add(t.id);
     const base = out.length;
     // first: every train of the spot in its own (compact) window

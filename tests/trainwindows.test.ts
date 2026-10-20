@@ -4,7 +4,7 @@ describe('train window placement',()=>{
  it.each([-1,1] as const)('keeps twelve queued trains and their overflow group inside the same bounded band (side %s)',side=>{
   const band={x:20,y:side===1?420:270,w:1000,h:88};
   const inputs=Array.from({length:12},(_,id)=>({id,head:{x:500+id*2,y:400},side,width:230,delay:id*60}));
-  const result=placeTrainWindows(inputs,band,[{x:0,y:530,w:1100,h:50}]);
+  const result=placeTrainWindows(inputs,{[-1]:band,[1]:band},[{x:0,y:530,w:1100,h:50}]);
   expect(result.flatMap(p=>p.ids).sort((a,b)=>a-b)).toEqual(inputs.map(t=>t.id));
   expect(result.some(p=>p.text&&p.ids.length>1)).toBe(true);
   expect(result.some(p=>!p.text&&p.ids.length===1)).toBe(true);
@@ -19,7 +19,7 @@ describe('train window placement',()=>{
   const band={x:20,y:420,w:700,h:44};
   // a peak queue running 10–110 s behind: on time by the legend (≤2 min)
   const inputs=Array.from({length:10},(_,id)=>({id,head:{x:300+id*30,y:400},side:1 as const,width:110,delay:10+id*10,keep:id===7||id===9}));
-  const result=placeTrainWindows(inputs,band,[]);
+  const result=placeTrainWindows(inputs,{[-1]:band,[1]:band},[]);
   const group=result.find(p=>p.text)!;
   expect(group).toBeDefined();
   expect(group.text).toBe(`+${group.ids.length} 列`);
@@ -33,7 +33,7 @@ describe('train window placement',()=>{
   const band={x:0,y:420,w:2000,h:44};
   const queue=(x0:number,id0:number)=>Array.from({length:5},(_,i)=>({id:id0+i,head:{x:x0+i*20,y:400},side:1 as const,width:120,compactWidth:70,delay:0}));
   const inputs=[...queue(300,0),...queue(1500,10)];
-  const groups=placeTrainWindows(inputs,band,[]).filter(p=>p.text);
+  const groups=placeTrainWindows(inputs,{[-1]:band,[1]:band},[]).filter(p=>p.text);
   expect(groups.length).toBe(2);
   for(const g of groups) {
    const xs=g.ids.map(id=>inputs.find(t=>t.id===id)!.head.x);
@@ -44,7 +44,7 @@ describe('train window placement',()=>{
   // a lone train far away keeps its full window
   const spread=[...Array.from({length:8},(_,id)=>({id,head:{x:100+id*100,y:400},side:1 as const,width:120,compactWidth:70,delay:0,keep:id===3})),
    {id:20,head:{x:1700,y:400},side:1 as const,width:120,compactWidth:70,delay:0}];
-  const withoutCompact=placeTrainWindows(spread.map(({compactWidth,...t})=>t),band,[]),result=placeTrainWindows(spread,band,[]);
+  const withoutCompact=placeTrainWindows(spread.map(({compactWidth,...t})=>t),{[-1]:band,[1]:band},[]),result=placeTrainWindows(spread,{[-1]:band,[1]:band},[]);
   expect(withoutCompact.some(p=>p.text)).toBe(true);
   expect(result.some(p=>p.text)).toBe(false);
   expect(result.find(p=>p.ids[0]===3)!.compact).toBeFalsy();
@@ -54,7 +54,7 @@ describe('train window placement',()=>{
  it('a queue on one spot of mostly late trains keeps some windows beside its group',()=>{
   const band={x:20,y:420,w:1000,h:88};
   const inputs=Array.from({length:12},(_,id)=>({id,head:{x:500+id*2,y:400},side:1 as const,width:230,compactWidth:140,delay:id*60,keep:id*60>120}));
-  const result=placeTrainWindows(inputs,band,[]);
+  const result=placeTrainWindows(inputs,{[-1]:band,[1]:band},[]);
   expect(result.flatMap(p=>p.ids).sort((a,b)=>a-b)).toEqual(inputs.map(t=>t.id));
   expect(result.filter(p=>!p.text).length).toBeGreaterThan(0);
  });
@@ -62,10 +62,20 @@ describe('train window placement',()=>{
   // two trains side by side in a narrow band: one window and one more box fit
   const band={x:0,y:420,w:330,h:44};
   const inputs=[0,1].map(id=>({id,head:{x:160+id*4,y:400},side:1 as const,width:150,compactWidth:120,delay:id?200:0,trip:`401${id}`}));
-  const result=placeTrainWindows(inputs,band,[]);
+  const result=placeTrainWindows(inputs,{[-1]:band,[1]:band},[]);
   expect(result.flatMap(p=>p.ids).sort()).toEqual([0,1]);
   for(const p of result.filter(p=>p.text&&p.ids.length===1)) expect(p.text).toBe(`401${p.ids[0]}${p.ids[0]?"+3'":''}`);
   expect(result.some(p=>p.text==='+1 列')).toBe(false);
+ });
+ it('a train reaching both bands takes the free one; a main-line train keeps its own',()=>{
+  // a main-line train above, two turnback trains beside it in the middle tracks
+  const above={x:0,y:300,w:1000,h:44},below={x:0,y:460,w:1000,h:44};
+  const inputs=[{id:0,head:{x:500,y:350},side:-1 as const,width:230,compactWidth:120,delay:0},
+   ...[1,2].map(id=>({id,head:{x:496+id*4,y:400},side:-1 as const,sides:[-1,1] as (1|-1)[],width:230,compactWidth:120,delay:0}))];
+  const result=placeTrainWindows(inputs,{[-1]:above,[1]:below},[]);
+  expect(result.some(p=>p.text||p.compact)).toBe(false);
+  expect(result.find(p=>p.ids[0]===0)!.r.y).toBe(above.y);
+  expect(result.filter(p=>p.r.y>=below.y).length).toBeGreaterThan(0);
  });
  it('stacks crowded windows locally with clear leaders and measured text',()=>{
   const placed:{r:Rect;leader:Leader}[]=[];
