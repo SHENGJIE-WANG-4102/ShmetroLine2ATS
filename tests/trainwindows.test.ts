@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {placeTrainLabel,placeTrainWindows,trainWindowWidth,leaderCrosses,leaderHits,type Rect,type Leader} from '../src/ui/labels';
+import {placeTrainLabel,placeTrainWindows,trainWindowWidth,leaderCrosses,leaderHits,trainGroupText,lateText,type Rect,type Leader} from '../src/ui/labels';
 describe('train window placement',()=>{
  it.each([-1,1] as const)('keeps twelve queued trains and their overflow group inside the same bounded band (side %s)',side=>{
   const band={x:20,y:side===1?420:270,w:1000,h:88};
@@ -14,6 +14,20 @@ describe('train window placement',()=>{
    for(const o of result.slice(0,i)) expect(p.r.x>=o.r.x+o.r.w||p.r.x+p.r.w<=o.r.x||p.r.y>=o.r.y+o.r.h||p.r.y+p.r.h<=o.r.y).toBe(true);
    if(p.text) expect(p.text).toContain(`${Math.max(...p.ids.map(id=>id))}分`);
   }
+ });
+ it('folds only normal trains, and an on-time group carries no lateness',()=>{
+  const band={x:20,y:420,w:700,h:44};
+  // a peak queue running 10–110 s behind: on time by the legend (≤2 min)
+  const inputs=Array.from({length:10},(_,id)=>({id,head:{x:300+id*30,y:400},side:1 as const,width:110,delay:10+id*10,keep:id===7||id===9}));
+  const result=placeTrainWindows(inputs,band,[]);
+  const group=result.find(p=>p.text)!;
+  expect(group).toBeDefined();
+  expect(group.text).toBe(`+${group.ids.length} 列`);
+  expect(group.ids).not.toContain(7);
+  expect(group.ids).not.toContain(9);
+  expect(trainGroupText(3,121)).toBe('+3 列 · 最晚 2分');
+  expect(lateText(120)).toBe('');
+  expect(lateText(179)).toBe("+2'");
  });
  it('stacks crowded windows locally with clear leaders and measured text',()=>{
   const placed:{r:Rect;leader:Leader}[]=[];

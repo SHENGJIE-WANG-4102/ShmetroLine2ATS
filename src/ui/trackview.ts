@@ -16,7 +16,7 @@ import { STATIONS, LINE_INFO } from '../data/line2';
 import type { Store, Selection } from './store';
 import { C, FONT_CN, FONT_MONO, delayColor, loadColor } from './theme';
 import { Geometry, type P } from './geometry';
-import { placeTrainWindows, trainWindowWidth, LabelIndex, textWidth, type Rect } from './labels';
+import { placeTrainWindows, trainWindowWidth, LabelIndex, textWidth, lateText, type Rect } from './labels';
 
 const LINE_COLORS: Record<string, number> = {
   '1': 0xe3002b, '2': 0x8cc220, '3': 0xfcd600, '4': 0x461d84, '6': 0xd40068, '7': 0xed6f00, '8': 0x0094d8,
@@ -1084,7 +1084,7 @@ export class TrackView {
     for (const { band, inputs } of bands.values()) {
       for (const p of placeTrainWindows(inputs, band, idx.placed.map(o => o.r))) {
         if (p.text) {
-          this.drawTrainGroup(groupUsed++, p.ids, p.text, p.r);
+          this.drawTrainGroup(groupUsed++, p.ids, p.text, p.r, Math.max(...p.ids.map(id => inputs.find(t => t.id === id)!.delay)));
           idx.add(p.r, `train-group:${p.ids.join(',')}`);
         } else {
           const data = inputs.find(t => t.id === p.ids[0])!, tg = this.trains.get(data.id)!;
@@ -1129,7 +1129,7 @@ export class TrackView {
     return { x, y: from, w: Math.max(0, Math.min(this.geom.width * z - 2, this.panX + this.vw - 2) - x), h: Math.max(0, to - from) };
   }
 
-  private drawTrainGroup(index: number, ids: number[], text: string, r: Rect) {
+  private drawTrainGroup(index: number, ids: number[], text: string, r: Rect, delay: number) {
     let group = this.groupBoxes[index];
     if (!group) {
       const box = new Container(), bg = new Graphics();
@@ -1144,8 +1144,11 @@ export class TrackView {
       this.store.emit('textsChanged');
     }
     group.ids = ids; group.box.visible = true; group.box.position.set(r.x, r.y);
+    // same lateness colours as a single window: an on-time queue is not flagged
+    const status = delayColor(delay);
     group.label.text = text; group.label.position.set(12, 4);
-    group.bg.clear().roundRect(1, 1, r.w - 2, r.h - 2, 4).fill({color:C.trainBoxFill,alpha:.97}).stroke({width:2,color:C.slightLate});
+    group.label.style.fill = status === C.onTime ? 0xffffff : status;
+    group.bg.clear().roundRect(1, 1, r.w - 2, r.h - 2, 4).fill({color:C.trainBoxFill,alpha:.97}).stroke({width:2,color:status === C.onTime ? C.trainBoxBorder : status});
   }
 
   private prepareTrainWindow(tr: TrainSnap) {
@@ -1174,12 +1177,13 @@ export class TrackView {
     else if (tr.mode !== 'DTO' && !(tr.mode === 'AM' && tr.level === 'CBTC' && this.store.snap?.atoLine)) chips += tr.mode;
     if (tr.hold) chips += '扣';
     if (tr.hot) chips += '热备';
-    if (tr.inService && tr.delay > 120) chips += `+${Math.floor(tr.delay / 60)}'`;
+    if (tr.inService) chips += lateText(tr.delay);
     tg.label.text = full;
     tg.chips.text = chips;
     const width = trainWindowWidth(tg.label.width, chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
-    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.delay, chips, status, right };
+    const keep = !!chips || (this.store.selection?.kind === 'train' && this.store.selection.id === tr.id);
+    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, chips, status, right };
   }
 
   private drawWindow(tg: TrainGfx, tr: TrainSnap, text: string, chips: string, r: Rect, status: number, right: boolean) {

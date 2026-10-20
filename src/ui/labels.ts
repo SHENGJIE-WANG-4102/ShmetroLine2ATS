@@ -54,19 +54,28 @@ export function placeTrainLabel(head: {x:number;y:number}, side: 1|-1, width: nu
   return null;
 }
 
-export interface TrainWindowInput { id: number; head: {x:number;y:number}; side: 1|-1; width: number; delay: number }
+/** Lateness shown on a window: beyond this a train is no longer on time (图例「正点≤2分」). */
+export const LATE_SHOWN_S = 120;
+export const lateText = (delay: number) => delay > LATE_SHOWN_S ? `+${Math.floor(delay / 60)}'` : '';
+
+/** `delay` is service lateness (0 out of service). `keep`: an abnormal or
+ * selected train whose number must stay visible, never folded into a group. */
+export interface TrainWindowInput { id: number; head: {x:number;y:number}; side: 1|-1; width: number; delay: number; keep?: boolean }
 export interface TrainWindowPlacement { ids: number[]; r: Rect; leader: Leader; text?: string }
-export const trainGroupText = (count: number, delay: number) => `+${count} 列 · 最晚 ${Math.ceil(Math.max(0, delay) / 60)}分`;
+export const trainGroupText = (count: number, delay: number) =>
+  `+${count} 列${delay > LATE_SHOWN_S ? ` · 最晚 ${Math.floor(delay / 60)}分` : ''}`;
 
 /** One bounded band, with capacity reserved for the overflow group. Never
- * add more vertical layers to make a queue fit into the next station row. */
+ * add more vertical layers to make a queue fit into the next station row.
+ * Abnormal trains claim their windows first; only normal ones are folded. */
 export function placeTrainWindows(inputs: TrainWindowInput[], band: Rect, obstacles: Rect[]): TrainWindowPlacement[] {
   const out: TrainWindowPlacement[] = [], hidden: TrainWindowInput[] = [];
   const layers = Math.max(1, Math.ceil(band.h / 44));
-  for (const input of inputs) {
+  for (const input of [...inputs.filter(t => t.keep), ...inputs.filter(t => !t.keep)]) {
     const p = placeTrainLabel(input.head, input.side, input.width, out, obstacles, layers, [], band);
     if (p) out.push({ ...p, ids: [input.id] }); else hidden.push(input);
   }
+  const kept = (p: TrainWindowPlacement) => !!inputs.find(t => t.id === p.ids[0])?.keep;
   while (hidden.length) {
     hidden.sort((a,b)=>inputs.indexOf(a)-inputs.indexOf(b));
     const head = { x: hidden.reduce((n, t) => n + t.head.x, 0) / hidden.length, y: hidden[0].head.y };
@@ -85,7 +94,9 @@ export function placeTrainWindows(inputs: TrainWindowInput[], band: Rect, obstac
         if (rest) return [{...solo,ids:[first.id]},{...rest,ids:hidden.map(t=>t.id),text}];
       }
     }
-    const last = out.pop();
+    // give up the last normal window; abnormal ones go only when nothing else is left
+    const at = out.map(kept).lastIndexOf(false);
+    const last = out.splice(at >= 0 ? at : out.length - 1, 1)[0];
     if (!last) break; // a clipped/off-screen band has no room for even one window
     hidden.unshift(inputs.find(t => t.id === last.ids[0])!);
   }
