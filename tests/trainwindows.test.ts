@@ -48,6 +48,15 @@ describe('train window placement',()=>{
   expect(compact.find(p=>p.ids[0]===3)!.compact).toBeFalsy();
   expect(compact.filter(p=>p.compact).length).toBe(11);
  });
+ it('a queue on one spot of mostly late trains keeps some windows beside its group',()=>{
+  const band={x:20,y:420,w:1000,h:88};
+  const inputs=Array.from({length:12},(_,id)=>({id,head:{x:500+id*2,y:400},side:1 as const,width:230,compactWidth:140,delay:id*60,keep:id*60>120}));
+  for(const compact of [false,true]) {
+   const result=placeTrainWindows(inputs,band,[],compact);
+   expect(result.flatMap(p=>p.ids).sort((a,b)=>a-b)).toEqual(inputs.map(t=>t.id));
+   expect(result.filter(p=>!p.text).length).toBeGreaterThan(0);
+  }
+ });
  it('stacks crowded windows locally with clear leaders and measured text',()=>{
   const placed:{r:Rect;leader:Leader}[]=[];
   const inputs=[[600,174,48],[650,210,0],[710,192,48],[770,174,0],[830,192,0]];

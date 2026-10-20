@@ -116,10 +116,12 @@ export function placeTrainWindows(all: TrainWindowInput[], band: Rect, obstacles
       .map(o => byId.get(o.ids[0])!);
     const base = out.length;
     let done = false;
-    for (let k = singles.length; k >= 0 && !done; k--) {
+    // (a queue on one head: kept windows step aside so the group can sit over it)
+    for (let k = singles.length; k >= 0 && !done; k--) for (const shifts of [undefined, [-1, 1, -.75, .75, -.5, .5]]) {
+      if (done) break;
       const fold = singles.slice(k);
       for (const t of singles.slice(0, k)) {
-        const p = placeTrainLabel(t.head, t.side, t.width, out, obstacles, layers, [], band);
+        const p = placeTrainLabel(t.head, t.side, t.width, out, obstacles, layers, [], band, shifts);
         if (p) out.push({ ...p, ids: [t.id] }); else fold.push(t);
       }
       const g = group([...c, ...fold]);
