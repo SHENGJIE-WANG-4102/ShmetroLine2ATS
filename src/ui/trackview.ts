@@ -1074,6 +1074,15 @@ export class TrackView {
     const list = snap.trains.slice().sort((a, b) => (geom.linkPoint(a.link,a.off)?.x??0)-(geom.linkPoint(b.link,b.off)?.x??0)||prio(b)-prio(a));
     for (const tg of this.trains.values()) tg.box.visible = false;
     const prepared = list.flatMap(tr => { const p = this.prepareTrainWindow(tr); return p ? [p] : []; });
+    // A train off the main tracks (turnback, storage) has no side of its own:
+    // its window goes where fewer windows compete, so two trains side by side
+    // in the middle tracks do not crowd one band while the other stays empty.
+    for (const p of prepared) {
+      if (!p.free) continue;
+      const near = (side: 1 | -1) => prepared.filter(q => q !== p && q.row === p.row && q.side === side
+        && Math.abs(q.head.x - p.head.x) < (p.width + q.width) / 2 + 10).length;
+      if (near(p.side === 1 ? -1 : 1) < near(p.side)) p.side = p.side === 1 ? -1 : 1;
+    }
     const bands = new Map<string, { band: Rect; inputs: typeof prepared }>();
     for (const input of prepared) {
       const key = `${input.row}/${input.side}`;
@@ -1199,7 +1208,8 @@ export class TrackView {
     const compactWidth = trainWindowWidth(charW * tr.trip.length, chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
     const keep = !!chips || (this.store.selection?.kind === 'train' && this.store.selection.id === tr.id);
-    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, trip: tr.trip, chips, status, right };
+    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, trip: tr.trip, chips, status, right,
+      free: l.track !== 'DN' && l.track !== 'UP' && l.track !== 'DEP' };
   }
 
   private drawWindow(tg: TrainGfx, tr: TrainSnap, text: string, chips: string, r: Rect, status: number, right: boolean) {
