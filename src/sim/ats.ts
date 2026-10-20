@@ -15,13 +15,14 @@ import { takeVehicle, putVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, distToNextSignal } from './onboard';
 import { openDoors, closeDoors } from './psd';
-import { blockTasks, tripTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd } from './timetable';
+import { blockTasks, tripTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/line2';
 import { boardAndAlight, boardWhileOpen } from './passengers';
 import { dmiNote } from './dmi';
 import { DOOR_CYCLE, MIN_DWELL, regulatedDwell } from './calibration';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, type ArsWait, type HaltCode } from './halt';
+import { standsAt } from './operatingDay';
 import { standbyTakeover, predictedLateness } from './standby';
 
 // ---------------------------------------------------------------- route table
@@ -480,7 +481,7 @@ export function spawnDue(sim: Sim) {
     // a duty whose trips are all cancelled (taken over or withdrawn) stays in
     if (!b.trips.some(id => !sim.plan.trips[id].cancelled)) continue;
     if (b.start.kind === 'stable') {
-      if (sim.t < sim.dayStart + 1) spawnStabled(sim, b);
+      spawnStabled(sim, b);
       continue;
     }
     if (sim.t < b.start.time) continue;
@@ -534,7 +535,8 @@ export function spawnDue(sim: Sim) {
       continue;
     }
     sim.clearAlarm(`short-${b.id}`);
-    const vehicle = takeVehicle(sim, b.start.depot)!;
+    const vehicle = takeVehicle(sim, b.start.depot, b);
+    if (!vehicle) continue;
     // head on the transfer link next to the exit signal, heading towards the main line
     const exitLink = topo.links[exitL];
     // exitLink runs j1 → j2 (a = j1). Train heads -1 on it.
@@ -566,17 +568,37 @@ function spawnStabled(sim: Sim, b: Block) {
   const bid = b.start.berth !== undefined
     ? (placeFree(b.start.berth) ? b.start.berth : undefined)
     : places[rank] !== undefined && placeFree(places[rank]) ? places[rank] : places.find(placeFree);
-  if (bid === undefined) return;
-  const berth = topo.berths[bid];
-  const l = topo.links[berth.link];
-  // place body ending at the berth, then reverse so the head faces the platform
-  const headOff = berth.offset;
-  const tr = newTrain(sim, b, berth.link, headOff, berth.dir, [{ link: berth.link, dir: berth.dir }], sim.stabledPool.shift() ?? '0200');
   // (a duty cancelled before its spawn still has its car standing here; face
   // it as its first planned trip would)
   const first = sim.plan.trips[b.trips.find(id => !sim.plan.trips[id].cancelled) ?? b.trips[0]];
-  const facesFirst = !first || ((l.chainB - l.chainA) * berth.dir > 0) === (first.dir === 'DN');
-  if (b.start.berth === undefined || (berth.kind !== 'platform' && !facesFirst)) reverseTrain(sim, tr);
+  const faces = (link: number, dir: number) => !first || ((topo.links[link].chainB - topo.links[link].chainA) * dir > 0) === (first.dir === 'DN');
+  // after a rollover the train standing there is the one that goes out (D111)
+  const idle = sim.trainList.filter(t => (t.block < 0 || sim.blockDone.has(t.block)) && !t.tasks.length && t.v < .05 && !t.failed);
+  const own = b.start.berth;
+  const candidates = own !== undefined
+    ? [own, ...overnightPlaces(topo).filter(p => p.berth === own).map(p => p.arrivalBerth)]
+    : [places[rank], ...places].filter((id): id is number => id !== undefined);
+  const adopt = candidates.map(id => idle.find(t => standsAt(sim, t, id))).find(t => t !== undefined);
+  if (adopt) {
+    adopt.block = b.id; adopt.svc = b.svc; adopt.phase = 'run'; adopt.phaseSince = sim.t;
+    if (!faces(adopt.link, adopt.dir)) reverseTrain(sim, adopt);
+    adopt.tasks = blockTasks(topo, sim.plan, b);
+    adopt.lastStation = st.index;
+    b.train = adopt.id;
+    setTripFromTasks(sim, adopt);
+    return;
+  }
+  if (bid === undefined) return;
+  if (!sim.stabledPool.length) {
+    // a later day: no car stands where this duty starts (D111)
+    sim.log('B', '车辆', `${st.name}存车位无车，表号 ${b.svc} 无法出车（首趟 ${first?.no ?? '-'}）`, { key: `stable-missing-${b.id}` });
+    return;
+  }
+  const berth = topo.berths[bid];
+  // place body ending at the berth, then reverse so the head faces the platform
+  const headOff = berth.offset;
+  const tr = newTrain(sim, b, berth.link, headOff, berth.dir, [{ link: berth.link, dir: berth.dir }], sim.stabledPool.shift()!);
+  if (b.start.berth === undefined || (berth.kind !== 'platform' && !faces(berth.link, berth.dir))) reverseTrain(sim, tr);
   tr.tasks = blockTasks(topo, sim.plan, b);
   tr.lastStation = st.index;
   b.train = tr.id;

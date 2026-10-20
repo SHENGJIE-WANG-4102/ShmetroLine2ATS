@@ -88,7 +88,7 @@ describe('daily depot homes', () => {
     });
     it(`${dayType}: closes every yard with direct returns or a required through working`, () => {
       const ledger = depotLedger(sim.topo, sim.plan);
-      expect(ledger.initial).toEqual(sim.depotStock);
+      expect(ledger.initial).toEqual(sim.depotStock.map((n,d)=>n+[...sim.vehicles.values()].filter(r=>r.work&&r.depot===d).length));
       expect(ledger.final).toEqual(ledger.initial);
       ledger.peak.forEach((n, depot) => expect(n).toBeLessThanOrEqual(sim.topo.depots[depot].capacity));
       for (const block of sim.plan.blocks) {

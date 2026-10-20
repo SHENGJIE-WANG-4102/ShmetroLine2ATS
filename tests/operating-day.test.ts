@@ -21,15 +21,15 @@ describe('operating day boundaries and replay',()=>{
   const config=nextOperatingConfig(sim);
   const stock=sim.depotStock.slice();stock[0]+=transfer;stock[2]-=transfer;
   const next=new Sim({...config,depotStock:stock});
-  expect(next.depotStock).toEqual(stock);
+  expect(next.depotStock.map((n,d)=>n+[...next.vehicles.values()].filter(r=>r.work&&r.depot===d).length)).toEqual(stock);
   expect(initialDepotStock(next.topo,next.plan)).toEqual(stock);
-  expect(yardNeed(next.topo,next.plan).every((n,d)=>n<=stock[d])).toBe(true);
+  expect(yardNeed(next.topo,next.plan).every((n,d)=>n<=next.depotStock[d])).toBe(true);
   expect(depotLedger(next.topo,next.plan).final).toEqual(stock);
  },60000);
- it('warns before accepting a service which will cross the rollover',()=>{
+ it('accepts a service crossing the rollover without a removal warning',()=>{
   const preview=preparePlan(sim,{c:'addTrain',depot:0,dir:'DN',to:12,time:27.5*3600});
   expect(preview.ok,preview.msg).toBe(true);
-  expect(preview.warnings?.join('')).toContain('27:45');
+  expect(preview.warnings?.join('') ?? '').not.toContain('收掉');
   expect(preview.plan.trips.some(t=>t.revenue&&t.stops.at(-1)!.arr>OPERATING_DAY.to)).toBe(true);
  });
  it('accepts the opening overnight cars at their legal departure or arrival berths',()=>{

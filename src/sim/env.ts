@@ -112,7 +112,11 @@ function intervalSections(sim: Sim, west: number): number[] {
   return topo.sections.filter((s) => (s.track === 'DN' || s.track === 'UP') && s.chainFrom >= a - 1 && s.chainTo <= b + 1 && s.kind === 'plain').map((s) => s.id);
 }
 
-export function initPossessions(sim: Sim) {
+/** `carried`: possessions still in force from the previous operating day
+ * (D111); they are this morning's. Without them (the first day) this
+ * morning's are drawn. Tonight's works run either to the end of the night
+ * window or on into the next morning. */
+export function initPossessions(sim: Sim, carried?: Possession[]) {
   if (sim.config.noPossessions) return;
   const cands = [...POSSESSIONS.candidates];
   // seeded shuffle
@@ -123,16 +127,18 @@ export function initPossessions(sim: Sim) {
   const mk = (west: number, from: number, to: number, state: Possession['state']): Possession => ({
     id: sim.possessions.length, name: `${STATIONS[west].name}—${STATIONS[west + 1].name} 区间`, sections: intervalSections(sim, west), from, to, state,
   });
-  // morning: active from the start of the day, released before the first trains
-  for (const w of cands.slice(0, 2)) {
-    const p = mk(w, sim.dayStart - 3 * 3600, POSSESSIONS.morningUntil, 'active');
+  const morning = carried ?? cands.slice(0, 2).map(w => mk(w, sim.dayStart - 3 * 3600, POSSESSIONS.morningUntil, 'active'));
+  for (const p of morning) {
+    p.id = sim.possessions.length;
     sim.possessions.push(p);
-    for (const s of p.sections) { sim.sec[s].blocked = true; sim.sec[s].poss = p.id; }
+    if (p.state === 'active' || p.state === 'releasing') for (const s of p.sections) { sim.sec[s].blocked = true; sim.sec[s].poss = p.id; }
   }
   // tonight
   cands.slice(2, 5).forEach((w, k) => {
     sim.possessions.push(mk(w, POSSESSIONS.nightFrom + k * 300, POSSESSIONS.nightTo - k * 300, 'planned'));
   });
+  // and on into tomorrow morning (those become the next day's morning ones)
+  for (const w of cands.slice(5, 7)) sim.possessions.push(mk(w, sim.dayStart - 3 * 3600 + 86400, POSSESSIONS.morningUntil + 86400, 'planned'));
 }
 
 /**

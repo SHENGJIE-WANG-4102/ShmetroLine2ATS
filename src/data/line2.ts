@@ -354,6 +354,8 @@ export interface DepotDef {
   /** station the depot leads join the line at */
   station: number;
   stablingTracks: number;
+  /** 【假设】能力按用户决定及配线图 V2025.26.2 建模；检修库不占停车列位。 */
+  work: { daily: boolean; monthly: boolean; overhaul: boolean };
   capacity: number;
   /** seconds from leaving a stabling track to reaching the transfer-track gate */
   exitTime: number;
@@ -428,14 +430,17 @@ export const LAYOUT = {
   depots: [
     {
       id: 'BZL', name: '北翟路车辆段', short: '北翟路', station: 4,
+      work: { daily: true, monthly: true, overhaul: true },
       stablingTracks: 14, capacity: 36, exitTime: 240, source: 'wiki-depots（接轨淞虹路，淞虹路西北）; pdf-peixian（两条出入段线在淞虹路站台西端经双Y接两正线）',
     },
     {
       id: 'LYD', name: '龙阳路车辆段', short: '龙阳路', station: 19,
+      work: { daily: true, monthly: true, overhaul: false },
       stablingTracks: 12, capacity: 24, exitTime: 240, source: 'wiki-depots（接轨龙阳路，龙阳路东北）; pdf-peixian（出入段线接上行正线）',
     },
     {
       id: 'CSD', name: '川沙停车场', short: '川沙', station: 28,
+      work: { daily: true, monthly: false, overhaul: false },
       stablingTracks: 8, capacity: 32, exitTime: 200, source: 'wiki-depots（接轨远东大道，远东大道东）; pdf-peixian',
     },
   ] as DepotDef[],
@@ -479,6 +484,11 @@ export const TURNOUT_SPEEDS = {
 // ---------------------------------------------------------------------------
 
 export const OPERATIONS = {
+  /** 【假设】均衡修简化：任何有列检能力的车场过夜即列检；正线过夜不算。
+   * 交接资料：列检不超过15天、月检不超过3个月；月检计划60天、占库1天。
+   * 交接来源：02A05首批23列（2025-02至2026-12）架修招标、解放日报2026-09-25均衡修报道；同时1列、30天为模拟假设。
+   * 累计里程只显示，不据此停用；检修库不占停车列位（D112）。 */
+  maintenance: { dailyLimit: 15, monthlyPeriod: 60, monthlyLimit: 90, monthlyDays: 1, overhaulDays: 30, overhaulCount: 1 },
   /** 【假设】每个方向的站间区间最多一列；过江段同样取一列。 */
   intervalTrainLimits: STATIONS.slice(0, -1).map((s, i) => ({ from: s.id, to: STATIONS[i + 1].id, limit: 1 })),
   /** 【假设】全天训练故障预算、相对权重与大部件故障日概率；不是实测故障率。 */

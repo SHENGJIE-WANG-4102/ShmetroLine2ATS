@@ -1,4 +1,3 @@
-import { OPERATING_DAY } from './dayRandom';
 import type { Sim } from './engine';
 import { type Command, type Plan } from './model';
 import { addExtraTrain, applyOverlay, OVERLAY_PRESETS, validatePlan, fleetPeak, depotMoves, sortDepotMoves, type PlanIssue } from './timetable';
@@ -112,9 +111,7 @@ export function preparePlan(sim: Sim, cmd: PlanCommand): PlanPreview {
   const issues = rawIssues.map(issue => issue.severity === 'error' && !errors.includes(issue)
     ? { ...issue, severity: 'warn' as const, text: `已有问题（未加重）：${issue.text}` } : issue);
   if (errors.length) return reject(`运行图不可行：${errors[0].text}`, issues);
-  const late=plan.trips.slice(firstTrip).filter(t=>!t.cancelled&&t.stops.at(-1)!.arr>OPERATING_DAY.to);
-  const warnings=[...issues.filter(i=>i.text.startsWith('已有问题')).map(i=>i.text),
-    ...(late.length?[`车次 ${late.map(t=>t.no).join('、')} 将在 27:45 后结束；运营日切换时仍未完成的列车会被收掉。`]:[])];
+  const warnings=issues.filter(i=>i.text.startsWith('已有问题')).map(i=>i.text);
   const added = plan.trips.slice(firstTrip).filter(trip => !trip.cancelled && trip.revenue).length;
   return { ok: true, msg: `${label}：新增 ${added} 个车次${skipped ? `；${skipped} 个车次因能力或库存不足未安排` : ''}`, plan, issues, added, skipped, extended, warnings };
 }

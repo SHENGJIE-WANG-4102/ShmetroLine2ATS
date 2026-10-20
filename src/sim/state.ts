@@ -10,6 +10,7 @@
 import type { Sim } from './engine';
 import type { Train, Plan, SimEvent } from './model';
 import { indexBodies } from './movement';
+import { initVehicles } from './yard';
 
 export interface Checkpoint {
   t: number;
@@ -28,16 +29,79 @@ export interface Checkpoint {
   drivingStops: Sim['drivingStops'];
 }
 
-const CLONED = [
+export const CLONED = [
   'sw', 'sec', 'sig', 'plat', 'zoneState', 'routes', 'routeUnlockedSw', 'berthRes', 'depotStock', 'depotShortLogged', 'blockDone',
-  'faults', 'alarms', 'noRouteLogged', 'truncatedTrips', 'yards', 'stabledPool', 'calls', 'pendingCalls', 'env', 'possessions',
+  'faults', 'alarms', 'noRouteLogged', 'truncatedTrips', 'yards', 'vehicles', 'stabledPool', 'calls', 'pendingCalls', 'env', 'possessions',
   'instructorSchedule', 'instructorOccurred', 'randomSchedule', 'randomFaultVehicles', 'ridership', 'metrics', 'scenario', 'dispatcher', 'integrity', 'bookmarks', 'incidents', 'connections', 'vehicleResets', 'energy',
 ] as const;
 
-const SCALARS = [
+export const SCALARS = [
   'ridershipTarget', 'instructorFired', 'dailyEvaluationEnded', 'passengerScale', 'nextTrainId', 'nextFaultId', 'passengersServed', 'passengersCleared', 'passengersStranded', 'depTotal', 'depOnTime', 'tripsDone',
   'nextCallId', 'autoRadio', 'autoDispatch', 'atoLine', 'scenarioFired', 'holidayFired', 'runLevel', 'randomLevel', 'nextRandomAt', 'nextBookmarkId', 'planRev',
 ] as const;
+
+/** Every checkpoint field must explicitly declare its operating-day ownership. */
+export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number], 'carry' | 'daily'> = {
+  sw: 'carry',
+  sec: 'carry',
+  sig: 'carry',
+  plat: 'carry',
+  zoneState: 'carry',
+  routes: 'carry',
+  routeUnlockedSw: 'carry',
+  berthRes: 'carry',
+  depotStock: 'carry',
+  depotShortLogged: 'daily',
+  blockDone: 'daily',
+  faults: 'carry',
+  alarms: 'carry',
+  noRouteLogged: 'daily',
+  truncatedTrips: 'daily',
+  yards: 'carry',
+  vehicles: 'carry',
+  stabledPool: 'carry',
+  calls: 'carry',
+  pendingCalls: 'carry',
+  env: 'carry',
+  possessions: 'carry',
+  instructorSchedule: 'daily',
+  instructorOccurred: 'daily',
+  randomSchedule: 'daily',
+  randomFaultVehicles: 'daily',
+  ridership: 'daily',
+  metrics: 'daily',
+  scenario: 'daily',
+  dispatcher: 'carry',
+  integrity: 'carry',
+  bookmarks: 'daily',
+  incidents: 'daily',
+  connections: 'daily',
+  vehicleResets: 'carry',
+  energy: 'daily',
+  ridershipTarget: 'daily',
+  instructorFired: 'daily',
+  dailyEvaluationEnded: 'daily',
+  passengerScale: 'daily',
+  nextTrainId: 'carry',
+  nextFaultId: 'carry',
+  passengersServed: 'daily',
+  passengersCleared: 'daily',
+  passengersStranded: 'daily',
+  depTotal: 'daily',
+  depOnTime: 'daily',
+  tripsDone: 'daily',
+  nextCallId: 'carry',
+  autoRadio: 'carry',
+  autoDispatch: 'carry',
+  atoLine: 'carry',
+  scenarioFired: 'daily',
+  holidayFired: 'daily',
+  runLevel: 'carry',
+  randomLevel: 'daily',
+  nextRandomAt: 'daily',
+  nextBookmarkId: 'carry',
+  planRev: 'daily',
+};
 
 function cloneTrain(tr: Train): Train {
   return {
@@ -113,6 +177,7 @@ export function restore(sim: Sim, cp: Checkpoint) {
   sim.drivingStops = cp.drivingStops.slice();
   sim.removedTraces = [];
   sim.reportReady = null;
+  if (!(cp.data.vehicles instanceof Map)) { sim.vehicles.clear(); initVehicles(sim); }
 }
 
 /** compact fingerprint of the dynamic state (tests: replay determinism) */

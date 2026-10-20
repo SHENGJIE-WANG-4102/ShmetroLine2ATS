@@ -12,7 +12,7 @@ import {
 } from './timetable';
 import type {
   ActiveRoute, AlarmLevel, Command, DayType, Fault, Plan, PlatformState, SectionState, SignalState, SimConfig,
-  SimEvent, Snapshot, SwitchState, Train, TrainSnap, ZoneState, StopTask, RadioCall, Possession, EnvState, YardState,
+  SimEvent, Snapshot, SwitchState, Train, TrainSnap, ZoneState, StopTask, RadioCall, Possession, EnvState, YardState, VehicleRecord,
   Metrics, ScenarioState, ScenarioReport, StopScore, Bookmark, Incident,
 } from './model';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT } from './model';
@@ -26,7 +26,9 @@ import {
   extendTrainTasks, driverDoor, platformSide,
 } from './ats';
 import { stopError } from './movement';
-import { initYards, vehicleName } from './yard';
+import { initYards, vehicleName, initVehicles, maintainFleet, arrangeYard } from './yard';
+import { carryWorld, carryTrains, availableStock } from './operatingDay';
+import { capture, type Checkpoint } from './state';
 import { radioTick, answerCall, type CallSpec } from './radio';
 import { dispatcherTick, newDispatcher, type DispatcherState } from './dispatcher';
 import { exposureOf, envTick, initPossessions, setWeather, setLowAdhesion } from './env';
@@ -124,6 +126,8 @@ export class Sim {
 
   // ---- revision 2 state
   yards: YardState[] = [];
+  /** maintenance record of every vehicle (D112) */
+  vehicles = new Map<string, VehicleRecord>();
   stabledPool: string[] = [];
   calls: RadioCall[] = [];
   nextCallId = 1;
@@ -176,6 +180,8 @@ export class Sim {
   speedWanted = 0;
   droppedPerSec = 0;
   inputLog: RecordedInput[] = [];
+  /** a day that carries on from the previous one starts from this state, not from its config (D111) */
+  startState: Checkpoint | null = null;
   replaying = false;
 
   /** highest acceleration while a CM / RM train runs on the line (driven by the
@@ -194,7 +200,8 @@ export class Sim {
     return true;
   }
 
-  constructor(config: SimConfig) {
+  /** `from`: the previous operating day at its rollover, whose world carries on (D111) */
+  constructor(config: SimConfig, from?: Sim) {
     this.config = config;
     if (!sharedTopo) {
       sharedTopo = buildTopology();
@@ -232,24 +239,38 @@ export class Sim {
     for (let i = 1; i <= stabled; i++) this.stabledPool.push(vehicleName(i));
     this.yards = initYards(this, this.depotStock, stabled + 1);
     this.t = this.dayStart;
+    const carried = from ? carryWorld(this, from) : undefined;
+    if (!from) initVehicles(this);
+    maintainFleet(this, !!from, false);
+    if (from) {
+      const stock = availableStock(this);
+      this.config = { ...this.config, depotStock: stock };
+      this.planCtx = { ...this.planCtx, initialStock: stock };
+      this.plan = generatePlan(this.planCtx);
+      carryTrains(this, from);
+      for (const depot of this.topo.depots) arrangeYard(this, depot.id);
+    }
     // night possessions use their own random stream so the passenger model is unaffected
     {
       const keep = this.rngState;
       this.rngState = (config.seed ^ 0x5eed1234) >>> 0;
-      initPossessions(this);
+      initPossessions(this, carried);
       this.rngState = keep;
     }
     // planning decisions the dispatcher should see: duties not joined on the line (D99)
     for (const text of terminalReuseRejections(this.plan)) this.log('I', '运营', `运行图：${text}`);
     // set the automatic (fleeting) routes
-    for (const r of topo.routes) if (r.fleeting && this.sig[r.start].route < 0) trySetRoute(this, r.id, { fleeting: true });
-    for (const s of this.sw) s.moveUntil = 0;
+    if (!from) {
+      for (const r of topo.routes) if (r.fleeting && this.sig[r.start].route < 0) trySetRoute(this, r.id, { fleeting: true });
+      for (const s of this.sw) s.moveUntil = 0;
+    }
     this.log('I', '系统', `ATS 启动：${config.dateLabel}（${config.dayType === 'weekday' ? '工作日' : '双休日/节假日'}运行图，计划车次 ${this.plan.trips.length}，最大上线 ${this.plan.fleetPeak} 列）`);
-    for (const p of this.possessions) if (p.state === 'active') this.log('B', '施工', `${p.name} 施工封锁中（计划 ${String(Math.floor(p.to / 3600)).padStart(2, '0')}:${String(Math.floor((p.to % 3600) / 60)).padStart(2, '0')} 销点）`, { key: `poss-${p.id}` });
+    if (!from) for (const p of this.possessions) if (p.state === 'active') this.log('B', '施工', `${p.name} 施工封锁中（计划 ${String(Math.floor(p.to / 3600)).padStart(2, '0')}:${String(Math.floor((p.to % 3600) / 60)).padStart(2, '0')} 销点）`, { key: `poss-${p.id}` });
     this.log('I','客流',`当日客流目标 ${this.ridershipTarget.toLocaleString('zh-CN')} 人次`);
     if (config.randomFaults) setRandomFaults(this, config.randomFaults);
     initConnections(this);
     spawnDue(this);
+    if (from) this.startState = capture(this);
   }
 
   bookmark(label: string, auto: boolean): Bookmark {
@@ -342,6 +363,12 @@ export class Sim {
     indexBodies(this);
     for (const tr of this.trainList) {
       updateTrainMotion(this, tr, dt);
+      if (tr.lastDs > 0) {
+        const km = tr.lastDs / 1000, record = this.vehicles.get(tr.vehicle);
+        if (record) record.km += km;
+        const coupled = tr.coupledVehicle && this.vehicles.get(tr.coupledVehicle);
+        if (coupled) coupled.km += km;
+      }
       const departure = tr.pendingDeparture;
       if (departure && tr.v > 0) {
         tr.pendingDeparture = undefined;
@@ -757,7 +784,7 @@ export class Sim {
       calls: this.calls.filter((c) => c.state === 'ringing' || this.t - (c.answeredAt ?? c.deadline) < 30),
       env: { ...this.env },
       possessions: this.possessions.filter((p) => p.state !== 'planned' && p.state !== 'done' && p.state !== 'cancelled'),
-      yards: this.yards,
+      yards: this.yards, vehicles: this.vehicles,
       pis: this.pisStation >= 0 ? computePis(this, this.pisStation) : null,
       dmi: this.dmiTrain >= 0 ? computeDmi(this, this.dmiTrain) : null,
       scenario: this.scenario,

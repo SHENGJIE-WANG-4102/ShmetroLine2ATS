@@ -19,7 +19,7 @@ export interface Diagnostics {
 export function exportDiagnostics(sim: Sim, inputs: RecordedInput[] = sim.inputLog): Diagnostics {
   return {
     version: 2, topology: topologySignature(sim.topo), dt: FIXED_DT, config: { ...sim.config },
-    startState: capture(new Sim(sim.config)),
+    startState: sim.startState ?? capture(new Sim(sim.config)),
     inputs: structuredClone(inputs.filter(e => e.t <= sim.t + 1e-6)),
     until: sim.t, state: capture(sim),
   };
@@ -64,6 +64,7 @@ export function replayDiagnostics(bundle: Diagnostics): Sim {
   const sim = new Sim(bundle.config);
   if (bundle.topology !== topologySignature(sim.topo)) throw new Error('Diagnostics infrastructure differs from the current model');
   restore(sim, bundle.startState);
+  sim.startState = structuredClone(bundle.startState);
   sim.replaying = true;
   let cursor = 0;
   while (sim.t < bundle.until - 1e-6) {

@@ -164,6 +164,7 @@ export interface TDepot {
   /** 入段 berth per transferPaths entry, -1 on an exit-only lead */
   entryBerths: number[];
   exitSignal: number;
+  work: { daily: boolean; monthly: boolean; overhaul: boolean };
   capacity: number;
   stablingTracks: number;
   exitTime: number;
@@ -1203,7 +1204,7 @@ export function buildTopology(): Topology {
       transferPaths: own.map((ld) => ({ gate: ld.gate, links: ld.links, throat: ld.throat, flow: ld.flow, stub: ld.stub,
         exitSignal: ld.flow === 'in' ? -1 : signalByEntry.get(sigEntryKey(ld.j1, ld.links[0]))! })),
       berth, entryBerths, exitSignal: signalByEntry.get(sigEntryKey(outL.j1, outL.links[0]))!,
-      capacity: dp.capacity, stablingTracks: dp.stablingTracks, exitTime: dp.exitTime,
+      work: dp.work, capacity: dp.capacity, stablingTracks: dp.stablingTracks, exitTime: dp.exitTime,
       junctionChain: own.reduce((a, ld) => a + ld.mainCh, 0) / own.length,
       portals: {
         exit: { DN: portal('DN', true), UP: portal('UP', true) },

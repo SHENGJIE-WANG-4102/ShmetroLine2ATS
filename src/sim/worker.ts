@@ -104,6 +104,35 @@ async function start(raw: SimConfig) {
   sendSnapshot();
 }
 
+/** Next operating day: archive the finished day, build the new one on the
+ * running world. Rewind cannot reach back across it. */
+function rollover() {
+  const old = sim!;
+  const config = nextOperatingConfig(old);
+  const transition = `运营日切换：${old.config.date} → ${config.date}`;
+  const running = unfinishedAtRollover(old);
+  if (running.length) old.log('I', '运营', `跨运营日继续运行：${running.join('；')}`);
+  old.log('I', '运营', transition);
+  post({ type: 'dayArchive', date: old.config.date!, json: stringifyDiagnostics(exportDiagnostics(old, cmdLog.slice(0, cmdLog.length - pending.length))) });
+  flushEvents(true);
+  sim = new Sim(config, old);
+  sim.speed = speed;
+  sim.paused = paused;
+  sim.autoDispatch = old.autoDispatch;
+  sim.pisStation = wantPis;
+  sim.dmiTrain = wantDmi;
+  checkpoints = [];
+  cmdLog = [];
+  pending = [];
+  replayUntil = 0;
+  checkpoint();
+  sim.log('I', '运营', transition + '；上一运营日诊断已移交归档');
+  post({ type: 'ready', plan: sim.plan, config: sim.config });
+  post({ type: 'dayChanged', text: transition });
+  flushEvents(true);
+  sendSnapshot();
+}
+
 function checkpoint() {
   if (!sim) return;
   const cp = capture(sim);
@@ -252,20 +281,9 @@ function tick() {
     droppedWindow = 0;
     windowStart = now;
   }
-  // operating-day rollover after the night shutdown (03:45)
+  // operating-day rollover after the night shutdown (03:45): the world runs on (D111)
   if (sim.t >= DAY_LAST && sim.config.date) {
-    const config=nextOperatingConfig(sim),keepSpeed=speed;
-    const transition=`运营日切换：${sim.config.date} → ${config.date}`;
-    const unfinished=unfinishedAtRollover(sim);
-    if(unfinished.length) sim.log('B','运营',`运营日切换收车：以下列车尚未到过夜位，将随旧运营日收掉：${unfinished.join('；')}`);
-    sim.log('I','运营',transition);
-    post({type:'dayArchive',date:sim.config.date,json:stringifyDiagnostics(exportDiagnostics(sim,cmdLog.slice(0,cmdLog.length-pending.length)))});
-    flushEvents(true);
-    void start(config).then(()=>{
-      speed=keepSpeed;
-      sim!.log('I','运营',transition+'；上一运营日诊断已移交归档');
-      post({type:'dayChanged',text:transition});flushEvents(true);
-    });
+    rollover();
     return;
   }
 

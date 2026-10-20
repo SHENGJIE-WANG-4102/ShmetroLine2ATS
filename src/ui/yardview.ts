@@ -7,6 +7,8 @@ import { h, clear } from './dom';
 import type { Store } from './store';
 import { STATIONS } from '../data/line2';
 import { fmtTime } from './theme';
+import { chooseVehicle, dayNumber } from '../sim/yard';
+import type { VehicleRecord } from '../sim/model';
 
 export function openYard(store: Store, root: HTMLElement, depot: number, onAddTrain: () => void) {
   const { topo } = store;
@@ -32,14 +34,15 @@ export function openYard(store: Store, root: HTMLElement, depot: number, onAddTr
     const inbound = snap.trains.filter((t) => t.dest === d.short && !t.inService);
     const next = plan.blocks.filter((b) => b.start.kind === 'depot' && b.start.depot === depot && b.start.time > now - 60 && b.train === undefined)
       .sort((a, b) => (a.start as { time: number }).time - (b.start as { time: number }).time).slice(0, 8);
-    const k = `${y.tracks.map((t) => t.join(',')).join('|')}#${inbound.map((t) => t.id).join(',')}#${next.map((b) => b.svc).join(',')}#${Math.floor(now / 30)}`;
+    const workshop = [...snap.vehicles.entries()].filter(([,r]) => r.work && r.depot === depot);
+    const date = (day: number) => new Date(day * 86400000).toISOString().slice(0,10);
+    const info = (r: VehicleRecord | undefined) => r ? `上次列检 ${date(r.daily)}\n上次月检 ${date(r.monthly)}\n累计里程 ${r.km.toFixed(1)} km` : '';
+    const k = `${workshop.map(([no,r])=>`${no}:${r.work}:${r.until}`).join(',')}#${y.tracks.map((t) => t.join(',')).join('|')}#${inbound.map((t) => t.id).join(',')}#${next.map((b) => b.svc).join(',')}#${Math.floor(now / 30)}`;
     if (k === key) return;
     key = k;
     clear(body);
     const total = y.tracks.reduce((a, t) => a + t.length, 0);
-    // the next vehicle out is the front one of the fullest track (see sim/yard.ts)
-    let fullest = -1;
-    y.tracks.forEach((t, i) => { if (t.length && (fullest < 0 || t.length > y.tracks[fullest].length)) fullest = i; });
+    const nextVehicle = chooseVehicle(snap.vehicles, y.tracks.flatMap(t=>t.length ? [t[0]] : []), topo, next[0], dayNumber(store.config ?? {}));
     body.append(h('div', { class: 'kv', style: 'margin-bottom:18px' },
       h('span', { class: 'k' }, '在段车辆'), h('span', { class: 'v' }, `${total} 列`),
       h('span', { class: 'k' }, '停车线'), h('span', { class: 'v' }, `${d.stablingTracks} 股 × ${y.perTrack} 列位`),
@@ -48,11 +51,15 @@ export function openYard(store: Store, root: HTMLElement, depot: number, onAddTr
     const yard = h('div', { class: 'yard' });
     y.tracks.forEach((t, i) => {
       const rail = h('div', { class: 'rail' }, h('span', { style: 'color:var(--text-muted);font-size:20px;margin-right:6px' }, '出口 ◀'));
-      t.forEach((v, j) => rail.append(h('div', { class: `veh ${i === fullest && j === 0 ? 'next' : ''}`, title: i === fullest && j === 0 ? '下一列出段车辆' : '' }, v)));
+      t.forEach((v, j) => rail.append(h('div', { class: `veh ${v === nextVehicle && j === 0 ? 'next' : ''}`, title: `${v === nextVehicle && j === 0 ? '下一列出段车辆\n' : ''}${info(snap.vehicles.get(v))}` }, v)));
       for (let j = t.length; j < y.perTrack; j++) rail.append(h('div', { class: 'veh', style: 'opacity:.18;border-style:dashed' }, '空'));
       yard.append(h('div', { class: 'trk' }, h('span', { class: 'no' }, `${i + 1}道`), rail));
     });
     body.append(yard);
+    const workshopView = h('div', { class: 'sect-title', style: 'margin-top:18px' }, '检修库（不占停车列位）');
+    body.append(workshopView);
+    if (!workshop.length) body.append(h('div', { class: 'hint' }, '无检修车辆'));
+    for (const [no,r] of workshop) body.append(h('div', { class:'mono', title:info(r) }, `${r.work === 'monthly' ? '月检' : '架修'}：${no}，预计 ${date(r.until).slice(5)} 完成`));
     const cols = h('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:22px' });
     const tb = h('tbody');
     if (!next.length) tb.append(h('tr', {}, h('td', { class: 'hint' }, '近期无出段计划')));
