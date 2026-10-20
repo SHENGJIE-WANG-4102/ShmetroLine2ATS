@@ -35,6 +35,7 @@
    - `reference/上海轨道交通全网配线V2025.26.2.pdf`：全网配线图，站台型式、渡线、折返线、存车线都在上面。PDF 不按比例，看的是拓扑：哪条线连到哪、站台在哪一侧。
    - `reference/*.pdf`：论文，写了运行参数、间隔、上线车数。
    - `reference/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md`：线路和车辆资料。
+   - `reference/shanghai-lines-signalling-operations.md`：上海各线路信号系统、闭塞方式、实际 GoA 等级、驾驶模式总表（2026-10-20 核验，每格标可信度；「未查到」的格子不许拿来补参数）。
    - `reference/timetable-gaode/`：高德时刻表原始数据，抓取时间写在每个文件头里。
    - `docs/design-decisions.md`（D 条目）：以前的决定和理由，动相关逻辑前先搜一遍。
    - `docs/layout-pdf.md`、`docs/signalling-model.md`：配线建模和信号模型说明。
