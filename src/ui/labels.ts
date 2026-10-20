@@ -47,7 +47,10 @@ export function placeTrainLabel(head: {x:number;y:number}, side: 1|-1, width: nu
       const overlap=(o:Rect)=>r.x<o.x+o.w+3&&r.x+r.w+3>o.x&&r.y<o.y+o.h+3&&r.y+r.h+3>o.y;
       if (futureHeads.some(p=>Math.abs(p.y-head.y)<50 && (p.x>r.x-2 && p.x<r.x+r.w+2 || leaderCrosses(leader,{x1:p.x,y1:p.y,x2:p.x,y2:p.y+side*100000})))) continue;
       if (avoidStatic && obstacles.some(overlap)) continue;
-      if (placed.some(o=>overlap(o.r)||leaderHits(leader,o.r)||leaderHits(o.leader,r)||leaderCrosses(leader,o.leader))) continue;
+      // (leaders fanning out of one queue start a few pixels apart: their
+      // crossing right at the heads is invisible and is not a conflict)
+      const fan=(o:Leader)=>Math.hypot(o.x1-leader.x1,o.y1-leader.y1)<6;
+      if (placed.some(o=>overlap(o.r)||leaderHits(leader,o.r)||leaderHits(o.leader,r)||!fan(o.leader)&&leaderCrosses(leader,o.leader))) continue;
       return {r,leader};
     }
   }
