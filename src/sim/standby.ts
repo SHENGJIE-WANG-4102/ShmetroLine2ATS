@@ -115,10 +115,20 @@ function callOut(sim: Sim, h: Train, trip: number) {
   sim.planDirty = true;
 }
 
+/** A standby (hot or from the yard) inherits the duty's end, its return to the
+ * yard or stabling, so it takes over only a tail that runs to the end of the
+ * duty. A relieved duty's kept trips end in a withdrawal instead (their end
+ * is no longer reachable from where they finish), so no standby takes them. */
+function takeable(plan: Plan, from: number, tail: number[]): boolean {
+  const block = plan.blocks[from];
+  return !block.relieved && tail.at(-1) === block.trips.at(-1);
+}
+
 /** R3 by the hot standby: it takes the lost trips from the first it can make
  * from its station; a yard standby takes over its own later duty, or nothing
  * is changed. */
 function hotTakeover(sim: Sim, from: number, tail: number[], why: string, depotK: number): Block | null {
+  if (!takeable(sim.plan, from, tail)) return null;
   for (const { h, k, own, cut } of hotCandidate(sim, tail)) {
     if (k > depotK) break;
     if (!own.length) continue;
@@ -159,12 +169,7 @@ function hotTakeover(sim: Sim, from: number, tail: number[], why: string, depotK
 /** The standby that takes over `tail` (live trip ids of duty `from`, in
  * order), validated on a copy of the plan; null when none can. */
 export function findStandby(sim: Sim, from: number, tail: number[], minK = 0, maxK = tail.length - 1, amend?: (plan: Plan) => unknown, allowPositioning = false): StandbyPlan | null {
-  if (!tail.length || minK > maxK) return null;
-  // The standby inherits the duty's end (its return to the yard or stabling),
-  // so it takes over only a tail that runs to the end of the duty. A relieved
-  // train's kept trips end in a withdrawal instead.
-  const block = sim.plan.blocks[from];
-  if (block.relieved || tail[tail.length - 1] !== block.trips.at(-1)) return null;
+  if (!tail.length || minK > maxK || !takeable(sim.plan, from, tail)) return null;
   const { topo } = sim;
   const origin = topo.stations[sim.plan.trips[tail[minK]].from].chain;
   const depots = topo.depots.map((d, i) => ({ i, dist: Math.abs(d.junctionChain - origin) }))

@@ -238,6 +238,17 @@ describe('dispatcher commands', () => {
       const baseline = lostDuty.map(id=>sim.plan.trips[id]).filter(t => t.revenue && !t.cancelled && !t.completed && t.block !== lost.block && t.stops[0].dep >= now)
         .sort((a,b) => a.stops[0].dep-b.stops[0].dep)[0]?.stops[0].dep ?? Infinity;
 
+      // A relieved duty (a standby already took its later trips) keeps trips
+      // that end in a withdrawal, not at the duty's end: no hot spare takes
+      // them, or it would inherit an end it cannot reach (soak weekday base
+      // seed 6, 087-1187 sent from the airport straight to 淞虹路).
+      restore(sim, incident); sim.autoDispatch = true;
+      sim.plan.blocks[lost.block].relieved = true;
+      const before = sim.plan.trips.length;
+      expect(sim.command({c:'withdraw',train:lost.id}).ok).toBe(true);
+      expect(sim.plan.trips.slice(before).some(t => t.revenue && t.from === station)).toBe(false);
+      expect(sim.trainList.some(t => hotStandby(sim,t)?.station === station)).toBe(true);
+
       restore(sim, incident); sim.autoDispatch = true;
       const hot = sim.trainList.find(t => hotStandby(sim,t)?.station === station)!;
       const originalCount = sim.plan.trips.length;
