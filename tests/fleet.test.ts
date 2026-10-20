@@ -37,6 +37,17 @@ describe('fleet maintenance and assignment',()=>{
   expect(s.events.some(e=>e.text.includes(no!)&&e.text.includes('月检已超')&&e.text.includes('不回具备月检能力'))).toBe(true);
   expect(s.yards[d].tracks.every(t=>t.length<=s.yards[d].perTrack)).toBe(true);
  });
+ it('a full yard still takes a car coming home, over capacity and with an alarm',()=>{
+  const s=make(),d=0,y=s.yards[d],cap=s.topo.depots[d].capacity;
+  const spare=[...s.vehicles.keys()].find(no=>!y.tracks.flat().includes(no))!;
+  while(y.tracks.flat().length<cap) y.tracks.find(t=>t.length<y.perTrack)!.push(spare);
+  y.tracks.forEach(t=>t.splice(y.perTrack));
+  for(let i=0;y.tracks.flat().length<y.tracks.length*y.perTrack;i++) y.tracks.find(t=>t.length<y.perTrack)!.push(spare);
+  const before=y.tracks.flat().length;
+  expect(()=>putVehicle(s,d,'TEST')).not.toThrow();
+  expect(y.tracks.flat()).toHaveLength(before+1);
+  expect(s.alarms.has(`yard-over-${d}`)).toBe(true);
+ });
  it('defers work when yardNeed consumes the stock, completes it next day and migrates old saves',()=>{
   const s=make(),day=dayNumber(s.config),need=yardNeed(s.topo,s.plan),d=s.topo.depots.find(d=>d.work.monthly)!.id;
   const keep=s.yards[d].tracks.flat().slice(0,need[d]);s.yards[d].tracks.forEach(t=>t.splice(0));keep.forEach((v,i)=>s.yards[d].tracks[i%s.yards[d].tracks.length].push(v));s.depotStock[d]=keep.length;

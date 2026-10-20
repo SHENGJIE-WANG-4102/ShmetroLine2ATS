@@ -95,8 +95,13 @@ export function putVehicle(sim: FleetState, depot: number, vehicle: string) {
   const y = sim.yards[depot];
   const order = departureOrder(sim, depot, [...y.tracks.flat(), vehicle]);
   const rank = new Map(order.map((no, i) => [no, i]));
-  const room = y.tracks.map((t, i) => ({ t, i })).filter(({ t }) => t.length < y.perTrack);
-  if (!room.length || yardCount(y) >= sim.topo.depots[depot].capacity) throw new Error(`${sim.topo.depots[depot].name} 停车列位不足：${vehicle}`);
+  // A full yard still takes a car coming home (a withdrawal to the nearest
+  // depot at night): it stands over capacity, as the fleet above the rated
+  // berths always has (D68), and the dispatcher is told.
+  if (yardCount(y) >= sim.topo.depots[depot].capacity)
+    sim.log('B', '车辆', `${sim.topo.depots[depot].name} 停车列位已满，${vehicle} 超容停放`, { key: `yard-over-${depot}` });
+  const free = y.tracks.map((t, i) => ({ t, i })).filter(({ t }) => t.length < y.perTrack);
+  const room = free.length ? free : y.tracks.map((t, i) => ({ t, i }));
   const fitting = room.filter(({ t }) => !t.length || rank.get(t.at(-1)!)! <= rank.get(vehicle)!);
   const best = (fitting.length ? fitting : room).sort((a, b) => a.t.length - b.t.length || a.i - b.i)[0];
   best.t.push(vehicle); sim.depotStock[depot] = yardCount(y);

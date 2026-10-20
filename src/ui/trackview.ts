@@ -8,7 +8,7 @@
  * zoom, UI scale or time of day. Level of detail: device IDs, km posts and
  * section IDs only appear when zoomed in, on toggle, or in the station view.
  */
-import { Container, Graphics, Text, type FederatedPointerEvent } from 'pixi.js';
+import { CanvasTextMetrics, Container, Graphics, Text, type FederatedPointerEvent } from 'pixi.js';
 import type { Topology } from '../sim/topology';
 import type { Snapshot, TrainSnap } from '../sim/model';
 import { SEC, SW, PLT, SIG_ASPECT } from '../sim/model';
@@ -1160,6 +1160,15 @@ export class TrackView {
     group.bg.clear().roundRect(1, 1, r.w - 2, r.h - 2, 4).fill({color:C.trainBoxFill,alpha:.97}).stroke({width:2,color:status === C.onTime ? C.trainBoxBorder : status});
   }
 
+  // (a font arriving late changes every width)
+  private labelWidths = ((m: Map<string, number>) => { document.fonts?.addEventListener('loadingdone', () => m.clear()); return m; })(new Map());
+  /** drawn width of `text` in a train label's style (all train labels share it) */
+  private labelWidth(label: Text, text: string): number {
+    let w = this.labelWidths.get(text);
+    if (w === undefined) this.labelWidths.set(text, w = CanvasTextMetrics.measureText(text, label.style).width);
+    return w * label.scale.x;
+  }
+
   private prepareTrainWindow(tr: TrainSnap) {
     const tg = this.trains.get(tr.id)!;
     const { topo, geom } = this;
@@ -1190,11 +1199,11 @@ export class TrackView {
     if (tr.hot) chips += '热备';
     if (tr.inService) chips += lateText(tr.delay);
     tg.chips.text = chips;
-    // The label may show the compact or the full text (drawWindow sets it);
-    // it is monospaced, so one measured advance sizes both.
-    const charW = tg.label.text ? tg.label.width / tg.label.text.length : textWidth('0', 30, true);
-    const width = trainWindowWidth(charW * full.length, chips ? tg.chips.width : 0);
-    const compactWidth = trainWindowWidth(charW * tr.trip.length, chips ? tg.chips.width : 0);
+    // Both texts are measured as they would be drawn, never from what the
+    // label shows now: a trip like 存车 mixes glyph widths, and sizing from the
+    // current text made the choice flip every frame.
+    const width = trainWindowWidth(this.labelWidth(tg.label, full), chips ? tg.chips.width : 0);
+    const compactWidth = trainWindowWidth(this.labelWidth(tg.label, tr.trip), chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
     const keep = !!chips || (this.store.selection?.kind === 'train' && this.store.selection.id === tr.id);
     return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side: sides[0], sides, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, trip: tr.trip, chips, status, right };
