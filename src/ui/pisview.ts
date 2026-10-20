@@ -144,23 +144,12 @@ function englishOverflows(b: Box, row: PisRow | undefined): boolean {
   return overflow;
 }
 
-const hhmm = (t: number) => { const d = ((t % 86400) + 86400) % 86400; return `${pad(Math.floor(d / 3600))}:${pad(Math.floor(d % 3600 / 60))}`; };
-
-/** what box `k` of an empty board says, from the plan: passed by every train,
- *  the next (or first) planned departure, or the last one gone */
-function emptyText(bd: Board, k: number): [string, string] {
-  if (bd.skip) return ['本站列车通过不停车', 'Trains will not stop at this station'];
-  if (k > 0) return bd.ahead <= k ? ['今日无后续列车', 'No further trains today'] : ['暂无列车信息', ''];
-  if (bd.next !== undefined) return bd.done ? [`下一班列车 ${hhmm(bd.next)}`, `Next train ${hhmm(bd.next)}`] : [`首班车 ${hhmm(bd.next)}`, `First train ${hhmm(bd.next)}`];
-  return bd.done ? ['今日末班车已开出', 'The last train has left'] : ['暂无列车信息', ''];
-}
-
-function fillBox(b: Box, k: number, r: PisRow | undefined, empty: [string, string]) {
-  const key = `${k}|${r?.trip ?? ''}|${r?.dest ?? ''}|${r ? '' : empty[0]}`;
+function fillBox(b: Box, k: number, r: PisRow | undefined) {
+  const key = `${k}|${r?.trip ?? ''}|${r?.dest ?? ''}`;
   if (b.key && key !== b.key) {
     const els = [...(b.key.startsWith(`${k}|`) ? [] : [b.title]), b.digits, b.dest];
     b.key = key;
-    slide(els, () => fillBox(b, k, r, empty));
+    slide(els, () => fillBox(b, k, r));
     return;
   }
   b.key = key;
@@ -171,7 +160,7 @@ function fillBox(b: Box, k: number, r: PisRow | undefined, empty: [string, strin
   b.digits.textContent = formatPisCountdown(r);
   b.digits.classList.toggle('long', !!r && r.status === 'eta' && r.eta > 3600);
   b.el.classList.toggle('arr', !!r && r.status !== 'eta');
-  if (!r) { b.to.textContent = empty[0]; fillEnglish(b.toEn, empty[1]); return; }
+  if (!r) { b.to.replaceChildren(h('span', {}, '开往'), h('span')); fillEnglish(b.toEn, '', 'To'); return; }
   if (r.noBoard) { b.to.textContent = `本次列车只下不上（往${r.dest}）`; fillEnglish(b.toEn, 'Alighting only, please do not board'); return; }
   b.to.innerHTML = '';
   b.to.append(h('span', {}, '开往'), h('span', {}, r.dest));
@@ -210,16 +199,17 @@ function fillFirstLast(b: Box, row: PisFirstLast | undefined, wide = false) {
 function update(bd: Board) {
   const now = performance.now();
   const { rows } = bd;
-  fillBox(bd.b1, 0, rows[0], emptyText(bd, 0));
+  fillBox(bd.b1, 0, rows[0]);
   const times = selectPisFirstLast(STATIONS[bd.station].name, bd.track, rows[0]);
   // Prime the English window before measuring its secondary-column width.
   if (!bd.b2.toEn.firstElementChild) fillEnglish(bd.b2.toEn, destinationEnglish(rows[1]), 'To');
-  const durations = [1, 2].map((k) => englishOverflows(bd.b2, rows[k]) ? PIS_TIMING.scrollingPageMs : PIS_TIMING.pageMs);
+  const pages = rows[2] ? [1, 2] : [1];
+  const durations = pages.map((k) => englishOverflows(bd.b2, rows[k]) ? PIS_TIMING.scrollingPageMs : PIS_TIMING.pageMs);
   if (!bd.wide) durations.push(...Array(Math.max(1, times.length)).fill(PIS_TIMING.pageMs));
   bd.cycle = advancePisCycle(bd.cycle, now, durations);
   const page = bd.cycle.page;
-  if (page >= 2) fillFirstLast(bd.b2, times[page - 2]);
-  else { const k = page + 1; fillBox(bd.b2, k, rows[k], emptyText(bd, k)); }
+  if (page >= pages.length) fillFirstLast(bd.b2, times[page - pages.length]);
+  else { const k = pages[page]; fillBox(bd.b2, k, rows[k]); }
   if (bd.schedule) {
     bd.firstLastCycle = advancePisCycle(bd.firstLastCycle, now, Array(Math.max(1, times.length)).fill(PIS_TIMING.pageMs));
     fillFirstLast(bd.schedule, times[bd.firstLastCycle.page], true);
@@ -317,10 +307,11 @@ export function renderPis(el: HTMLElement, pis: PisData | null, t: number, dateL
   for (const b of cur.list) {
     b.rows = pis[b.track]; b.t = t; b.dateLabel = dateLabel;
     b.skip = !!pis.skip?.[b.track]; b.next = pis.next?.[b.track]; b.done = !!pis.done?.[b.track]; b.ahead = pis.ahead?.[b.track] ?? 0;
-    if (b.tickerText !== pis.notice) {
-      b.tickerText = pis.notice;
+    const notice = [pis.notice, ...(b.skip && !pis.notice.includes('本站列车通过不停车') ? ['本站列车通过不停车 Trains will not stop at this station'] : [])].filter(Boolean).join('　');
+    if (b.tickerText !== notice) {
+      b.tickerText = notice;
       clear(b.ticker);
-      b.ticker.append(h('span', {}, pis.notice));
+      b.ticker.append(h('span', {}, notice));
     }
     update(b);
   }

@@ -17,7 +17,7 @@ import { STATIONS } from '../data/line2';
 
 export type HaltCode =
   | 'NONE'
-  | 'DWELL' | 'LAYOVER' | 'TURNBACK' | 'REGULATION' | 'HOLD' | 'STABLED' | 'DEPOT_WAIT'
+  | 'DWELL' | 'LAYOVER' | 'TURNBACK' | 'REGULATION' | 'HOLD' | 'INTERVAL_LIMIT' | 'STABLED' | 'DEPOT_WAIT'
   | 'FAILED' | 'COUPLING' | 'RESCUE' | 'EB' | 'MODE_CHANGE' | 'INCIDENT' | 'RM_WAIT'
   | 'TRAIN_AHEAD' | 'ROUTE_WAIT' | 'BERTH_WAIT' | 'ROUTE_CONFLICT' | 'ROUTE_MISMATCH' | 'ARS_OFF' | 'SWITCH_MOVING'
   | 'SIGNAL_FAULT' | 'SWITCH_FAULT' | 'AXLE_FAULT' | 'AXLE_PRESET' | 'ZC_FAULT' | 'COMM_LOSS' | 'PSD_FAULT'
@@ -38,6 +38,7 @@ export const HALT: Record<HaltCode, HaltInfo> = {
   TURNBACK: { label: '折返换端', exempt: true },
   REGULATION: { label: '按图等点/发车次序', exempt: true },
   HOLD: { label: '扣车', exempt: true },
+  INTERVAL_LIMIT: { label: '区间限车', exempt: true },
   STABLED: { label: '存车', exempt: true },
   DEPOT_WAIT: { label: '等待入段', exempt: false },
   FAILED: { label: '列车故障', exempt: true },
@@ -110,6 +111,7 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
     const ps = p >= 0 ? sim.plat[p] : null;
     if (ps?.esp) return r('ESP', -1, sim.topo.platforms[p].name);
     if (tr.hold || ps?.hold) return r('HOLD');
+    if (tr.intervalWait) return r('INTERVAL_LIMIT', tr.intervalWait.train, tr.intervalWait.detail);
     if (ps && ps.psd === 'closeFail') return r('PSD_FAULT', -1, sim.topo.platforms[p].name);
     const planned = tr.dwellUntil;
     if (sim.t < tr.dwellUntil) return r(st && st.arr === null && st.dep !== null && sim.t < st.dep - 30 ? 'LAYOVER' : 'DWELL', -1, '', planned);
@@ -199,7 +201,7 @@ export function updateHalts(sim: Sim) {
   // one event per unplanned stop episode (standing > 20 s at an obstacle)
   for (const tr of sim.trainList) {
     const h = tr.halt;
-    if (h.logged || h.code === 'NONE' || tr.phase !== 'run' || sim.t - h.since < 20) continue;
+    if (h.logged || h.code === 'NONE' || tr.phase !== 'run' && h.code !== 'INTERVAL_LIMIT' || sim.t - h.since < 20) continue;
     if (h.code === 'STOP_POINT' || h.code === 'MODE_CHANGE') continue;
     h.logged = true;
     const blocker = h.train >= 0 ? sim.trains.get(h.train) : undefined;

@@ -22,8 +22,8 @@
  */
 import type { Sim } from './engine';
 import type { Block, Plan, Train } from './model';
-import { applyStandby, standbyCandidate, minTurn, validatePlan, blockTasks, hotStandbyPlaces, type StandbyPlan, type PlanIssue } from './timetable';
-import { yardShortfall } from './planning';
+import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, type StandbyPlan } from './timetable';
+import { noWorse } from './planning';
 import { extendTrainTasks, setTripFromTasks } from './ats';
 
 /** Notice a standby needs before leaving the yard (s). */
@@ -31,23 +31,11 @@ export const STANDBY_NOTICE = 300;
 /** Predicted lateness of a train's next own departure that calls a standby (s). */
 export const RELIEF_DELAY = 300;
 
-const issueKey = (i: PlanIssue) => `${i.code}|${i.text}`;
 /** Notice a hot standby needs: crew to the leading cab, train woken up (s). */
 export const HOT_NOTICE = 150;
 /** From its turnback track onto the departure platform (s). */
 const HOT_PULL_OUT = 90;
 
-/** errors of a plan from now on, with the yard stock check */
-function liveIssues(sim: Sim, plan: Plan): PlanIssue[] {
-  const now = validatePlan(sim.planCtx, plan).filter(i => i.severity === 'error' && i.t >= sim.t - 1e-6);
-  const yard = yardShortfall(sim, plan);
-  return yard ? [...now, yard] : now;
-}
-/** the changed plan adds no error */
-function noWorse(sim: Sim, plan: Plan): boolean {
-  const before = new Set(liveIssues(sim, sim.plan).map(issueKey));
-  return liveIssues(sim, plan).every(i => before.has(issueKey(i)));
-}
 
 /** A hot standby standing in its turnback track (D70): its station and the
  * trip it stands for; null for any other train. */
@@ -183,8 +171,6 @@ export function findStandby(sim: Sim, from: number, tail: number[], minK = 0, ma
     .filter(d => sim.depotStock[d.i] > 0).sort((a, b) => a.dist - b.dist).map(d => d.i);
   if (!depots.length) return null;
   const notBefore = sim.t + STANDBY_NOTICE;
-  const live = (issues: PlanIssue[]) => issues.filter(i => i.severity === 'error' && i.t >= sim.t - 1e-6);
-  let before: Set<string> | undefined;
   const next = new Map(depots.map(d => [d, minK]));
   for (let guard = 0; guard < depots.length * tail.length; guard++) {
     let best: StandbyPlan | null = null;
@@ -197,14 +183,12 @@ export function findStandby(sim: Sim, from: number, tail: number[], minK = 0, ma
       if (!best || c.k < best.k) best = c;
     }
     if (!best) return null;
-    before ??= new Set([...live(validatePlan(sim.planCtx, sim.plan)), ...[yardShortfall(sim, sim.plan)].filter(i => i !== undefined)].map(issueKey));
     const plan = structuredClone(sim.plan);
     applyStandby(plan, from, tail, best);
     amend?.(plan);
-    const after = [...live(validatePlan(sim.planCtx, plan)), ...[yardShortfall(sim, plan)].filter(i => i !== undefined)];
     // (a yard imbalance the plan already had, with the same counts, does not
     // block a takeover; one it creates or changes does)
-    if (after.every(i => before!.has(issueKey(i)))) return best;
+    if (noWorse(sim, plan)) return best;
     next.set(best.depot, best.k + 1);
   }
   return null;

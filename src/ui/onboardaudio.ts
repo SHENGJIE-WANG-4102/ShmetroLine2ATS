@@ -13,16 +13,20 @@ import { RecordedSoundPlayer, automatic, audioTrain, stopEstimate, VVVF_MAX_RATE
 
 export interface OnboardAudioFrame {
   t: number; rate: number; paused: boolean; muted: boolean; enabled: boolean;
-  train: StationTrain | null; willStop: boolean; destination: string; doorSide: AnnouncementDoorSide;
+  train: StationTrain | null; willStop: boolean; skipConfirmed?:boolean; destination: string; doorSide: AnnouncementDoorSide;
 }
 export function onboardFrame(snap: Snapshot, heard: TrainSnap | null, topo: Topology, plan: Plan | null): Omit<OnboardAudioFrame, 'muted' | 'enabled'> {
+  const intent=heard&&plan?.trips[heard.tripId];
   const train = heard ? audioTrain(heard, heard.nextStation, topo) : null;
+  // A crossover's local link orientation does not change the service direction.
+  if(train&&intent)train.direction=intent.dir;
   const planned = heard && plan?.trips[heard.tripId]?.stops.find(s => s.st === heard.nextStation);
   const platform = train && topo.stations[train.nextStation]?.platforms[train.direction];
   const skipped = platform !== null && platform !== undefined && !!(snap.platforms[platform] & PLT.SKIP);
   const destination = heard?.dest ?? '';
   const paSide = onboardDoorSide(train?.nextStation ?? -1, train?.direction ?? 'DN', destination);
   return { t: snap.t, rate: snap.speed, paused: snap.paused, train, destination,
+    skipConfirmed:planned?.stop===false||skipped||heard?.nextStopSkipped===true,
     doorSide: paSide === 'B' ? 'B' : heard?.platSide || paSide,
     // A distant call can lie beyond the authority scan, with stopDist=-1.
     // The plan/worker intent still identifies it as a call for departure PA.
@@ -72,14 +76,16 @@ export class OnboardSoundPlanner {
     if (this.selected !== tr.id || this.rate !== frame.rate || frame.t < this.time || frame.t - this.time > Math.max(STATION_ALIGNMENT_S, frame.rate)) commands.push(...this.reset());
     if (frame.t === this.time) return commands;
     this.selected = tr.id; this.time = frame.t; this.rate = frame.rate;
-    const call = `${visit(tr)}|${frame.destination}|${frame.doorSide}`;
+    // Freeze the chosen recording once it starts. Door-side/terminus metadata
+    // can change at a crossover without changing this station call.
+    const call = visit(tr);
     const slot = onboardAnnouncement(STATIONS[tr.nextStation]?.name, tr.direction, frame.destination, frame.doorSide, this.announcements);
     const seconds = frame.willStop && announces(tr) ? stopEstimate(tr) : null;
     const predicted = seconds === null ? null : frame.t + seconds;
     for (const [key, sound] of this.active) {
       // (only an ATO approach is predictable enough to fade a drifting phrase)
-      const invalid = sound.speech && !sound.hold && (!announces(tr) || !frame.willStop || sound.target !== call ||
-        (automatic(tr) && sound.predicted !== undefined && tr.phase === 'run' && (predicted === null || Math.abs(predicted - sound.predicted) > STATION_ALIGNMENT_S)));
+      const invalid = sound.speech && !sound.hold && (!announces(tr) || frame.skipConfirmed===true || sound.target !== call ||
+        (automatic(tr) && sound.predicted !== undefined && tr.phase === 'run' && predicted!==null && Math.abs(predicted - sound.predicted) > STATION_ALIGNMENT_S));
       if (invalid || frame.t >= sound.until) { commands.push(invalid ? { kind: 'stop', key, fadeS: .5 } : { kind: 'stop', key }); this.active.delete(key); }
     }
     const play = (key: string, clips: SoundClip[], offsetS: number, volume: number, loop = false, expected?: number, hold = false) => {

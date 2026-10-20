@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Local simulator window; diagnostic files are chosen in a save dialog.",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-save", "fs:allow-write-text-file"]
+}

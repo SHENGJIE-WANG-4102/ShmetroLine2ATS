@@ -479,6 +479,28 @@ export const TURNOUT_SPEEDS = {
 // ---------------------------------------------------------------------------
 
 export const OPERATIONS = {
+  /** 【假设】每个方向的站间区间最多一列；过江段同样取一列。 */
+  intervalTrainLimits: STATIONS.slice(0, -1).map((s, i) => ({ from: s.id, to: STATIONS[i + 1].id, limit: 1 })),
+  /** 【假设】全天训练故障预算、相对权重与大部件故障日概率；不是实测故障率。 */
+  randomFaults: {
+    levels: [{ count: 4, majorProbability: .1 }, { count: 8, majorProbability: .25 }, { count: 15, majorProbability: .5 }],
+    crowdWindows: [[7*3600,9.5*3600],[17*3600,19.5*3600]],
+    kinds: [
+      {kind:'door',weight:5,scope:'passenger',vehicle:true,minLevel:1},
+      {kind:'psd',weight:5,scope:'passenger',minLevel:1},
+      {kind:'pecu',weight:5,scope:'passenger',minLevel:1},
+      {kind:'surge',weight:4,scope:'peak',minLevel:1},
+      {kind:'trainComm',weight:4,scope:'passenger',vehicle:true,minLevel:1},
+      {kind:'trainDto',weight:3,scope:'passenger',vehicle:true,minLevel:1},
+      {kind:'switch',weight:1,scope:'all',minLevel:2},
+      {kind:'axle',weight:1,scope:'all',minLevel:2},
+      {kind:'signal',weight:1,scope:'all',minLevel:2},
+      {kind:'zcFail',weight:.5,scope:'all',minLevel:3},
+      {kind:'wind',weight:.5,scope:'all',minLevel:3},
+      {kind:'rain',weight:.5,scope:'all',minLevel:3},
+    ] as {kind:string;weight:number;scope:'passenger'|'peak'|'all';vehicle?:boolean;minLevel:number}[],
+    majorKinds: ['traction','brake'],
+  },
   /** published: first train from 蟠祥路·国家会计学院 05:25 */
   firstWestTerminusDep: 5 * 3600 + 25 * 60,
   /** published: first westbound from 浦东1号2号航站楼 06:00 */
@@ -511,8 +533,10 @@ export const OPERATIONS = {
   depotReturns: [
     { depot: 'BZL', dir: 'UP', station: 'SHR' },
     { depot: 'LYD', dir: 'DN', station: 'LYL' },
-    { depot: 'CSD', dir: 'DN', station: 'YDD' },
-  ] as { depot: string; dir: 'UP' | 'DN'; station: string }[],
+    // 用户决定：通常直接回库，服务需要时先到机场，再折返远东大道入库。
+    // 【假设】收车后的服务间隔不超过所跨原图最大间隔的两倍，随当日原图变化。
+    { depot: 'CSD', dir: 'DN', station: 'YDD', service: { terminal: 'PDA', intervalMultiplier: 2 } },
+  ] as { depot: string; dir: 'UP' | 'DN'; station: string; service?: { terminal: string; intervalMultiplier: number } }[],
   /** 【假设】八列正线过夜车：端站留开班所需车，存车泊位依配线图。 */
   overnightStabling: [
     { station: 'PXL', count: 2, departure: 'DN', kind: 'terminal' },
@@ -580,15 +604,24 @@ export const FIXED_LATE_TRAINS: FixedRun[] = [HQ_LATE_RUN];
 // ---------------------------------------------------------------------------
 
 /**
- * Exposed (non-tunnel) parts of the line, by chainage. The east extension
- * leaves the tunnel east of 广兰路 and runs on viaduct through 唐镇 … 海天三路,
- * reaching 浦东1号2号航站楼 at grade. Exact portal positions are not public;
- * the ranges below are approximations (see README).
+ * Exposed parts: the paired portal symbols between 龙阳路—张江高科 and
+ * the portal between 凌空路—远东大道 in pdf-peixian; user correction 2026-10-19.
+ * 金科路—凌空路 is underground. The PDF is schematic, not a distance scale.
+ * 【假设】first portals K32.7–33.2: about 500 m, consistent with the recorded
+ * 25.50 s outside at 60–80 km/h (docs/recordings.md). Eastern portal K52.5;
+ * exact portal chainages and the airport ground transition remain approximate.
  */
 export const EXPOSED: { from: number; to: number; kind: 'elevated' | 'ground'; name: string }[] = [
-  { from: 37400, to: 60900, kind: 'elevated', name: '广兰路以东—海天三路 高架段' },
+  { from: 32700, to: 33200, kind: 'elevated', name: '龙阳路—张江高科 区间露天段' },
+  { from: 52500, to: 60900, kind: 'elevated', name: '凌空路—远东大道出洞至海天三路 高架段' },
   { from: 60900, to: 63000, kind: 'ground', name: '浦东1号2号航站楼 地面段' },
 ];
+
+/** Historical D65 vertical-profile anchors used by the calibrated running
+ * model, not surface classifications. Keep them independent of weather
+ * exposure: correcting tunnel portals must not silently recalibrate running
+ * times. 【假设】heights/grades remain synthetic pending a profile-specific task. */
+export const PROFILE_ANCHORS = { elevatedFrom:37400, groundFrom:60900 };
 
 /**
  * Weather restrictions for exposed sections (approximation of typical

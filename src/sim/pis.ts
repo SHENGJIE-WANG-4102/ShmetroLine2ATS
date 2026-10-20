@@ -13,7 +13,7 @@ import { serviceEnd } from './timetable';
 /** Platform countdown: it counts down to the train standing in the platform
  *  (an arriving train still counts), then reads 00:00 while it stands. */
 export function formatPisCountdown(row: PisRow | undefined): string {
-  if (!row) return '--:--';
+  if (!row) return '00:00';
   if (row.status === 'at' || row.status === 'departing') return '00:00';
   if (row.eta > 3600) return '预计大于1小时';
   const seconds = Math.max(0, Math.round(row.eta));
@@ -121,7 +121,9 @@ export function computePis(sim: Sim, station: number): PisData {
     if (sim.plat[platform].skip) continue;
     const vehicle = sim.trainList.find(t => t.block === block.id);
     const assigned = vehicle ? !vehicle.failed && !vehicle.withdrawn && !vehicle.skipStations.has(station)
-      && vehicle.tasks.some(t => t.k === 'stop' && t.trip === trip.id)
+      // A trip remains active after leaving its origin. Only its unconsumed
+      // origin call can put it back on this board, not a later stop of that trip.
+      && vehicle.tasks.some(t => t.k === 'stop' && t.trip === trip.id && t.station === station)
       : block.train === undefined && block.start.kind === 'depot' && block.start.time >= sim.t && first.dep >= sim.t;
     if (!assigned) continue;
     // a late car still to come keeps its place on the board, delayed by its

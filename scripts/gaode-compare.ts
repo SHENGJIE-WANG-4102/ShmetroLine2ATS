@@ -6,7 +6,7 @@
  *   npx tsx scripts/gaode-compare.ts --table 北新泾,淞虹路   # per-bin table
  *
  * The check set leaves out the Gaode readings known to disagree with their
- * neighbours (虹桥2号航站楼 UP midday, 北新泾 DN 18–21, the east section;
+ * neighbours (虹桥2号航站楼 UP midday, 北新泾 DN 18–21, the inconsistent eastern cells;
  * reference/timetable-gaode.md). A bin fails when |Gaode − plan| ≥ 2.
  */
 import { readFileSync } from 'node:fs';
@@ -18,16 +18,18 @@ const WINDOWS: [number, number][] = [[6 * 60, 11 * 60], [16 * 60, 23 * 60 + 30]]
 
 const arg = process.argv.indexOf('--table');
 const table = arg > 0 ? process.argv[arg + 1].split(',') : null;
+const baselineAt=process.argv.indexOf('--baseline');
+const baseline=baselineAt>0?JSON.parse(readFileSync(process.argv[baselineAt+1],'utf8')):null;
 const s = new Sim({ dayType: 'weekday', dateLabel: 'gaode-compare', startTime: 4 * 3600, seed: 1 });
 const names = s.topo.stations.map((x) => x.name);
 const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const gaode = (st: string, dir: string) => readFileSync(`reference/timetable-gaode/${st}-${dir}-weekday.txt`, 'utf8')
   .split(/\r?\n/).filter((l) => /^\d\d:\d\d/.test(l)).map((l) => +l.slice(0, 2) * 60 + +l.slice(3, 5));
 /** minutes of the revenue calls where passengers can board */
-const plan = (st: string, dir: string) => {
+const plan = (st: string, dir: string, arrivals = false) => {
   const i = names.indexOf(st);
-  return s.plan.trips.filter((t) => t.revenue && !t.cancelled && t.dir === dir)
-    .flatMap((t) => t.stops.filter((p, k) => p.st === i && p.stop && !p.noBoard && k < t.stops.length - 1).map((p) => Math.floor(p.arr / 60)));
+  return (baseline??s.plan).trips.filter((t: import('../src/sim/model').Trip) => t.revenue && !t.cancelled && t.dir === dir)
+    .flatMap((t) => t.stops.filter((p, k) => p.st === i && p.stop && !p.noBoard && (arrivals || k < t.stops.length - 1)).map((p) => Math.floor(p.arr / 60)));
 };
 const count = (ts: number[], b: number) => ts.filter((t) => t >= b && t < b + BIN).length;
 
@@ -51,4 +53,22 @@ if (table) {
     console.log(`${st} ${dir}: Gaode ${g.length} plan ${m.length}; bins off by ≥2: ${bad.length ? bad.join(', ') : 'none'}`);
   }
   console.log(`total |plan − Gaode| over windows ${abs}, failing bins ${fails}`);
+}
+
+// Eastern tables are inconsistent with the middle section and are reference
+// only. Do not count their differences as failures or acceptance criteria.
+const EAST = {
+  stations: ['川沙','凌空路','远东大道','海天三路','浦东1号2号航站楼'],
+  from: 8, to: 24,
+};
+if (!table) {
+  console.log('东段仅作参考（整体不可信，不计入不合格或验收；小时格为高德/计划到站数）');
+  for (const station of EAST.stations) {
+    const g = gaode(station,'DN'), m = plan(station,'DN',true);
+    const hours = Array.from({length:EAST.to-EAST.from},(_,i)=>EAST.from+i);
+    console.log(`参考 ${station} DN: ` + hours.map(hour=>{
+      const n = (values:number[]) => values.filter(t=>t>=hour*60&&t<(hour+1)*60).length;
+      return `${hour}:00 ${n(g)}/${n(m)}`;
+    }).join(', '));
+  }
 }

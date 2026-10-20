@@ -33,9 +33,10 @@ import { exposureOf, envTick, initPossessions, setWeather, setLowAdhesion } from
 import { holidayOf, holidayFixedRuns, holidayTick, type HolidayDay } from './holiday';
 import { vehicleTick, vehicleNote } from './vehicle';
 import { initConnections, connectionsTick, connectionDeparture, type Connection } from './connections';
-import { newMetrics, scenarioTick, startScenario, endScenario, randomTick, setRandomFaults, SCENARIOS } from './scenario';
+import { scheduleInstructorEvents, type InstructorScheduleEntry, type InstructorOccurrence, type RandomFaultEntry, newMetrics, scenarioTick, startScenario, endScenario, randomTick, setRandomFaults, SCENARIOS } from './scenario';
 import { computePis } from './pis';
 import { computeDmi, dmiTick } from './dmi';
+import { drawDailyRidership } from './calibration';
 import { passengersTick } from './passengers';
 import { injectFault, repairFault, requestTrainMaintenance, faultsTick, FAULT_LABELS, faultProcedure, updateFaultLifecycle } from './faults';
 import { updateOnboard, setManual, cmdTrainLevel, cmdTrainDto, cmdLineAto, authoriseEBRelease, turnbackSignalPassed } from './onboard';
@@ -99,6 +100,11 @@ export class Sim {
   removedTraces: { train: number; pts: number[] }[] = [];
 
   passengerScale = 0;
+  ridershipTarget = 0;
+  instructorSchedule: InstructorScheduleEntry[] = [];
+  instructorOccurred: InstructorOccurrence[] = [];
+  instructorFired = 0;
+  dailyEvaluationEnded = false;
   ridership = { generated: 0, boardings: STATIONS.map(() => Array(28).fill(0) as number[]), alightings: STATIONS.map(() => Array(28).fill(0) as number[]), maxLoad: 0, peakSectionLoad: 0 };
   passengersServed = 0;
   passengersCleared = 0;
@@ -151,6 +157,8 @@ export class Sim {
   vehicleResets: { train: number; at: number; fault: number }[] = [];
   reportReady: ScenarioReport | null = null;
   randomLevel = 0;
+  randomSchedule: RandomFaultEntry[] = [];
+  randomFaultVehicles: string[] = [];
   nextRandomAt = Infinity;
   drivingStops: StopScore[] = [];
   bookmarks: Bookmark[] = [];
@@ -197,6 +205,8 @@ export class Sim {
     this.rt = sharedRt!;
     this.routeTable = sharedTable!;
     this.rngState = config.seed >>> 0;
+    this.ridershipTarget = drawDailyRidership(config.dayType,config.seed);
+    this.instructorSchedule = config.scenario ? [] : scheduleInstructorEvents(config.seed,config.startTime,config.instructorEvents??[]);
     this.autoRadio = config.autoRadio ?? true;
     this.autoDispatch = config.autoDispatch ?? false;
     this.metrics = newMetrics(config.startTime);
@@ -205,7 +215,8 @@ export class Sim {
     this.holiday = config.scenario ? null : holidayOf(config.date);
     const fixedRuns = config.scenario ? SCENARIOS.find((x) => x.id === config.scenario)?.fixedRuns : holidayFixedRuns(this.holiday);
     this.atoLine = config.driveMode === 'ATO';
-    this.planCtx = { topo: this.topo, rt: this.rt, dayType: config.dayType, ...(fixedRuns ? { fixedRuns } : {}) };
+    this.planCtx = { topo: this.topo, rt: this.rt, dayType: config.dayType, ...(fixedRuns ? { fixedRuns } : {}),
+      ...(config.depotStock ? { initialStock: config.depotStock.slice() } : {}) };
     this.plan = generatePlan(this.planCtx);
     const { topo } = this;
     this.sw = topo.switches.map(() => ({ pos: 'N', target: 'N', moveUntil: 0, failed: false, fieldLock: false, singleLock: false, lockCount: 0, blocked: false }));
@@ -235,6 +246,7 @@ export class Sim {
     for (const s of this.sw) s.moveUntil = 0;
     this.log('I', '系统', `ATS 启动：${config.dateLabel}（${config.dayType === 'weekday' ? '工作日' : '双休日/节假日'}运行图，计划车次 ${this.plan.trips.length}，最大上线 ${this.plan.fleetPeak} 列）`);
     for (const p of this.possessions) if (p.state === 'active') this.log('B', '施工', `${p.name} 施工封锁中（计划 ${String(Math.floor(p.to / 3600)).padStart(2, '0')}:${String(Math.floor((p.to % 3600) / 60)).padStart(2, '0')} 销点）`, { key: `poss-${p.id}` });
+    this.log('I','客流',`当日客流目标 ${this.ridershipTarget.toLocaleString('zh-CN')} 人次`);
     if (config.randomFaults) setRandomFaults(this, config.randomFaults);
     initConnections(this);
     spawnDue(this);
@@ -548,6 +560,7 @@ export class Sim {
           if (tr) extendTrainTasks(this, tr, x.last);
         }
         if (preview.skipped) this.log('C', '运营', preview.msg);
+        for(const warning of preview.warnings??[])this.log('B','运营',warning);
         return { ok: true, msg: preview.msg };
       }
       case 'zoneLevel': {

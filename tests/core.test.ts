@@ -10,7 +10,7 @@ import { trySetRoute, cancelRoute, committedTrain, bindRouteApproach, updateInte
 import { setMode, grantRM, updateOnboard, applyEB, ebCauseCleared, answerEbRelease, authoriseEBRelease } from '../src/sim/onboard';
 import { parseTime } from '../src/sim/calendar';
 import { computeBody, indexBodies, rescueRouteReady, scanAhead } from '../src/sim/movement';
-import { distanceToBerth, updateTrainTasks, rescueApproach, trainDesire, runARS, spawnDue, setTripFromTasks } from '../src/sim/ats';
+import { distanceToBerth, updateTrainTasks, rescueApproach, trainDesire, runARS, spawnDue, setTripFromTasks, intervalDepartureHold } from '../src/sim/ats';
 import { dispatcherTick } from '../src/sim/dispatcher';
 import { faultsTick } from '../src/sim/faults';
 import { updateHalts, rootCause } from '../src/sim/halt';
@@ -33,6 +33,214 @@ const depotApproach = (sim: Sim, depot = 0) => {
   const link = topo.links.find(l => l.a === signal.node && l.track === 'UP')!;
   return { signal, link };
 };
+
+describe('ATO interval departure metering', () => {
+  const fixture = (dir: 'DN' | 'UP' = 'DN') => {
+    const sim = make(); advance(sim, 1);
+    const [rear, front] = sim.trainList;
+    for (const tr of [...sim.trainList]) if (tr !== rear && tr !== front) sim.removeTrain(tr);
+    const station = sim.topo.stations.find(s => s.id === (dir === 'DN' ? 'NJD' : 'LJZ'))!.index;
+    const next = station + (dir === 'DN' ? 1 : -1);
+    const berth = sim.topo.berths[platformBerth(sim.topo, station, dir)];
+    const stop = { k: 'stop' as const, berth: berth.id, station, trip: -1, arr: sim.t - 40, dep: sim.t, doors: true, revenue: true };
+    Object.assign(rear, { link: berth.link, off: berth.offset, dir: berth.dir, phase: 'dwell', mode: 'DTO', manual: false,
+      rescuing: -1, coupledLen: 0, failed: false, hold: false, v: 0, doorsOpen: true, doorSide: '', doorsAwait: false, dwellUntil: sim.t });
+    rear.tasks = [stop, { ...stop, berth: platformBerth(sim.topo, next, dir), station: next, dep: null }];
+    const lo = Math.min(sim.topo.stations[station].chain, sim.topo.stations[next].chain) + 400;
+    const link = sim.topo.links.find(l => l.track === dir && Math.min(l.chainA, l.chainB) <= lo && Math.max(l.chainA, l.chainB) >= lo)!;
+    const off = (lo - link.chainA) / (link.chainB - link.chainA) * link.len;
+    front.body = [{ link: link.id, from: off, to: Math.min(link.len, off + 10) }];
+    front.pendingDeparture = undefined;
+    return { sim, rear, front, stop, next, dir, link, off };
+  };
+  it.each(['DN', 'UP'] as const)('%s: keeps the doors open until the entire preceding train clears, then departs', dir => {
+    const { sim, rear, front, next, link, off } = fixture(dir);
+    const plan = JSON.stringify([sim.plan.trips, sim.plan.blocks]);
+    updateTrainTasks(sim, rear);
+    expect(rear.phase).toBe('dwell'); expect(rear.doorsOpen).toBe(true);
+    updateHalts(sim); expect(rear.halt.code).toBe('INTERVAL_LIMIT');
+    sim.t += 21; updateHalts(sim);
+    expect(sim.events.some(e => e.code === 'INTERVAL_LIMIT')).toBe(true);
+    const p = sim.topo.links[sim.topo.berths[platformBerth(sim.topo, next, dir)].link];
+    // The head has arrived but the rear still occupies the interstation track.
+    front.body = [{ link: p.id, from: 0, to: 100 }, { link: link.id, from: off, to: off + 1 }];
+    updateTrainTasks(sim, rear); expect(rear.phase).toBe('dwell');
+    front.body = [{ link: p.id, from: 0, to: p.len }];
+    updateTrainTasks(sim, rear); expect(rear.doorsOpen).toBe(false);
+    sim.t = rear.dwellUntil + 1; updateTrainTasks(sim, rear);
+    expect(rear.phase).toBe('run'); expect(rear.intervalWait).toBeUndefined();
+    expect(JSON.stringify([sim.plan.trips, sim.plan.blocks])).toBe(plan);
+  });
+  it('allows one dispatcher release, CM/RM and rescue without changing protection', () => {
+    const { sim, rear, stop } = fixture();
+    expect(intervalDepartureHold(sim, rear, stop)).toBeDefined();
+    for (const mode of ['CM', 'RM'] as const) {
+      rear.mode = mode; expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();
+    }
+    rear.mode = 'DTO'; rear.rescuing = 99; expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();
+    rear.rescuing = -1;
+    expect(sim.command({ c: 'trainHold', train: rear.id, on: false }).ok).toBe(true);
+    expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();
+    rear.doorsOpen = false; updateTrainTasks(sim, rear);
+    expect(rear.intervalRelease).toBeUndefined();
+  });
+  it('counts a departure granted this tick, while the opposite running line remains independent', () => {
+    const { sim, rear, front, stop, link } = fixture();
+    sim.plat[sim.topo.stations[stop.station+1].platforms.DN].hold=true;
+    front.body = []; front.pendingDeparture = stop;
+    front.link = rear.link; front.dir = rear.dir;
+    expect(intervalDepartureHold(sim, rear, stop)).toBeDefined();
+    front.pendingDeparture = undefined;
+    front.phase='run';front.lastStation=stop.station;front.tasks=[rear.tasks[1]];
+    expect(intervalDepartureHold(sim,rear,stop)).toBeDefined(); // wheels moved, head still within the platform approach
+    front.lastStation=-1;
+    const other = sim.topo.links.find(l => l.track === 'UP' && l.chainA <= link.chainB && l.chainB >= link.chainA)!;
+    front.body = [{ link: other.id, from: 0, to: other.len }];
+    expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();
+  });
+  it('leaves normal moving traffic unrestricted and enables metering for a held downstream platform',()=>{
+    const {sim,rear,front,stop,next}=fixture();
+    front.phase='run';front.v=10;
+    expect(intervalDepartureHold(sim,rear,stop)).toBeUndefined();
+    sim.plat[sim.topo.stations[next].platforms.DN].hold=true;
+    expect(intervalDepartureHold(sim,rear,stop)).toBeDefined();
+    sim.plat[sim.topo.stations[next].platforms.DN].hold=false;
+    sim.plat[sim.topo.stations[next].platforms.UP].hold=true;
+    expect(intervalDepartureHold(sim,rear,stop)).toBeUndefined();
+  });
+  it('does not mistake an overnight siding train waiting to start for a granted departure',()=>{
+    const {sim,rear,front,stop}=fixture();
+    const siding=sim.topo.links.find(l=>l.track==='SID')!;
+    Object.assign(front,{link:siding.id,off:0,phase:'run',v:0,lastStation:stop.station,dir:rear.dir});
+    front.tasks=[{...rear.tasks[1] as any,stabledOut:true}];
+    front.body=[{link:siding.id,from:0,to:Math.min(siding.len,front.len)}];
+    expect(intervalDepartureHold(sim,rear,stop)).toBeUndefined();
+    // A returning train which has changed ends behind this platform is
+    // also not ahead, even though lastStation still names this station.
+    const origin=sim.topo.links[rear.link];
+    const approach=sim.topo.links.filter(l=>l.track==='DN'&&l.chainB<=origin.chainA).sort((a,b)=>b.chainB-a.chainB)[0];
+    Object.assign(front,{link:approach.id,off:approach.len-1});
+    front.tasks=[{...rear.tasks[1] as any,stabledOut:false}];
+    front.body=[{link:approach.id,from:0,to:approach.len}];
+    expect(intervalDepartureHold(sim,rear,stop)).toBeUndefined();
+  });
+  it('keeps an unrouted middle-platform departure from reserving the interval against the main-platform train it must follow',()=>{
+    const {sim,rear:main,front:middle}=fixture('UP');
+    const station=sim.topo.stations.find(s=>s.id==='GLL')!.index;
+    const next=platformBerth(sim.topo,station-1,'UP'),mainBerth=sim.topo.berths[platformBerth(sim.topo,station,'UP')];
+    const middleBerth=sim.topo.berths.find(b=>b.station===station&&b.kind==='platform'&&sim.topo.links[b.link].track==='SID'&&b.dir===-1)!;
+    const setup=(tr:Train,berth:typeof mainBerth)=>{
+      Object.assign(tr,{link:berth.link,off:berth.offset,dir:berth.dir,phase:'dwell',v:0,mode:'DTO',manual:false,failed:false,
+        doorsOpen:false,doorSide:'',doorsAwait:false,hold:false,dwellUntil:sim.t,lastStation:station,pendingDeparture:undefined});
+      const stop={k:'stop' as const,station,berth:berth.id,trip:-1,arr:sim.t-40,dep:sim.t,doors:true,revenue:true};
+      tr.tasks=[stop,{...stop,station:station-1,berth:next,dep:null}];
+      computeBody(sim,tr);return stop;
+    };
+    const onMain=setup(main,mainBerth),onMiddle=setup(middle,middleBerth);
+    middle.nextSignal=sim.topo.signals.find(s=>s.dir===middle.dir&&sim.topo.nodes[s.node].links.includes(middle.link))!.id;
+    for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
+    sim.plat[sim.topo.stations[station-1].platforms.UP].hold=true;
+    expect(intervalDepartureHold(sim,middle,onMiddle)?.detail).toContain('汇入正线');
+    updateTrainTasks(sim,middle);expect(middle.phase).toBe('dwell');
+    expect(intervalDepartureHold(sim,main,onMain)).toBeUndefined();
+    updateTrainTasks(sim,main);expect(main.phase).toBe('run');
+  });
+});
+
+describe('depot berth selection before the first entry route',()=>{
+  const fixture=()=>{
+    const sim=make();advance(sim,1);
+    const [rear,turning,other]=sim.trainList;
+    for(const tr of [...sim.trainList])if(![rear,turning,other].includes(tr))sim.removeTrain(tr);
+    for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
+    sim.berthRes.clear();sim.t=7.95*3600;
+    const yard=sim.topo.depots[0],berth=sim.topo.berths[platformBerth(sim.topo,6,'UP')];
+    Object.assign(rear,{link:berth.link,off:berth.offset,dir:berth.dir,v:0,phase:'dwell',manual:false,failed:false,hold:false,dwellUntil:sim.t+5,stopDist:0});
+    rear.body=[{link:berth.link,from:berth.offset,to:berth.offset+rear.len}];
+    rear.tasks=[{k:'stop',berth:berth.id,station:6,trip:-1,arr:sim.t-30,dep:null,doors:true,revenue:false},
+      {k:'depot',depot:0,berth:yard.entryBerths[0]}];
+    const sig=sim.topo.signals.find(s=>s.station===6&&s.role==='start'&&s.dir===-1)!;
+    rear.nextSignal=sig.id;rear.nextSignalDist=12;
+    for(const [n,tr] of [turning,other].entries()){
+      const stub=yard.transferPaths[n].stub,b=sim.topo.berths.find(b=>b.link===stub&&b.kind==='siding')!;
+      Object.assign(tr,{link:stub,off:b.offset,dir:b.dir,phase:'stabled',v:0});
+      tr.body=[{link:stub,from:Math.max(0,b.offset-10),to:Math.min(sim.topo.links[stub].len,b.offset+10)}];
+      sim.berthRes.set(b.id,tr.id);
+    }
+    indexBodies(sim);computeOccupancy(sim);
+    const branch=sim.topo.routes.find(r=>r.name==='S0510→S0502(侧向)')!;
+    return {sim,rear,turning,other,yard,branch};
+  };
+  it('waits while both leads are full, then chooses the empty lead before routing from beyond 2500 m',()=>{
+    const {sim,rear,turning,other,yard,branch}=fixture();
+    expect(Math.abs(sim.trainChain(rear)-sim.topo.stations[yard.station].chain)).toBeGreaterThan(2500);
+    expect(trainDesire(sim,rear)).toBeNull();
+    expect(sim.sig[branch.start].route).toBe(-1);
+    expect(rear.arsWait?.detail).toContain('可用入段泊位');
+    expect(rear.arsWait?.train).toBe(turning.id);
+    sim.removeTrain(other);indexBodies(sim);computeOccupancy(sim);
+    expect(trainDesire(sim,rear)).not.toBeNull();
+    expect(rear.tasks.at(-1)).toMatchObject({k:'depot',berth:yard.entryBerths[1]});
+    expect([...sim.berthRes.values()]).not.toContain(rear.id); // early choice must not claim a lead from a closer return
+  });
+  it.each([false,true])('cancels an idle old branch before switching, but never switches an entered branch (entered=%s)',entered=>{
+    const {sim,rear,turning,other,yard,branch}=fixture();sim.removeTrain(other);
+    turning.body=[]; // reserved for an arriving turnback, not yet physically occupied
+    indexBodies(sim);computeOccupancy(sim);
+    expect(trySetRoute(sim,branch.id,{train:rear.id}).ok).toBe(true);
+    const ar=sim.routes.get(branch.id)!;ar.entered=entered;if(entered)ar.owner=rear.id;
+    trainDesire(sim,rear);
+    expect(rear.tasks.at(-1)).toMatchObject({berth:yard.entryBerths[entered?0:1]});
+    expect(sim.routes.has(branch.id)).toBe(entered);
+  });
+  it('keeps the selected berth while the original branch is approach locked',()=>{
+    const {sim,rear,turning,other,yard,branch}=fixture();sim.removeTrain(other);turning.body=[];
+    indexBodies(sim);computeOccupancy(sim);
+    expect(trySetRoute(sim,branch.id,{train:rear.id}).ok).toBe(true);
+    rear.nextSignal=branch.start;rear.nextSignalDist=100;rear.v=5;
+    trainDesire(sim,rear);
+    expect(rear.tasks.at(-1)).toMatchObject({berth:yard.entryBerths[0]});
+    expect(sim.routes.has(branch.id)).toBe(true);
+  });
+  it('lets the booked depot return enter before the opposite-platform return reserves its reversal path',()=>{
+    const sim=make();advance(sim,1);const [waiting,booked]=sim.trainList;
+    for(const tr of [...sim.trainList])if(tr!==waiting&&tr!==booked)sim.removeTrain(tr);
+    for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
+    sim.berthRes.clear();const yard=sim.topo.depots[2],goal=yard.entryBerths[0];
+    for(const [tr,dir]of [[waiting,'UP'],[booked,'DN']]as const){
+      const b=sim.topo.berths[platformBerth(sim.topo,yard.station,dir)];
+      Object.assign(tr,{link:b.link,off:b.offset,dir:b.dir,phase:'run',v:0,failed:false,manual:false,
+        tbStage:'depart',depotStage:'none',hold:false,lastStation:yard.station});
+      tr.tasks=[{k:'depot',depot:yard.id,berth:goal}];tr.hist=[];computeBody(sim,tr);
+      const scan=scanAhead(sim,tr,goal);tr.nextSignal=scan.nextSignal;tr.nextSignalDist=scan.nextSignalDist;
+    }
+    const stub=sim.topo.berths.find(b=>b.link===yard.transferPaths[0].stub&&b.kind==='siding')!;
+    sim.berthRes.set(stub.id,booked.id);indexBodies(sim);computeOccupancy(sim);
+    expect(trainDesire(sim,waiting)).toBeNull();runARS(sim);
+    expect(waiting.arsWait).toMatchObject({code:'BERTH_WAIT',train:booked.id});
+    expect(booked.arsWait?.detail).not.toBe('进路资源预留给优先列车');
+    expect(sim.sig[booked.nextSignal].route).toBeGreaterThanOrEqual(0);
+  });
+  it('does not let a following return book the empty lead against the train physically ahead',()=>{
+    const sim=make();advance(sim,1);const [front,rear]=sim.trainList;
+    for(const tr of [...sim.trainList])if(tr!==front&&tr!==rear)sim.removeTrain(tr);
+    for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
+    sim.berthRes.clear();const yard=sim.topo.depots[1],goal=yard.entryBerths[0];
+    const b=sim.topo.berths[platformBerth(sim.topo,yard.station,'DN')],platform=sim.topo.links[b.link];
+    const approach=sim.topo.links.filter(l=>l.track==='DN'&&l.chainB<=platform.chainA).sort((a,b)=>b.chainB-a.chainB)[0];
+    for(const tr of [front,rear]){
+      Object.assign(tr,{link:tr===front?b.link:approach.id,off:tr===front?b.offset:approach.len-10,dir:1,
+        phase:'run',v:0,failed:false,manual:false,hold:false,tbStage:'none',depotStage:'none'});
+      tr.tasks=[{k:'depot',depot:yard.id,berth:goal}];tr.hist=[];computeBody(sim,tr);
+      const scan=scanAhead(sim,tr,goal);tr.nextSignal=scan.nextSignal;tr.nextSignalDist=scan.nextSignalDist;
+    }
+    const stub=sim.topo.berths.find(b=>b.link===yard.transferPaths[0].stub&&b.kind==='siding')!;
+    sim.berthRes.set(stub.id,rear.id);indexBodies(sim);computeOccupancy(sim);
+    expect(trainDesire(sim,front)).not.toBeNull();expect(sim.berthRes.get(stub.id)).toBe(front.id);
+    sim.berthRes.set(stub.id,rear.id);rear.body=[{link:stub.link,from:0,to:10}];indexBodies(sim);computeOccupancy(sim);
+    expect(trainDesire(sim,front)).toBeNull(); // an actual occupied lead remains protected
+  });
+});
 
 describe('dispatcher boundary', () => {
   it('rejects invalid objects and non-finite values without partial writes', () => {

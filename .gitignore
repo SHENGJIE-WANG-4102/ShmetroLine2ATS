@@ -13,3 +13,13 @@ tests/out
 
 # Python bytecode from scripts/audio
 __pycache__/
+
+# Local desktop build output
+/src-tauri/target/
+/src-tauri/gen/
+# Unused platform variants emitted by the icon generator.
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
+/src-tauri/icons/*.icns
+/src-tauri/icons/Square*.png
+/src-tauri/icons/StoreLogo.png

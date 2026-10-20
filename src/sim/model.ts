@@ -91,6 +91,8 @@ export interface Block {
 
 export interface Plan {
   dayType: DayType;
+  /** Actual inventory inherited at rollover, absent for the normal initial day. */
+  initialStock?: number[];
   trips: Trip[];
   blocks: Block[];
   /** service template periods for display */
@@ -259,6 +261,9 @@ export interface Train {
   load: number;
   delay: number;
   hold: boolean;
+  /** Dispatcher release bypasses interval metering for this station departure only. */
+  intervalRelease?: number;
+  intervalWait?: { train: number; detail: string };
   skipStations: Set<number>;
   /** vehicle faults (vehicle.ts): inverters cut out, doors isolated, speed cap from a cut-out brake (m/s) */
   tractionCut: number;
@@ -565,6 +570,7 @@ export type Command =
 
 export interface SimConfig {
   dayType: DayType;
+  depotStock?: number[];
   dateLabel: string;
   /** ISO date of the operating day (YYYY-MM-DD), used for the day rollover */
   date?: string;
@@ -578,6 +584,8 @@ export interface SimConfig {
   scenario?: string;
   /** random fault level 0..3 */
   randomFaults?: number;
+  /** Selected event IDs; future timings stay inside the simulation checkpoint. */
+  instructorEvents?: string[];
   /** no night engineering possessions (tests) */
   noPossessions?: boolean;
   /** 'ATO': the line runs ATO with drivers (DTO compatibility mode, D52) */
@@ -857,17 +865,20 @@ export interface Snapshot {
 }
 
 export type FromWorker =
-  | { type: 'ready'; plan: Plan }
+  | { type: 'ready'; plan: Plan; config?: SimConfig }
   | { type: 'snap'; snap: Snapshot }
   | { type: 'events'; events: SimEvent[] }
   | { type: 'alarms'; alarms: SimEvent[] }
   | { type: 'plan'; plan: Plan }
   | { type: 'cmdResult'; id: number; ok: boolean; msg: string }
   | { type: 'progress'; t: number; target: number }
+  | { type: 'startup'; phase:'diagram'|'cache'|'warmup'|'complete'; elapsed:number }
   | { type: 'rewound'; t: number; nextEventId: number }
   | { type: 'report'; report: ScenarioReport }
   | { type: 'call'; call: RadioCall }
   | { type: 'diagnostics'; json: string }
+  | { type: 'dayArchive'; date:string; json:string }
+  | { type: 'dayChanged'; text:string }
   | { type: 'planPreview'; id: number; preview: import('./planning').PlanPreview };
 
 // bit flags for packed state arrays

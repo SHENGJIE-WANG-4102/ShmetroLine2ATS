@@ -9,16 +9,16 @@
  *    climbs at 24‰ into the next station; the dip grows with the distance;
  *  - the 黄浦江 crossing (南京东路—陆家嘴) dives to about 34 m at the
  *    river's middle on ≈27‰ grades;
- *  - east of 金科路 the line climbs out of the tunnel to the viaduct, about
- *    12 m above ground, before the exposed section (EXPOSED, K37.4); viaduct
- *    stations are high points with gentle 10‰ dips between them; past 海天三路
- *    it comes down to the ground at the airport.
+ *  - the historical D65 calibration uses a K37.4 elevation anchor and a
+ *    K60.9 ground anchor, with 12 m high points and gentle 10‰ dips. These
+ *    synthetic anchors are retained independently of the corrected tunnel
+ *    portals; they are not evidence of the real surface/underground boundary.
  * Heights are rail level relative to the ground (m). Gravity acts on the
  * whole train: the mean grade under its length.
  */
 import type { Topology, Dir } from './topology';
 import { linkChain } from './topology';
-import { EXPOSED, LINE_INFO } from '../data/line2';
+import { PROFILE_ANCHORS, LINE_INFO } from '../data/line2';
 
 export const G = 9.81;
 
@@ -48,8 +48,7 @@ export function profileOf(topo: Topology): Profile {
 }
 
 function buildProfile(topo: Topology): Profile {
-  const elevFrom = EXPOSED.find((e) => e.kind === 'elevated')!.from;
-  const groundFrom = EXPOSED.find((e) => e.kind === 'ground')!.from;
+  const {elevatedFrom:elevFrom,groundFrom}=PROFILE_ANCHORS;
   const sts = topo.stations.map((s) => ({ name: s.name, chain: s.chain }));
   const levelOf = (s: { name: string; chain: number }) =>
     s.chain >= groundFrom ? GROUND : s.chain >= elevFrom - FLAT ? ELEVATED : -(DEPTH[s.name] ?? STATION_DEPTH);

@@ -1,3 +1,4 @@
+import {isDesktop} from './ui/platform';
 /**
  * Bootstrap: topology, simulation worker, Pixi renderer and the application
  * shell (see ui/app.ts). Starts the default operating day.
@@ -6,7 +7,7 @@ import './styles.css';
 import { Application } from 'pixi.js';
 import { buildTopology } from './sim/topology';
 import { Store } from './ui/store';
-import { App, parseTime } from './ui/app';
+import { App, parseTime, newOperatingSeed } from './ui/app';
 import { dayTypeOf, dateLabel } from './ui/header';
 import { isoDate } from './sim/calendar';
 import { C, fmtTime } from './ui/theme';
@@ -16,6 +17,12 @@ const bootMsg = document.getElementById('boot-msg')!;
 const bootBar = document.getElementById('boot-progress')!;
 
 async function main() {
+  if(isDesktop()) {
+    document.documentElement.classList.add('desktop');
+    document.querySelector('.boot-title')!.textContent='上海地铁2号线 ATS 模拟器';
+    bootMsg.textContent='准备运营日设置…';
+    await import('pixi.js/unsafe-eval');
+  }
   await document.fonts.load('600 20px "JetBrains Mono"').catch(() => undefined);
   const topo = buildTopology();
   const worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' });
@@ -33,6 +40,10 @@ async function main() {
   document.getElementById('pixi-host')!.append(pixi.canvas);
   const app = new App(topo, store, pixi, document.getElementById('overlay')!);
 
+  store.on('startup',()=>{
+    bootMsg.textContent=store.startupText;
+    bootBar.style.width='5%';
+  });
   store.on('progress', () => {
     const p = store.progress;
     if (!p) return;
@@ -54,9 +65,12 @@ async function main() {
   // an unreadable or out-of-day ?t= falls back to the default start
   const start = Number.isFinite(parsed) && parsed <= 27.7 * 3600 ? parsed : 7 * 3600 + 40 * 60;
   const holiday = params.get('holiday') === '1';
-  const cfg: SimConfig = { dayType: dayTypeOf(d, holiday), dateLabel: dateLabel(d, holiday), date: isoDate(d), startTime: start, seed: 20251101 };
+  const cfg: SimConfig = { dayType: dayTypeOf(d, holiday), dateLabel: dateLabel(d, holiday), date: isoDate(d), startTime: start, seed: newOperatingSeed() };
   bootMsg.textContent = `生成 ${cfg.dateLabel} 运行图并推演至 ${fmtTime(start)}…`;
-  store.start(cfg);
+  if(isDesktop()) {
+    document.getElementById('boot')!.style.display='none';
+    app.showDayDialog(true);
+  } else store.start(cfg);
 
   if (import.meta.env.DEV) (window as unknown as { __ats: unknown }).__ats = { store, app };
 }

@@ -26,7 +26,8 @@ import { h, clear } from './dom';
 import { fmtTime, hex, C } from './theme';
 import { holidayOf, isoDate, parseTime } from '../sim/calendar';
 export { parseTime };
-import { SCENARIOS } from '../sim/scenario';
+export const newOperatingSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
+import { INSTRUCTOR_EVENTS, SCENARIOS, instructorEventIds } from '../sim/scenario';
 import { WEATHER_RULES } from '../data/line2';
 
 /** default UI scale: 100 % on a 4K canvas, larger on smaller windows so text stays readable (A+/A− go up to 200 %) */
@@ -148,6 +149,8 @@ export class App {
     this.buildGraphCtl();
     overlay.append(this.header.el, this.vtool, this.graphCtl, this.station.hint, this.side.el, this.tooltip.el, this.header.menu, this.veil);
     initConfirm(overlay);
+    const modalObserver = new MutationObserver(() => { if (this.modalOpen()) this.hover(null); });
+    modalObserver.observe(overlay, { childList: true, subtree: true });
     installSelectLists(overlay);
 
     this.setMode('overview');
@@ -345,7 +348,10 @@ export class App {
     if (v && p) v.centerOn(p.x, p.y, this.mode === 'overview' ? Math.max(v.z, 1.8) : v.z);
   }
 
+  private modalOpen() { return !!this.overlay.querySelector('.modal-back'); }
+
   private hover(sel: Selection) {
+    if (this.modalOpen()) sel = null;
     this.store.hover = sel;
     this.store.emit('hover');
   }
@@ -500,6 +506,7 @@ export class App {
       if (this.legend) this.toggleLegend();
     });
     window.addEventListener('pointermove', (e) => {
+      if (this.modalOpen()) { this.drag = null; this.hover(null); return; }
       const p = this.toLogical(e);
       this.tooltip.move(p.x, p.y);
       const d = this.drag;
@@ -533,7 +540,7 @@ export class App {
   private onKey(e: KeyboardEvent) {
     const tgt = e.target as HTMLElement | null;
     const typing = !!tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA');
-    if (this.overlay.querySelector('.modal-back')) return; // dialogs handle their own keys
+    if (this.modalOpen()) return; // dialogs handle their own keys
     if (e.key === 'F1') { e.preventDefault(); openHelp(this.overlay); return; }
     if (e.ctrlKey || e.metaKey) {
       if (e.key === '+' || e.key === '=') { e.preventDefault(); this.header.stepScale(1); }
@@ -614,10 +621,14 @@ export class App {
       openReport(this.overlay, r, again);
     });
     for (const sc of SCENARIOS) s.on('startScenario:' + sc.id, () => this.startScenario(sc.id));
+    s.on('startup',()=>{
+      this.veil.textContent=s.startupText;
+      this.veil.style.display='flex';
+    });
     s.on('progress', () => {
       const p = s.progress;
       if (!p) return;
-      this.veil.textContent = `推演中 ${fmtTime(p.t)} → ${fmtTime(p.target)}`;
+      this.veil.textContent = `预热推演 ${fmtTime(p.t)} → ${fmtTime(p.target)}（${Math.min(100,Math.round((p.t-14400)/Math.max(1,p.target-14400)*100))}%）`;
       this.veil.style.display = 'flex';
     });
     s.on('snap', () => { if (this.veil.style.display !== 'none') this.veil.style.display = 'none'; });
@@ -680,7 +691,7 @@ export class App {
 
   // ---------------------------------------------------------------- operating day dialog
 
-  showDayDialog() {
+  showDayDialog(required = false) {
     const d = new Date();
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
     const dateIn = datePick(d, () => showHol());
@@ -689,6 +700,17 @@ export class App {
     st.value = '07:40';
     const auto = h('input', { type: 'checkbox' }) as HTMLInputElement;
     const drive = h('select', {}, h('option', { value: 'DTO' }, 'DTO（正常）'), h('option', { value: 'ATO' }, 'ATO（DTO兼容模式，司机驾驶）')) as HTMLSelectElement;
+    const random=h('select',{},...['关','轻','中','重'].map((label,level)=>h('option',{value:level},label)));
+    const savedLevel=Number(loadPref('randomFaults',0));
+    random.value=String([0,1,2,3].includes(savedLevel)?savedLevel:0);
+    const savedEvents=loadPref<unknown>('instructorEvents',[]);
+    const selected=new Set(instructorEventIds(Array.isArray(savedEvents)?savedEvents.filter((id):id is string=>typeof id==='string'):[]));
+    const checks=new Map(INSTRUCTOR_EVENTS.map(event=>[event.id,h('input',{type:'checkbox',checked:selected.has(event.id)})]));
+    const eventPicker=h('div',{class:'instructor-picker'},h('div',{class:'event-actions'},
+      h('button',{class:'btn',onclick:()=>checks.forEach(c=>c.checked=true)},'全选'),
+      h('button',{class:'btn',onclick:()=>checks.forEach(c=>c.checked=false)},'全不选')));
+    for(const category of [...new Set(INSTRUCTOR_EVENTS.map(e=>e.category))]) eventPicker.append(h('fieldset',{},h('legend',{},category),
+      ...INSTRUCTOR_EVENTS.filter(e=>e.category===category).map(e=>h('label',{},checks.get(e.id)!,e.name))));
     // the holiday programme of the date (holiday.ts) is shown as soon as the date is typed
     const holHint = h('div', { class: 'hint', style: 'margin-top:10px;color:var(--warn, #d9a400)' });
     const showHol = () => {
@@ -704,15 +726,18 @@ export class App {
       const [y, m, dd] = dateIn.iso().split('-').map(Number);
       const nd = new Date(y, (m || 1) - 1, dd || 1);
       if (Number.isNaN(nd.getTime())) { toast('日期格式应为 YYYY-MM-DD', false); return; }
-      const c: SimConfig = { dayType: dayTypeOf(nd, hol.checked), dateLabel: dateLabel(nd, hol.checked), date: isoDate(nd), startTime: parseTime(st.value), seed: 20251101 + nd.getDate(), autoRadio: auto.checked,
+      const c: SimConfig = { dayType: dayTypeOf(nd, hol.checked), dateLabel: dateLabel(nd, hol.checked), date: isoDate(nd), startTime: parseTime(st.value), seed: newOperatingSeed(), autoRadio: auto.checked,
+        randomFaults:Number(random.value),instructorEvents:[...checks].filter(([,c])=>c.checked).map(([id])=>id),
         ...(drive.value === 'ATO' ? { driveMode: 'ATO' as const } : {}) };
+      savePref('randomFaults',c.randomFaults);
+      savePref('instructorEvents',c.instructorEvents);
       close();
       this.lastScenario = '';
       this.veil.textContent = '生成运行图…';
       this.veil.style.display = 'flex';
       this.store.start(c);
     };
-    back.append(h('div', { class: 'modal' },
+    back.append(h('div', { class: 'modal day-setup' },
       h('div', { class: 'modal-h' }, '运营日设置'),
       h('div', { class: 'modal-b' },
         h('div', { class: 'form' }, h('label', {}, '运营日期'), dateIn.el, h('label', {}, '节假日'), hol),
@@ -720,9 +745,12 @@ export class App {
         h('div', { class: 'form', style: 'margin-top:14px' }, h('label', {}, '开始时刻'), st),
         h('div', { class: 'form', style: 'margin-top:14px' }, h('label', {}, '来电自动应答（观摩模式）'), auto),
         h('div', { class: 'form', style: 'margin-top:14px' }, h('label', {}, '运营驾驶模式'), drive),
-        h('div', { class: 'hint', style: 'margin-top:14px' }, '工作日采用早晚高峰大小交路运行图，双休日/节假日全天单一大交路。开始时刻之前的运营以最高速度推演。ATO运营（DTO兼容模式）沿用同一运行图，终点站折返时司机换端、发车需司机按钮。训练场景请在右侧“教员”页选择。'),
+        h('div',{class:'form',style:'margin-top:14px'},h('label',{},'随机故障'),random),
+        h('div',{class:'sect-title'},'教员事件'),eventPicker,
+        h('div',{class:'hint'},'勾选的事件可能在当天随机发生，也可能不发生。事件时刻不预告。'),
+        h('div', { class: 'hint', style: 'margin-top:14px' }, '工作日采用早晚高峰大小交路运行图，双休日/节假日采用对应运行图，均含出入段与过夜安排。开始时刻之前的运营以最高速度推演。ATO运营（DTO兼容模式）沿用同一运行图，终点站折返时司机换端、发车需司机按钮。训练场景请在右侧“教员”页选择。'),
       ),
-      h('div', { class: 'modal-f' }, h('button', { class: 'btn', onclick: close }, '取消'), h('button', { class: 'btn primary', onclick: go }, '开始')),
+      h('div', { class: 'modal-f' }, required ? null : h('button', { class: 'btn', onclick: close }, '取消'), h('button', { class: 'btn primary', onclick: go }, '开始')),
     ));
     this.overlay.append(back);
   }

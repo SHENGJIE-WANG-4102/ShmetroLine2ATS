@@ -13,13 +13,18 @@
     "soak": "node scripts/soak.mjs",
     "soak:quick": "node scripts/soak.mjs --quick",
     "replay": "vite-node scripts/replay.ts",
-    "simday": "SOAK_FILTER=-base-0- node scripts/soak.mjs --quick"
+    "simday": "SOAK_FILTER=-base-0- node scripts/soak.mjs --quick",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build --no-bundle"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-fs": "^2.7.1",
     "pixi.js": "^8.22.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
     "playwright-core": "^1.64.0",
     "typescript": "~5.9.3",
     "vite": "^7.3.7",

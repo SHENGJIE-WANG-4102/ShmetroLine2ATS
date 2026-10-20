@@ -38,6 +38,7 @@ export function previewBody(store: Store, preview: PlanPreview): Node[] {
   return [
     h('div', { class: 'cmdline' }, preview.msg),
     h('div', { class: 'hint' }, `灰色：原计划 · 青色：加开 · 红色：冲突 · 峰值用车 ${preview.plan.fleetPeak} 列`),
+    ...((preview.warnings??[]).map(text=>h('div',{class:'cmdline'},text))),
     svg,
     h('div', { class: 'hint' }, ...(preview.issues.length ? preview.issues.slice(0, 20).map(issue => h('div', {}, `${fmtTime(issue.t, false)} ${issue.severity === 'error' ? '冲突' : '提示'}：${issue.text}`)) : ['运行图校验通过：追踪间隔、折返能力及车辆库存满足要求。'])),
   ];

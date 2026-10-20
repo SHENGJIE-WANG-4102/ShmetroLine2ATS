@@ -8,7 +8,7 @@ import type { StopTask, Train } from './model';
 import { STATIONS, LINE_INFO } from '../data/line2';
 import { callCrowd } from './radio';
 
-import { boardingDemand, inPeakSection, passengerMinimum, RIDERSHIP_TARGET } from './calibration';
+import { boardingDemand, inPeakSection, passengerMinimum } from './calibration';
 
 // Assumption: directional boarding demand starts 15 minutes before the first
 // usable train. A closed service cannot accumulate hours of rush-hour demand
@@ -46,7 +46,7 @@ function scaleFor(sim: Sim): number {
     for (let t = windows.first[p.id]; t < windows.last[p.id]; t += 60)
       total += boardingDemand(sim.plan.dayType, p.station, p.track as 'DN' | 'UP', t + 30) * Math.min(60, windows.last[p.id] - t);
   }
-  sim.passengerScale = RIDERSHIP_TARGET[sim.plan.dayType] / Math.max(1, total);
+  sim.passengerScale = sim.ridershipTarget / Math.max(1, total);
   return sim.passengerScale;
 }
 

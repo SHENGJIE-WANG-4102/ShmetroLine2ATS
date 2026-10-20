@@ -1,7 +1,14 @@
 /** Calibrated service assumptions; factual sources are recorded in D29–D31. */
 import type { DayType, TrackDir } from './model';
+import { dayRandom } from './dayRandom';
 import { STATIONS } from '../data/line2';
 export const RIDERSHIP_TARGET = { weekday: 1_090_000, weekend: 1_090_000 * 0.7 };
+/** 【假设】每日目标在中心值的 ±5% 内均匀抽取，两种日型共用规则。 */
+export const RIDERSHIP_RANGE = Object.fromEntries(Object.entries(RIDERSHIP_TARGET).map(([day,center])=>[day,{min:Math.round(center*.95),max:Math.round(center*1.05)}])) as Record<DayType,{min:number;max:number}>;
+export function drawDailyRidership(day: DayType, seed: number): number {
+ const range=RIDERSHIP_RANGE[day];
+ return Math.round(range.min+dayRandom(seed,0x71de2026)()*(range.max-range.min));
+}
 /** Where and when the reported peak section load (高峰最大断面) is taken: weekdays,
  * 淞虹路–广兰路, the morning and evening peak hours (h). */
 export const PEAK_SECTION = { day: 'weekday' as DayType, from: 'SHR', to: 'GLL', hours: [[6.8333, 9.5], [16.8333, 19.5]] };

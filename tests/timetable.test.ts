@@ -14,6 +14,63 @@ import { SCENARIOS } from '../src/sim/scenario';
 import { STATIONS, OPERATIONS, LINE_INFO } from '../src/data/line2';
 import { FIRST_LAST } from '../src/data/firstlast';
 import { readFileSync } from 'node:fs';
+import { preparePlan, addedPlanErrors, noWorse } from '../src/sim/planning';
+import { takeVehicle, putVehicle } from '../src/sim/yard';
+import { addPossession } from '../src/sim/env';
+
+describe('live extras with existing yard imbalance and engineering work', () => {
+  const fixture = () => {
+    const sim = new Sim({ dayType:'weekday',dateLabel:'inventory',startTime:14400,seed:3,noPossessions:true });
+    for (const tr of [...sim.trainList]) sim.removeTrain(tr);
+    for (const b of sim.plan.blocks) sim.blockDone.add(b.id);
+    for (const t of sim.plan.trips) t.completed = true;
+    sim.plan.blocks.find(b=>b.end.kind==='depot'&&b.end.depot===2)!.withdrawal={depot:0,at:24*3600+20*60};
+    putVehicle(sim,0,takeVehicle(sim,2)!);
+    sim.t=24*3600+38*60;
+    return sim;
+  };
+  const command={c:'addTrain' as const,depot:2,dir:'DN' as const,to:30,time:24*3600+54*60};
+  it('allows a same-yard airport round trip and reports the unchanged historical imbalance as a warning',()=>{
+    const sim=fixture(),before=depotLedger(sim.topo,sim.plan);
+    const preview=preparePlan(sim,command);
+    expect(preview.ok,preview.msg).toBe(true);
+    expect(depotLedger(sim.topo,preview.plan).final).toEqual(before.final);
+    const issues=preview.issues.filter(i=>i.code==='YARD_BALANCE');
+    expect(issues.map(i=>[i.depot,i.delta,i.severity])).toEqual([[0,1,'warn'],[2,-1,'warn']]);
+    expect(issues.every(i=>i.t>sim.t)).toBe(true); // old error clock was 00:20, the candidate clock is later
+    expect(preview.warnings?.join('')).toContain('已有问题');
+  });
+  it('rejects an increased per-yard deficit but permits an improvement regardless of summary timestamps',()=>{
+    const sim=fixture(),preview=preparePlan(sim,command),bad=structuredClone(preview.plan);
+    bad.blocks.at(-1)!.end={kind:'depot',depot:0};
+    expect(noWorse(sim,bad)).toBe(false);
+    expect(addedPlanErrors(sim,bad).filter(i=>i.code==='YARD_BALANCE').map(i=>[i.depot,i.delta])).toEqual([[0,2],[2,-2]]);
+    const better=structuredClone(preview.plan),block=better.blocks.at(-1)!;
+    if(block.start.kind!=='depot')throw new Error('expected yard origin');
+    block.start.depot=0;
+    expect(addedPlanErrors(sim,better).filter(i=>i.code==='YARD_BALANCE')).toEqual([]);
+  });
+  it('rejects a path crossing current construction and allows an unrelated possession',()=>{
+    const sim=fixture();
+    const unrelated=addPossession(sim,5,26*3600);
+    expect(preparePlan(sim,command).ok).toBe(true);
+    unrelated.state='done';
+    addPossession(sim,28,26*3600);
+    const preview=preparePlan(sim,command);
+    expect(preview.ok).toBe(false);
+    expect(preview.issues.some(i=>i.code==='POSSESSION'&&i.text.includes('远东大道—海天三路'))).toBe(true);
+  });
+  it('checks planned work by its run window and keeps an overdue unsurrendered block in force',()=>{
+    const sim=fixture(),p=addPossession(sim,28,26*3600);
+    p.state='planned';p.from=25*3600;
+    expect(preparePlan(sim,command).ok).toBe(false);
+    p.from=26.5*3600;p.to=27.5*3600;
+    expect(preparePlan(sim,command).ok).toBe(true);
+    p.from=24*3600;p.to=25*3600;p.state='active';sim.t=26*3600;
+    const preview=preparePlan(sim,{...command,time:sim.t+15*60});
+    expect(preview.ok).toBe(false);expect(preview.issues.some(i=>i.code==='POSSESSION')).toBe(true);
+  });
+});
 
 const fmtIssues = (xs: { code: string; text: string }[]) => xs.map((i) => `${i.code} ${i.text}`).join('\n');
 
@@ -29,7 +86,7 @@ describe('daily depot homes', () => {
       expect(events.map(e=>[e.depot,e.delta])).toEqual([[b.start.kind==='depot'?b.start.depot:-1,-1],[1,1]]);
       expect(storageOccupancy(sim.topo,plan).some(o=>o.block===b.id)).toBe(false);
     });
-    it(`${dayType}: closes every yard and carries the last passengers to its entry`, () => {
+    it(`${dayType}: closes every yard with direct returns or a required through working`, () => {
       const ledger = depotLedger(sim.topo, sim.plan);
       expect(ledger.initial).toEqual(sim.depotStock);
       expect(ledger.final).toEqual(ledger.initial);
@@ -40,9 +97,23 @@ describe('daily depot homes', () => {
         if (!last) continue; // dedicated hot spares only position and return
         const depot = sim.topo.depots[block.end.depot];
         const home = OPERATIONS.depotReturns.find(rule => rule.depot === depot.key)!;
-        expect([last.dir, STATIONS[last.to].id], `block ${block.svc}`).toEqual([home.dir, home.station]);
+        if (STATIONS[last.to].id === home.service?.terminal) {
+          expect(last.dir).toBe(home.dir);
+          const tail = block.trips.slice(block.trips.indexOf(last.id) + 1).map(id => sim.plan.trips[id]);
+          expect(tail.length, `block ${block.svc} must physically return from the terminal`).toBeGreaterThan(0);
+          expect(tail.every(t => !t.revenue && t.from === last.to && STATIONS[t.to].id === home.station && t.dir !== last.dir)).toBe(true);
+          expect(blockTasks(sim.topo, sim.plan, block).some(task => task.k === 'depot' && task.depot === depot.id)).toBe(true);
+        } else expect([last.dir, STATIONS[last.to].id], `block ${block.svc}`).toEqual([home.dir, home.station]);
       }
-      expect(sim.plan.trips.filter(t => !t.cancelled && !t.revenue && t.from === 30 && t.to === 28)).toHaveLength(0);
+      const home = OPERATIONS.depotReturns.find(rule => rule.service)!;
+      const yard = sim.topo.depots.find(d => d.key === home.depot)!;
+      const retired = sim.plan.blocks.filter(block => block.end.kind === 'depot' && block.end.depot === yard.id);
+      const via = retired.filter(block => {
+        const last = block.trips.map(id => sim.plan.trips[id]).filter(t => t.revenue && !t.cancelled).at(-1);
+        return last && STATIONS[last.to].id === home.service!.terminal;
+      });
+      expect(via.length).toBeGreaterThan(0);
+      expect(via.length).toBeLessThan(retired.length / 2);
       expect(validatePlan(sim.planCtx, sim.plan).filter(issue => issue.severity === 'error')).toEqual([]);
       expect(sim.plan.fleetPeak).toBeLessThanOrEqual(86);
     });
@@ -65,6 +136,27 @@ describe('daily depot homes', () => {
       expect(issues.some(issue => issue.code === 'YARD_BALANCE')).toBe(false);
     });
   }
+  it('keeps the airport service running through withdrawal without adding passenger departures', () => {
+    const sim = new Sim({ dayType: 'weekday', dateLabel: 'withdrawal coverage', startTime: 14400, seed: 1 });
+    const airport = sim.topo.stations.find(st => st.id === 'PDA')!.index;
+    const calls = sim.plan.trips.filter(t => t.revenue && !t.cancelled && t.dir === 'DN' && t.to === airport)
+      .map(t => t.stops.at(-1)!.arr).filter(at => at >= 22 * 3600).sort((a,b) => a-b);
+    expect(calls.length).toBeGreaterThan(8);
+    expect(Math.max(...calls.slice(1).map((at,i) => at-calls[i]))).toBeLessThan(16 * 60);
+    // The data rule adds no passenger departures. Core calls retain their
+    // clocks; east-only depot feeders can refit to the shared-lead windows.
+    const rule = OPERATIONS.depotReturns.find(rule => rule.service)!;
+    const saved = rule.service;
+    try {
+      delete rule.service;
+      const direct = new Sim({ dayType: 'weekday', dateLabel: 'direct withdrawal', startTime: 14400, seed: 1 });
+      const signature = (sim: Sim) => sim.plan.trips.filter(t => t.revenue && !t.cancelled).map(t => [t.dir,t.from,
+        t.stops.filter(stop => stop.st <= sim.topo.stations.find(st => st.id === 'GLL')!.index)
+          .map(stop => [stop.st,stop.arr,stop.dep])]);
+      expect(signature(sim)).toEqual(signature(direct));
+      expect(direct.plan.trips.filter(t => !t.revenue && t.from === airport && t.to === sim.topo.depots.find(d => d.key === rule.depot)!.station)).toHaveLength(0);
+    } finally { rule.service = saved; }
+  });
 });
 
 describe('shared depot lead turnbacks', () => {

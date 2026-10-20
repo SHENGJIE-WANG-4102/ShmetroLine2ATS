@@ -13,6 +13,9 @@ import type { Topology, TLink } from '../sim/topology';
 import type { TrainSnap } from '../sim/model';
 import { LINE_INFO } from '../data/line2';
 
+/** Schematic units before camera zoom; shared by platforms and train symbols. */
+export const PLATFORM_WIDTH = 72;
+
 export interface P { row: number; x: number; y: number }
 
 export interface GeomParams {
@@ -61,6 +64,7 @@ export class Geometry {
     this.width = p.width;
     this.height = p.top + p.rows * p.rowH;
     this.buildX();
+    this.reserveTrainSpace();
     this.placeNodes();
   }
 
@@ -261,7 +265,24 @@ export class Geometry {
     const b = this.pos[l.b];
     if (!a || !b) return null;
     const t = Math.min(1, Math.max(0, off / l.len));
-    if (a.row === b.row) return { row: a.row, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    if (a.row === b.row) {
+      let x = a.x + (b.x - a.x) * t;
+      const platform = topo.platforms[l.platform];
+      if (platform) {
+        // Both train ends and track objects share the platform's fixed-width map.
+        const centre = this.chainX(topo.stations[platform.station].chain, a.row);
+        const sign = Math.sign(b.x - a.x);
+        const from = (l.len - LINE_INFO.platformLength) / 2;
+        const to = (l.len + LINE_INFO.platformLength) / 2;
+        const left = centre - sign * this.platformWidth() / 2;
+        const right = centre + sign * this.platformWidth() / 2;
+        const offset = t * l.len;
+        if (offset < from) x = a.x + (left - a.x) * offset / from;
+        else if (offset <= to) x = left + (right - left) * (offset - from) / LINE_INFO.platformLength;
+        else x = right + (b.x - right) * (offset - to) / (l.len - to);
+      }
+      return { row: a.row, x, y: a.y + (b.y - a.y) * t };
+    }
     const ch = l.chainA + (l.chainB - l.chainA) * t;
     const row = this.chainRow(ch);
     return { row, x: this.chainX(ch, row), y: this.rows[row].top + (a.y - this.rows[a.row].top) };
@@ -294,61 +315,64 @@ export class Geometry {
     return out;
   }
 
-  private drawnTrain?: number;
-  /** Drawn train length (world units): the shortest drawn platform in this
-   * drawing scaled by train / platform length. One value for every train, and a
-   * train standing at any platform stays inside it. The schematic is not to
-   * scale, so the symbol is sized against the platforms, not the real metres. */
-  trainLength(): number {
-    if (this.drawnTrain === undefined) {
-      const half = LINE_INFO.platformLength / 2;
-      const lens = this.topo.stations
-        .filter((s) => s.chain >= this.p.chainFrom && s.chain <= this.p.chainTo && this.pos[this.topo.links[this.topo.platforms[s.platforms.DN].link].a])
-        .map((s) => { const r = this.chainRow(s.chain); return this.chainX(s.chain + half, r) - this.chainX(s.chain - half, r); });
-      this.drawnTrain = (lens.length ? Math.min(...lens) : 0) * LINE_INFO.trainLength / LINE_INFO.platformLength;
-    }
-    return this.drawnTrain;
+  platformWidth(): number { return PLATFORM_WIDTH; }
+  /** One symbol length throughout this drawing, including intervals and depot leads. */
+  platformTrainLength(): number { return this.platformWidth() * LINE_INFO.trainLength / LINE_INFO.platformLength; }
+
+  trainHeadPoint(tr:Pick<TrainSnap,'link'|'off'|'dir'>):P|null {
+    return this.linkPoint(tr.link, tr.off);
   }
 
-  /** Fixed-length symbol traced backwards from the head: first over the body's
-   * own links, beyond the physical tail over the track behind it as the
-   * switches lie. Each piece carries its section: the display occupancy is
-   * taken from the symbol, the interlocking keeps the real body. */
-  trainBody(tr: Pick<TrainSnap, 'link' | 'off' | 'dir' | 'body' | 'v'>, length: number, swPos: (sw: number) => 'N' | 'R') {
-    const out: { x1: number; y1: number; x2: number; y2: number; section: number }[] = [];
-    let link = tr.link, off = tr.off, dir = tr.dir, remaining = length;
-    // A train standing at a stabling berth (siding, turnback, storage) is centred
-    // on its footprint. Not at a platform: the head at the stopping point already
-    // keeps the symbol inside the shortest platform, and recentring there made it
-    // jump back each time a train stopped.
-    if (tr.v < .05 && tr.body.length === 3
-      && this.topo.berths.some(b => b.link === link && b.kind !== 'platform' && Math.abs(b.offset-off) < 5)) {
-      const segments = this.linkSegs(link);
-      if (segments.length === 1) {
-        const s = segments[0], scale = Math.hypot(s.x2-s.x1,s.y2-s.y1)/this.topo.links[link].len;
-        if (scale > 0) off = Math.min(this.topo.links[link].len, Math.max(0, (tr.body[1]+tr.body[2])/2 + dir*length/(2*scale)));
-      }
+  /** Stretch the schematic mapping, never the physical topology. Every span
+   * containing a full train gets enough drawing room, including depot leads. */
+  private reserveTrainSpace() {
+    const spans = this.topo.stations.flatMap(s=>[
+      {a:s.chain-LINE_INFO.platformLength/2,b:s.chain,w:this.platformWidth()/2+4},
+      {a:s.chain,b:s.chain+LINE_INFO.platformLength/2,w:this.platformWidth()/2+4},
+    ]);
+    for (const berth of this.topo.berths) {
+      if (berth.kind === 'depot') continue;
+      const l=this.topo.links[berth.link];
+      spans.push({a:Math.min(l.chainA,l.chainB),b:Math.max(l.chainA,l.chainB),w:this.platformTrainLength()*l.len/LINE_INFO.trainLength+8});
     }
+    for (let row=0;row<this.maps.length;row++) {
+      const map=this.maps[row], rd=this.rows[row];
+      const relevant=spans.filter(s=>s.b>s.a && s.a>=rd.from && s.b<=rd.to);
+      const points=[...new Set([...map.pts,...relevant.flatMap(s=>[s.a,s.b])])].sort((a,b)=>a-b);
+      const xs=points.map(c=>this.chainX(c,row));
+      map.pts=points;map.xs=xs;
+      for (const span of relevant.sort((a,b)=>(a.b-a.a)-(b.b-b.a))) {
+        const a=points.indexOf(span.a),b=points.indexOf(span.b),extra=span.w-(xs[b]-xs[a]);
+        if(extra<=0)continue;
+        for(let i=a+1;i<xs.length;i++) xs[i]+=extra*Math.min(1,(points[i]-span.a)/(span.b-span.a));
+      }
+      rd.x1=xs.at(-1)!;
+      this.width=Math.max(this.width,rd.x1+this.p.marginR);
+    }
+  }
+
+  /** Fixed-length train symbol. Track occupation comes from the simulation,
+   * never from the links this enlarged or shortened symbol happens to cover. */
+  trainBody(tr: Pick<TrainSnap, 'link' | 'off' | 'dir' | 'body'>, swPos: (sw: number) => 'N' | 'R' = () => 'N') {
+    const out: { x1: number; y1: number; x2: number; y2: number; section: number }[] = [];
+    let link = tr.link, off = tr.off, dir = tr.dir, remaining = this.platformTrainLength();
     const visited = new Set<number>();
     for (let i = 0; i < 100 && remaining > .001; i++) {
       if (visited.has(link)) break;
       visited.add(link);
       const l = this.topo.links[link], end = dir === 1 ? 0 : l.len;
-      let segments = this.linkSpan(link, Math.min(off,end), Math.max(off,end));
-      if (dir === 1) segments = segments.reverse().map(s => ({x1:s.x2,y1:s.y2,x2:s.x1,y2:s.y1}));
+      const segments = this.directedLinkSpan(link, Math.min(off, end), Math.max(off, end), dir);
       for (const s of segments) {
         const distance = Math.hypot(s.x2-s.x1,s.y2-s.y1);
         if (distance < .001) continue;
-        const f = Math.min(1,remaining/distance);
+        const f = Math.min(1, remaining / distance);
         out.push({x1:s.x1,y1:s.y1,x2:s.x1+(s.x2-s.x1)*f,y2:s.y1+(s.y2-s.y1)*f,section:l.section});
-        remaining -= distance*f;
+        remaining -= distance * f;
         if (remaining < .001) break;
       }
       const node = dir === 1 ? l.a : l.b;
       const bodyNext = tr.body[(i+1)*3];
       const n = this.topo.nodes[node];
-      // behind the tail: a switch is left by its toe from either leg, and from
-      // the toe by the leg it lies in (a position, not a route check)
       const next = bodyNext !== undefined && n.links.includes(bodyNext) ? bodyNext
         : n.kind === 'end' ? undefined
           : n.kind === 'joint' ? n.links.find(id => id !== link)
@@ -357,6 +381,32 @@ export class Geometry {
       link = next;
       dir = this.topo.links[link].b === node ? 1 : -1;
       off = dir === 1 ? this.topo.links[link].len : 0;
+    }
+    // A diagram/window boundary must not shorten the symbol either. Continue
+    // its tail in the last drawing direction; this never adds track occupation.
+    if (remaining > .001 && out.length) {
+      const tail = out[out.length - 1];
+      const distance = Math.hypot(tail.x2 - tail.x1, tail.y2 - tail.y1);
+      tail.x2 += (tail.x2 - tail.x1) / distance * remaining;
+      tail.y2 += (tail.y2 - tail.y1) / distance * remaining;
+    }
+    return out;
+  }
+
+  private directedLinkSpan(link:number,from:number,to:number,dir:1|-1) {
+    const segments=this.linkSpan(link,from,to);
+    return dir===1?segments.reverse().map(s=>({x1:s.x2,y1:s.y2,x2:s.x1,y2:s.y1})):segments;
+  }
+
+  /** Actual occupied track, independent of the fixed-length train symbol. */
+  trainOccupiedPath(tr:Pick<TrainSnap,'dir'|'body'>) {
+    const out:{x1:number;y1:number;x2:number;y2:number;section:number;link:number}[]=[];
+    let dir=tr.dir,tailNode=-1;
+    for(let i=0;i+2<tr.body.length;i+=3) {
+      const link=tr.body[i],from=tr.body[i+1],to=tr.body[i+2],l=this.topo.links[link];
+      if(i)dir=l.b===tailNode?1:-1;
+      if(to>from)for(const segment of this.directedLinkSpan(link,from,to,dir))out.push({...segment,link,section:l.section});
+      tailNode=dir===1?l.a:l.b;
     }
     return out;
   }

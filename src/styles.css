@@ -476,6 +476,8 @@ tr.recovered td.txt { color: var(--ok); }
 .tooltip .tt { font: 600 26px var(--font-mono); color: #fff; margin-bottom: 4px; }
 .tooltip .row { display: flex; justify-content: space-between; gap: 22px; }
 .tooltip .row span:first-child { color: var(--text-dim); }
+.tooltip.train-group { pointer-events: auto !important; }
+.tooltip .group-train { display: block; width: 100%; text-align: left; margin-top: 4px; }
 
 /* ------------------------------------------------------------ graph controls */
 .graph-ctl { position: absolute; display: flex; gap: 10px; align-items: center; z-index: 5; padding: 0 12px; height: 56px; overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: none; }
@@ -508,3 +510,17 @@ tr.recovered td.txt { color: var(--ok); }
 .legend-pop i { display: inline-block; width: 44px; height: 8px; border-radius: 2px; }
 .legend-pop b { display: inline-block; width: 18px; height: 18px; border-radius: 50%; }
 .legend-pop .h { grid-column: 1 / -1; color: #fff; font-size: 24px; border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-top: 6px; }
+
+.instructor-picker { max-height: 280px; overflow: auto; border: 1px solid var(--border, #27394c); padding: 10px; }
+.instructor-picker fieldset { border: 0; margin: 8px 0; padding: 0; }
+.instructor-picker legend { color: #8cc220; margin-bottom: 5px; }
+.instructor-picker label { display: inline-flex; align-items: center; gap: 7px; width: 48%; margin: 5px 1%; vertical-align: top; }
+.event-actions { display: flex; gap: 8px; }
+
+.desktop .day-setup { width: min(1280px, 92vw); border-radius: 16px; box-shadow: 0 24px 100px #0009; }
+.desktop .day-setup .modal-h { border-bottom: 1px solid #304056; padding: 26px 32px; font-size: 32px; }
+.desktop .day-setup .modal-b { padding: 22px 32px; max-height: 70vh; overflow: auto; }
+.desktop .day-setup .modal-f { padding: 20px 32px; }
+.desktop .day-setup .primary { min-width: 160px; border-radius: 7px; }
+.desktop .progress-veil { background: #05080cf2; color: #c6d2de; flex-direction: column; gap: 20px; }
+.desktop .progress-veil::before { content: ''; background: url('./ui/assets/metro-logo.png') center / contain no-repeat; width: 76px; height: 76px; }

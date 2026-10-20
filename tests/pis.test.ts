@@ -13,7 +13,7 @@ const train = (destination: string, eta = 36, status: PisRow['status'] = 'eta'):
 
 describe('PIS countdown', () => {
   it('keeps an absent train distinct from a distant train', () => {
-    expect(formatPisCountdown(undefined)).toBe('--:--');
+    expect(formatPisCountdown(undefined)).toBe('00:00');
     expect(formatPisCountdown(train('PDA', 4392))).toBe('预计大于1小时');
     expect(formatPisCountdown(train('PDA', 6000))).toBe('预计大于1小时');
   });
@@ -142,6 +142,12 @@ describe('PIS actual task destination', () => {
     } as unknown as Sim;
     expect(formatPisCountdown(computePis(sim,station).DN[0])).toBe('07:00');
     expect(computePis(sim,station).UP[0].destSt).toBe(station);
+    // The car has already left the origin of this trip: later stops of the
+    // same active trip must not resurrect an overdue zero-countdown row.
+    sim.t=departure+180;
+    sim.trainList[0].tasks=sim.trainList[0].tasks.filter(t=>t.k!=='stop'||t.trip!==1||t.station!==station);
+    sim.trainList[0].tasks.push({...task,station:1} as Sim['trainList'][number]['tasks'][number]);
+    expect(computePis(sim,station).DN).toEqual([]);
     sim.trainList=[];
     expect(computePis(sim,station).DN).toEqual([]);
   });

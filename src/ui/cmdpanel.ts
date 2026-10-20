@@ -66,7 +66,7 @@ export class CommandPanel {
     if (sys && snap) key += `|${snap.zones.join(',')}`;
     if (sel?.kind === 'train' && snap) {
       const t = snap.trains.find((x) => x.id === sel.id);
-      key += `|${t ? `${t.manual}${t.mode}${t.failed}${t.hold}${this.hooks.following() === t.id}` : 'gone'}`;
+      key += `|${t ? `${t.manual}${t.mode}${t.failed}${t.hold}${t.halt?.code === 'INTERVAL_LIMIT'}${this.hooks.following() === t.id}` : 'gone'}`;
     }
     if (sel && (sel.kind === 'switch' || sel.kind === 'section' || sel.kind === 'platform' || sel.kind === 'signal') && snap) {
       const arr = sel.kind === 'switch' ? snap.switches : sel.kind === 'section' ? snap.sections : sel.kind === 'platform' ? snap.platforms : snap.signals;
@@ -383,9 +383,12 @@ export class CommandPanel {
     const dir = this.trainDir(t0);
     const ahead = topo.stations.filter((s) => (dir === 'DN' ? s.chain > t0.chain + 20 : s.chain < t0.chain - 20)).sort((a, b) => (dir === 'DN' ? a.chain - b.chain : b.chain - a.chain));
     const tbOpts = ahead.filter((s) => turnbackAt(topo, s.index, dir));
+    const intervalHeld = t0.halt?.code === 'INTERVAL_LIMIT';
+    const release = t0.hold || intervalHeld;
     this.el.append(h('div', { class: 'sect-title' }, '调度命令'));
     this.el.append(h('div', { class: 'cmdgrid' },
-      this.btn(t0.hold ? '放行' : '扣车', { title: `${t0.hold ? '放行' : '扣车'} 列车 ${t0.svc}-${t0.trip}`, cmd: { c: 'trainHold', train: id, on: !t0.hold } }),
+      this.btn(release ? '放行' : '扣车', { title: `${release ? '放行' : '扣车'} 列车 ${t0.svc}-${t0.trip}`, cmd: { c: 'trainHold', train: id, on: !release },
+        detail: intervalHeld ? '仅放行本站这一次区间限车，仍须信号开放并满足ATP防护。' : undefined }),
       this.btn('恢复接续', { title: `列车 ${t0.svc}-${t0.trip} 故障恢复接续`, cmd: { c: 'recoverService', train: id }, detail: '仅在已完成车次的终点停站办理。取消已错过的完整往返车次，按原图接续同一终点的近期始发；无近期接续则保留计划，须另行人工调整。已完成车次和历史晚点保留。' }),
       this.btn('退出服务', { title: `列车 ${t0.svc}-${t0.trip} 退出服务，清客回段`, cmd: { c: 'withdraw', train: id }, detail: '列车在前方站清客后回最近车辆段/停车场，剩余计划车次取消。' }),
       this.btn('备车接替', { title: `为列车 ${t0.svc}-${t0.trip} 投入热备/备车`, cmd: { c: 'standby', train: id }, detail: '列车晚点、后续车次将晚发时：优先由终点站热备车接替其在该站的始发车次（提前2–3分钟通知），本车到达后转为热备；无热备可用时由车辆段备车出段接替，本车跑完保留车次后回段。' }),

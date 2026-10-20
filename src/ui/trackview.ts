@@ -16,7 +16,7 @@ import { STATIONS, LINE_INFO } from '../data/line2';
 import type { Store, Selection } from './store';
 import { C, FONT_CN, FONT_MONO, delayColor, loadColor } from './theme';
 import { Geometry, type P } from './geometry';
-import { LabelIndex, textWidth, type Rect } from './labels';
+import { placeTrainWindows, trainWindowWidth, LabelIndex, textWidth, type Rect } from './labels';
 
 const LINE_COLORS: Record<string, number> = {
   '1': 0xe3002b, '2': 0x8cc220, '3': 0xfcd600, '4': 0x461d84, '6': 0xd40068, '7': 0xed6f00, '8': 0x0094d8,
@@ -116,6 +116,8 @@ export class TrackView {
   private bgL = new Container();
   private platL = new Container();
   private trackL = new Container();
+  private occupiedG = new Graphics();
+  private occupiedKey = '';
   private ovL = new Container();
   private swL = new Container();
   private sigL = new Container();
@@ -138,6 +140,7 @@ export class TrackView {
   private statics: StaticLabel[] = [];
   private dynTexts: Text[] = [];
   private dynUsed = 0;
+  private groupBoxes: { box: Container; bg: Graphics; label: Text; ids: number[] }[] = [];
   private index = new LabelIndex(128);
   private staticRects: { r: Rect; tag: string }[] = [];
   private obstacles: Rect[] = [];
@@ -174,7 +177,7 @@ export class TrackView {
       upY: p.upY, midY: p.midY, dnY: p.dnY, lane: 40, laneGap: 4, lanes: this.mode === 'detail' ? 3 : 3,
       nameY: this.mode === 'detail' ? p.dnY + 230 : p.dnY + 150, rowH: p.rowH,
     };
-    this.world.addChild(this.bgL, this.platL, this.trackL, this.ovL, this.swL, this.sigL, this.yardL, this.bodyL, this.selL, this.preview, this.pending);
+    this.world.addChild(this.bgL, this.platL, this.trackL, this.occupiedG, this.ovL, this.swL, this.sigL, this.yardL, this.bodyL, this.selL, this.preview, this.pending);
     this.labelLayer.addChild(this.leaderG);
     this.root.addChild(this.world, this.labelLayer, this.maskG);
     this.root.mask = this.maskG;
@@ -272,7 +275,7 @@ export class TrackView {
 
   /** world point of a train head (for following / locating) */
   trainPoint(tr: TrainSnap): P | null {
-    return this.geom.linkPoint(tr.link, tr.off);
+    return this.geom.trainHeadPoint(tr);
   }
 
   // ---------------------------------------------------------------- build
@@ -343,8 +346,8 @@ export class TrackView {
       if (!a) { this.platGfx.push(null); continue; }
       const row = geom.chainRow(st.chain);
       const top = geom.rows[row].top;
-      const x0 = geom.chainX(st.chain - LINE_INFO.platformLength / 2, row);
-      const x1 = geom.chainX(st.chain + LINE_INFO.platformLength / 2, row);
+      const x0 = geom.chainX(st.chain, row) - geom.platformWidth() / 2;
+      const x1 = x0 + geom.platformWidth();
       const up = p.track === 'UP';
       let y0 = up ? top + L.upY + 9 : top + L.midY + 5;
       let y1 = up ? top + L.midY - 5 : top + L.dnY - 9;
@@ -755,8 +758,9 @@ export class TrackView {
     const detail = this.mode === 'detail';
     const { topo } = this;
 
-    // train symbols first: the section display occupancy follows them
-    const symbolOcc = this.updateTrainBodies(snap);
+    // Symbols stay the same length; the grey occupied sections use real detection.
+    this.updateTrainBodies(snap);
+    const occupied=this.updateTrainOccupation(snap);
 
     // sections
     for (let i = 0; i < this.sectionG.length; i++) {
@@ -764,7 +768,8 @@ export class TrackView {
       let c: number;
       if (f & SEC.DIST) c = this.blink ? C.disturbed : 0x6a1a1a;
       else if (f & SEC.PRESET) c = blinkSlow ? C.preset : 0x6a5a00;
-      else if (symbolOcc.has(i)) c = symbolOcc.get(i) ? C.occComm : C.occAxle;
+      else if (f & SEC.OCC && !(f & SEC.COMM)) c = C.occAxle;
+      else if (f & SEC.OCC && !occupied.has(i)) c = C.occComm;
       else if (f & SEC.GUIDE) c = C.routeGuide;
       else if (f & SEC.LOCK) c = f & SEC.ROUTEFLEET ? C.routeAuto : C.routeSet;
       else c = this.sectionMain[i] ? C.trackFree : C.trackFreeSide;
@@ -920,13 +925,28 @@ export class TrackView {
     return C.trainCbtc;
   }
 
-  /** Draw the fixed-length train symbols. Returns the sections they cover
-   * (true: only communicating CBTC trains), shown as occupied in place of the
-   * real train occupancy; signals and interlocking still use the real body. */
-  private updateTrainBodies(snap: Snapshot): Map<number, boolean> {
-    const occ = new Map<number, boolean>();
+  /** Draw fixed-length symbols independently of the grey occupied sections. */
+  private updateTrainOccupation(snap:Snapshot):Set<number> {
+    const paths=snap.trains.filter(t=>t.comm&&t.level==='CBTC').flatMap(t=>this.geom.trainOccupiedPath(t));
+    const occupied=new Set(paths.map(s=>s.section));
+    const key=`${this.z}|${paths.map(s=>`${s.x1.toFixed(2)},${s.y1.toFixed(2)},${s.x2.toFixed(2)},${s.y2.toFixed(2)},${snap.sections[s.section]}`).join(';')}`;
+    if(key!==this.occupiedKey) {
+      this.occupiedKey=key;this.occupiedG.clear();
+      for(const s of paths) {
+        const f=snap.sections[s.section];
+        if(!(f&SEC.OCC)||!(f&SEC.COMM)||(f&(SEC.DIST|SEC.PRESET)))continue;
+        this.occupiedG.moveTo(s.x1,s.y1).lineTo(s.x2,s.y2);
+      }
+      // Keep the grey occupation visible around the constant-size symbol.
+      const width=Math.max(this.mode==='detail'?9:7,((this.mode==='detail'?13:10)+8)/this.z);
+      this.occupiedG.stroke({width,color:C.occComm,cap:'butt',join:'round'});
+    }
+    return occupied;
+  }
+
+  /** Draw the train symbol without using it as an occupation measurement. */
+  private updateTrainBodies(snap: Snapshot) {
     const swPos = (sw: number) => (snap.switches[sw] & SW.R ? 'R' : 'N') as 'N' | 'R';
-    const length = this.geom.trainLength();
     const seen = new Set<number>();
     const w = this.mode === 'detail' ? 13 : 10;
     for (const tr of snap.trains) {
@@ -935,9 +955,7 @@ export class TrackView {
       if (!tg) tg = this.createTrain(tr);
       const color = this.bodyColor(tr);
       const sel = this.store.selection?.kind === 'train' && this.store.selection.id === tr.id;
-      const segs = this.geom.trainBody(tr, length, swPos);
-      const comm = tr.level === 'CBTC' && tr.comm;
-      for (const s of segs) occ.set(s.section, (occ.get(s.section) ?? true) && comm);
+      const segs = this.geom.trainBody(tr, swPos);
       const bodyKey = `${segs.map(s => `${s.x1.toFixed(1)},${s.y1.toFixed(1)},${s.x2.toFixed(1)},${s.y2.toFixed(1)}`).join(';')}|${this.z}|${color}|${sel}`;
       if (bodyKey !== tg.bodyKey) {
         tg.bodyKey = bodyKey;
@@ -963,7 +981,6 @@ export class TrackView {
         this.trains.delete(id);
       }
     }
-    return occ;
   }
 
   private createTrain(tr: TrainSnap): TrainGfx {
@@ -1054,8 +1071,31 @@ export class TrackView {
       if (!t.inService) p -= 50;
       return p;
     };
-    const list = snap.trains.slice().sort((a, b) => prio(b) - prio(a));
-    for (const tr of list) this.placeTrainWindow(tr, idx, leaders);
+    const list = snap.trains.slice().sort((a, b) => (geom.linkPoint(a.link,a.off)?.x??0)-(geom.linkPoint(b.link,b.off)?.x??0)||prio(b)-prio(a));
+    for (const tg of this.trains.values()) tg.box.visible = false;
+    const prepared = list.flatMap(tr => { const p = this.prepareTrainWindow(tr); return p ? [p] : []; });
+    const bands = new Map<string, { band: Rect; inputs: typeof prepared }>();
+    for (const input of prepared) {
+      const key = `${input.row}/${input.side}`;
+      if (!bands.has(key)) bands.set(key, { band: this.trainWindowBand(input.row, input.side), inputs: [] });
+      bands.get(key)!.inputs.push(input);
+    }
+    let groupUsed = 0;
+    for (const { band, inputs } of bands.values()) {
+      for (const p of placeTrainWindows(inputs, band, idx.placed.map(o => o.r))) {
+        if (p.text) {
+          this.drawTrainGroup(groupUsed++, p.ids, p.text, p.r);
+          idx.add(p.r, `train-group:${p.ids.join(',')}`);
+        } else {
+          const data = inputs.find(t => t.id === p.ids[0])!, tg = this.trains.get(data.id)!;
+          tg.box.visible = true;
+          this.drawWindow(tg, data.tr, `${data.tr.svc}-${data.tr.trip}`, data.chips, p.r, data.status, data.right);
+          idx.add(p.r, `train:${data.tr.svc}-${data.tr.trip}`);
+        }
+        leaders.moveTo(p.leader.x1,p.leader.y1).lineTo(p.leader.x2,p.leader.y2).stroke({width:1.5,color:0x5d7086,alpha:.9});
+      }
+    }
+    for (let i = groupUsed; i < this.groupBoxes.length; i++) this.groupBoxes[i].box.visible = false;
     for (let i = this.dynUsed; i < this.dynTexts.length; i++) this.dynTexts[i].visible = false;
   }
 
@@ -1074,12 +1114,46 @@ export class TrackView {
     return t;
   }
 
-  private placeTrainWindow(tr: TrainSnap, idx: LabelIndex, leaders: Graphics) {
+  private trainWindowBand(row: number, side: 1|-1): Rect {
+    const rd = this.geom.rows[row], z = this.z;
+    const top = rd.top * z, bottom = (rd.top + this.L.rowH) * z;
+    let from = side < 0 ? top + 8 : (rd.top + this.L.dnY) * z + 14;
+    let to = side < 0 ? (rd.top + this.L.upY) * z - 10 : bottom - 8;
+    const names = this.staticRects.filter(o => o.tag.startsWith('station:') && o.r.y >= top && o.r.y < bottom);
+    if (side < 0) for (const { r } of names) if (r.y < to) from = Math.max(from, r.y + r.h + 8);
+    if (side > 0) for (const { r } of names) if (r.y > (rd.top + this.L.dnY) * z) to = Math.min(to, r.y - 8);
+    // Labels are unscaled. Keep a full-height band even at overview zoom.
+    from = Math.max(top + 4, Math.min(from, to - 40));
+    from = Math.max(from, this.panY + 2); to = Math.min(to, this.panY + this.vh - 2);
+    const x = Math.max(2, this.panX + 2);
+    return { x, y: from, w: Math.max(0, Math.min(this.geom.width * z - 2, this.panX + this.vw - 2) - x), h: Math.max(0, to - from) };
+  }
+
+  private drawTrainGroup(index: number, ids: number[], text: string, r: Rect) {
+    let group = this.groupBoxes[index];
+    if (!group) {
+      const box = new Container(), bg = new Graphics();
+      const label = this.mkText('', 24, C.slightLate, { bold: true });
+      group = { box, bg, label, ids }; this.groupBoxes.push(group);
+      box.addChild(bg, label); this.labelLayer.addChild(box);
+      box.eventMode = 'static'; box.cursor = 'pointer';
+      const target = group;
+      box.on('pointerover', () => this.store.showTrainGroup(target.ids));
+      box.on('pointerout', () => this.store.showTrainGroup(null));
+      box.on('pointertap', (e: FederatedPointerEvent) => { e.stopPropagation(); if (!this.dragMoved) this.store.showTrainGroup(target.ids, true); });
+      this.store.emit('textsChanged');
+    }
+    group.ids = ids; group.box.visible = true; group.box.position.set(r.x, r.y);
+    group.label.text = text; group.label.position.set(12, 4);
+    group.bg.clear().roundRect(1, 1, r.w - 2, r.h - 2, 4).fill({color:C.trainBoxFill,alpha:.97}).stroke({width:2,color:C.slightLate});
+  }
+
+  private prepareTrainWindow(tr: TrainSnap) {
     const tg = this.trains.get(tr.id)!;
     const { topo, geom } = this;
     const z = this.z;
-    const head = geom.linkPoint(tr.link, tr.off);
-    if (!head) { tg.box.visible = false; return; }
+    const head = geom.trainHeadPoint(tr);
+    if (!head || head.x*z < this.panX - 200 || head.x*z > this.panX + this.vw + 200) return;
     const l = topo.links[tr.link];
     const a = geom.pos[l.a]!;
     const b = geom.pos[l.b]!;
@@ -1089,8 +1163,6 @@ export class TrackView {
     if (l.track === 'DN') side = 1;
     else if (l.track === 'UP') side = -1;
     else if (l.track === 'DEP') side = -1;
-    const rowTop = geom.rows[head.row].top;
-    const trackY = (rowTop + (side > 0 ? this.L.dnY : this.L.upY)) * z;
     // texts
     const full = `${tr.svc}-${tr.trip}`;
     let chips = '';
@@ -1103,34 +1175,11 @@ export class TrackView {
     if (tr.hold) chips += '扣';
     if (tr.hot) chips += '热备';
     if (tr.inService && tr.delay > 120) chips += `+${Math.floor(tr.delay / 60)}'`;
-    const H = 40;
-    const chipW = chips ? textWidth(chips, 24) + 10 : 0;
+    tg.label.text = full;
+    tg.chips.text = chips;
+    const width = trainWindowWidth(tg.label.width, chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
-    const hx = head.x * z;
-    const hy = head.y * z;
-    const tryForm = (text: string, mono: number): Rect | null => {
-      const w = mono * 18 + 16 + chipW + ARROW;
-      const x0 = right ? hx - w : hx;
-      const cands: Rect[] = [];
-      for (let k = 0; k < this.L.lanes; k++) {
-        const y = side > 0 ? trackY + 14 + k * (H + 4) : trackY - 14 - H - k * (H + 4);
-        for (const dx of [0, right ? -w * 0.5 : w * 0.5, right ? w * 0.4 : -w * 0.4, right ? -w : w, right ? w : -w]) cands.push({ x: x0 + dx, y, w, h: H });
-      }
-      // keep windows inside the drawing (trains near the line ends would be clipped)
-      const maxX = geom.width * z - w - 14;
-      for (const c of cands) c.x = Math.max(14, Math.min(maxX, c.x));
-      const r = idx.tryPlace(cands, `train:${text}`, 3);
-      if (r) this.drawWindow(tg, tr, text, chips, r, status, right);
-      return r;
-    };
-    let r = tryForm(full, full.length);
-    if (!r) r = tryForm(tr.trip, tr.trip.length);
-    if (!r) { tg.box.visible = false; return; }
-    tg.box.visible = true;
-    // leader from the head to the window
-    const ex = Math.max(r.x + 4, Math.min(r.x + r.w - 4, hx));
-    const ey = side > 0 ? r.y : r.y + r.h;
-    leaders.moveTo(hx, hy).lineTo(ex, ey).stroke({ width: 1.5, color: 0x5d7086, alpha: 0.9 });
+    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.delay, chips, status, right };
   }
 
   private drawWindow(tg: TrainGfx, tr: TrainSnap, text: string, chips: string, r: Rect, status: number, right: boolean) {
@@ -1148,7 +1197,7 @@ export class TrackView {
     const bx = right ? 0 : ARROW;
     const bw = r.w - ARROW;
     tg.label.position.set(bx + 8, r.h / 2);
-    tg.chips.position.set(bx + 8 + text.length * 18 + 6, r.h / 2);
+    tg.chips.position.set(bx + 8 + tg.label.width + 6, r.h / 2);
     tg.chips.style.fill = tr.failed || tr.eb || !tr.comm ? C.fault : tr.manual ? C.trainManual : tr.hold ? C.platformHold : status;
     const g = tg.bg;
     g.clear();

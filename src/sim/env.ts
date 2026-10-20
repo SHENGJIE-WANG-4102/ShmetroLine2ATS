@@ -9,7 +9,7 @@ import { openCall, possReqSpec, possRelSpec } from './radio';
 import { DRY_AFTER, railWet, scatterSlick } from './adhesion';
 
 /** per section: 0 = tunnel, 1 = elevated, 2 = at grade */
-export function exposureOf(sim: Sim): Uint8Array {
+export function exposureOf(sim: Pick<Sim,'topo'>): Uint8Array {
   const out = new Uint8Array(sim.topo.sections.length);
   sim.topo.sections.forEach((s, i) => {
     const mid = (s.chainFrom + s.chainTo) / 2;

@@ -26,6 +26,20 @@ On the first start a short guided tour opens (F1 or **?** reopens it). It has si
 screen areas, basic operation, colours and symbols, following and driving a train,
 instructor/replay, and a glossary of every signalling term used on screen.
 
+## 桌面版
+
+本机需要 Rust、Visual Studio C++ 生成工具和 WebView2。只构建本地 exe，不生成安装包。
+
+```powershell
+npm install
+npm run app:build
+powershell -ExecutionPolicy Bypass -File scripts/app-shortcut.ps1
+```
+
+以后双击桌面的「2号线ATS」即可打开，先选择运营日设置，再生成运行图。
+更新后只需重新执行 `npm run app:build`，快捷方式不必重建。
+程序位于 `src-tauri/target/release/line2-ats.exe`；关闭窗口即退出。
+
 ## Screen size and UI scale
 
 The whole UI is laid out on a logical 3840×2160 canvas and scaled uniformly to the

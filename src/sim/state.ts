@@ -31,11 +31,11 @@ export interface Checkpoint {
 const CLONED = [
   'sw', 'sec', 'sig', 'plat', 'zoneState', 'routes', 'routeUnlockedSw', 'berthRes', 'depotStock', 'depotShortLogged', 'blockDone',
   'faults', 'alarms', 'noRouteLogged', 'truncatedTrips', 'yards', 'stabledPool', 'calls', 'pendingCalls', 'env', 'possessions',
-  'ridership', 'metrics', 'scenario', 'dispatcher', 'integrity', 'bookmarks', 'incidents', 'connections', 'vehicleResets', 'energy',
+  'instructorSchedule', 'instructorOccurred', 'randomSchedule', 'randomFaultVehicles', 'ridership', 'metrics', 'scenario', 'dispatcher', 'integrity', 'bookmarks', 'incidents', 'connections', 'vehicleResets', 'energy',
 ] as const;
 
 const SCALARS = [
-  'passengerScale', 'nextTrainId', 'nextFaultId', 'passengersServed', 'passengersCleared', 'passengersStranded', 'depTotal', 'depOnTime', 'tripsDone',
+  'ridershipTarget', 'instructorFired', 'dailyEvaluationEnded', 'passengerScale', 'nextTrainId', 'nextFaultId', 'passengersServed', 'passengersCleared', 'passengersStranded', 'depTotal', 'depOnTime', 'tripsDone',
   'nextCallId', 'autoRadio', 'autoDispatch', 'atoLine', 'scenarioFired', 'holidayFired', 'runLevel', 'randomLevel', 'nextRandomAt', 'nextBookmarkId', 'planRev',
 ] as const;
 
@@ -85,8 +85,8 @@ export function capture(sim: Sim): Checkpoint {
 
 export function restore(sim: Sim, cp: Checkpoint) {
   const rec = sim as unknown as Record<string, unknown>;
-  for (const k of CLONED) rec[k] = structuredClone(cp.data[k]);
-  for (const k of SCALARS) rec[k] = cp.data[k];
+  for (const k of CLONED) if (k in cp.data) rec[k] = structuredClone(cp.data[k]);
+  for (const k of SCALARS) if (k in cp.data) rec[k] = cp.data[k];
   // D74: old checkpoints used a line-wide default of 1. Missing mode means
   // migrate to diagram operation; new manual overrides retain their level.
   sim.runLevel = cp.data.runLevelMode === 'override' && [1, 2, 3].includes(Number(cp.data.runLevel))

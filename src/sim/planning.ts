@@ -1,3 +1,4 @@
+import { OPERATING_DAY } from './dayRandom';
 import type { Sim } from './engine';
 import { type Command, type Plan } from './model';
 import { addExtraTrain, applyOverlay, OVERLAY_PRESETS, validatePlan, fleetPeak, depotMoves, sortDepotMoves, type PlanIssue } from './timetable';
@@ -14,6 +15,63 @@ export interface PlanPreview {
   /** running circulations that continue into added trips (延长运用, D47):
    * their trains get the new trips after `last` when the plan is committed */
   extended?: { block: number; last: number }[];
+  warnings?: string[];
+}
+
+/** Summary errors describe the whole operating day, regardless of the clock
+ * assigned to the last depot movement. Shared by extras and standby relief. */
+export function liveIssues(sim: Sim, plan: Plan): PlanIssue[] {
+  const issues = validatePlan(sim.planCtx, plan).filter(i => i.code === 'YARD_BALANCE' || i.code === 'YARD_CAPACITY' || i.t >= sim.t - 1e-6);
+  const shortfall = yardShortfall(sim, plan);
+  if (shortfall) issues.push(shortfall);
+  return [...issues, ...possessionIssues(sim, plan)];
+}
+
+export function addedPlanErrors(sim: Sim, plan: Plan, after = liveIssues(sim, plan)): PlanIssue[] {
+  const before = liveIssues(sim, sim.plan).filter(i => i.severity === 'error');
+  return after.filter(i => i.severity === 'error' && !before.some(old => {
+    if (i.code === 'YARD_BALANCE' || i.code === 'YARD_CAPACITY')
+      return old.code === i.code && old.depot === i.depot && Math.abs(i.delta!) <= Math.abs(old.delta!);
+    return old.code === i.code && old.text === i.text;
+  }));
+}
+
+export function noWorse(sim: Sim, plan: Plan): boolean { return addedPlanErrors(sim, plan).length === 0; }
+
+/** Existing possession table is the sole source. Check the actual planned
+ * run windows, including empty moves between a yard and its portal station. */
+export function possessionIssues(sim: Sim, plan: Plan): PlanIssue[] {
+  const works = sim.possessions.filter(p => p.state !== 'done' && p.state !== 'cancelled');
+  if (!works.length) return [];
+  const issues: PlanIssue[] = [];
+  const check = (from: number, to: number, at: number, until: number, name: string, dir: string) => {
+    if (until < sim.t) return;
+    for (const p of works) {
+      const end = p.to <= sim.t && p.state !== 'planned' ? Infinity : p.to;
+      if (at >= end || until <= Math.max(sim.t, p.from)) continue;
+      if (p.sections.some(id => {
+        const section = sim.topo.sections[id];
+        return section.track === dir && section.chainFrom < Math.max(from,to) && section.chainTo > Math.min(from,to);
+      })) issues.push({ severity:'error', code:'POSSESSION', t:Math.max(at,sim.t,p.from), text:`${name} 经过施工封锁：${p.name}` });
+    }
+  };
+  for (const trip of plan.trips) if (!trip.cancelled && !trip.completed) {
+    for (let i = 1; i < trip.stops.length; i++) {
+      const a = trip.stops[i-1], b = trip.stops[i];
+      check(sim.topo.stations[a.st].chain,sim.topo.stations[b.st].chain,a.dep,b.arr,`车次 ${trip.no}`,trip.dir);
+    }
+  }
+  for (const move of depotMoves(plan.blocks,plan.trips,sim.planCtx)) {
+    if (sim.blockDone.has(move.block) || move.delta < 0 && plan.blocks[move.block].train !== undefined) continue;
+    const block = plan.blocks[move.block], trips = block.trips.map(id=>plan.trips[id]).filter(t=>!t.cancelled);
+    const trip = move.delta < 0 ? trips[0] : trips.at(-1);
+    if (!trip) continue;
+    const station = sim.topo.stations[move.delta < 0 ? trip.from : trip.to].chain;
+    const yard = sim.topo.depots[move.depot].junctionChain;
+    const from = move.delta < 0 ? yard : station, to = move.delta < 0 ? station : yard;
+    check(from,to,move.window?.[0]??move.time,move.window?.[1]??move.time,`表号 ${block.svc} 出入段`,to>from?'DN':'UP');
+  }
+  return issues;
 }
 
 /** The same pure preparation and validation is used by preview and commit. */
@@ -49,13 +107,16 @@ export function preparePlan(sim: Sim, cmd: PlanCommand): PlanPreview {
     plan.blocks.forEach((b, id) => { b.id = id; for (const trip of b.trips) plan.trips[trip].block = id; });
   }
   plan.fleetPeak = fleetPeak(plan);
-  const issues = validatePlan(sim.planCtx, plan).filter(issue => issue.t >= sim.t - 1e-6);
-  const shortfall = yardShortfall(sim, plan);
-  if (shortfall) issues.push(shortfall);
-  const errors = issues.filter(issue => issue.severity === 'error');
+  const rawIssues = liveIssues(sim, plan);
+  const errors = addedPlanErrors(sim, plan, rawIssues);
+  const issues = rawIssues.map(issue => issue.severity === 'error' && !errors.includes(issue)
+    ? { ...issue, severity: 'warn' as const, text: `已有问题（未加重）：${issue.text}` } : issue);
   if (errors.length) return reject(`运行图不可行：${errors[0].text}`, issues);
+  const late=plan.trips.slice(firstTrip).filter(t=>!t.cancelled&&t.stops.at(-1)!.arr>OPERATING_DAY.to);
+  const warnings=[...issues.filter(i=>i.text.startsWith('已有问题')).map(i=>i.text),
+    ...(late.length?[`车次 ${late.map(t=>t.no).join('、')} 将在 27:45 后结束；运营日切换时仍未完成的列车会被收掉。`]:[])];
   const added = plan.trips.slice(firstTrip).filter(trip => !trip.cancelled && trip.revenue).length;
-  return { ok: true, msg: `${label}：新增 ${added} 个车次${skipped ? `；${skipped} 个车次因能力或库存不足未安排` : ''}`, plan, issues, added, skipped, extended };
+  return { ok: true, msg: `${label}：新增 ${added} 个车次${skipped ? `；${skipped} 个车次因能力或库存不足未安排` : ''}`, plan, issues, added, skipped, extended, warnings };
 }
 
 /** The train of a circulation can still be kept in service after trip `last`:

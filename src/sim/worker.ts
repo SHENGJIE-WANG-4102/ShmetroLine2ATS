@@ -7,7 +7,8 @@
  */
 import { Sim, FIXED_DT } from './engine';
 import type { Command, FromWorker, ToWorker, SimConfig } from './model';
-import { dayTypeOf, dateLabel, parseIso, isoDate } from './calendar';
+import { nextOperatingConfig, unfinishedAtRollover } from './operatingDay';
+import { OPERATING_DAY } from './dayRandom';
 import { capture, restore, type Checkpoint } from './state';
 import { compactCheckpoints, exportDiagnostics, stringifyDiagnostics } from './diagnostics';
 import { preparePlan } from './planning';
@@ -36,8 +37,8 @@ let initializing = false;
 
 const SNAP_INTERVAL = 50; // ms (20 Hz)
 /** an operating day runs from 04:00 to the 03:45 rollover: every run-up stays inside it */
-const DAY_FIRST = 4 * 3600;
-const DAY_LAST = 27.75 * 3600;
+const DAY_FIRST = OPERATING_DAY.from;
+const DAY_LAST = OPERATING_DAY.to;
 const MAX_SPEED = 1000;
 /** a time from a message, or null: never trust it to end a synchronous run-up */
 const dayTime = (t: unknown): number | null => (typeof t === 'number' && Number.isFinite(t) ? Math.min(DAY_LAST, Math.max(DAY_FIRST, t)) : null);
@@ -59,9 +60,12 @@ let wantPis = -1;
 let wantDmi = -1;
 
 async function start(raw: SimConfig) {
+  const began=performance.now();
+  const phase=(phase:'diagram'|'cache'|'warmup'|'complete')=>post({type:'startup',phase,elapsed:performance.now()-began});
   const generation = ++starting;
   initializing = true;
   const config: SimConfig = { ...raw, startTime: dayTime(raw.startTime) ?? DAY_FIRST, seed: Number.isFinite(raw.seed) ? raw.seed : 1 };
+  phase('diagram');
   sim = new Sim(config);
   sim.pisStation = wantPis;
   sim.dmiTrain = wantDmi;
@@ -75,6 +79,7 @@ async function start(raw: SimConfig) {
   checkpoint();
   // warm up from the start of the service day to the requested start time
   if (config.startTime > sim.t) {
+    phase('cache');
     let key: string | undefined;
     try { key = await warmupKey(config, sim.plan, warmupSources); } catch { /* Normal warm-up below. */ }
     const cached = key ? await readWarmup(key) : null;
@@ -83,6 +88,7 @@ async function start(raw: SimConfig) {
       try { restoreWarmup(sim, cached); } catch { sim = new Sim(config); }
     }
     if (sim.t < config.startTime) {
+      phase('warmup');
       runUntil(config.startTime, true);
       if (key) void writeWarmup(key, captureWarmup(sim));
     }
@@ -92,7 +98,8 @@ async function start(raw: SimConfig) {
   checkpoint();
   initializing = false;
   lastWall = performance.now();
-  post({ type: 'ready', plan: sim.plan });
+  phase('complete');
+  post({ type: 'ready', plan: sim.plan, config:sim.config });
   flushEvents(true);
   sendSnapshot();
 }
@@ -246,14 +253,22 @@ function tick() {
     windowStart = now;
   }
   // operating-day rollover after the night shutdown (03:45)
-  if (sim.t >= 27.75 * 3600 && sim.config.date) {
-    const d = parseIso(sim.config.date);
-    d.setDate(d.getDate() + 1);
-    const keepSpeed = speed;
-    const keepAuto = sim.autoRadio;
-    void start({ dayType: dayTypeOf(d, false), dateLabel: dateLabel(d, false), date: isoDate(d), startTime: 4 * 3600, seed: sim.config.seed + 1, autoRadio: keepAuto, randomFaults: sim.randomLevel }).then(() => { speed = keepSpeed; });
+  if (sim.t >= DAY_LAST && sim.config.date) {
+    const config=nextOperatingConfig(sim),keepSpeed=speed;
+    const transition=`运营日切换：${sim.config.date} → ${config.date}`;
+    const unfinished=unfinishedAtRollover(sim);
+    if(unfinished.length) sim.log('B','运营',`运营日切换收车：以下列车尚未到过夜位，将随旧运营日收掉：${unfinished.join('；')}`);
+    sim.log('I','运营',transition);
+    post({type:'dayArchive',date:sim.config.date,json:stringifyDiagnostics(exportDiagnostics(sim,cmdLog.slice(0,cmdLog.length-pending.length)))});
+    flushEvents(true);
+    void start(config).then(()=>{
+      speed=keepSpeed;
+      sim!.log('I','运营',transition+'；上一运营日诊断已移交归档');
+      post({type:'dayChanged',text:transition});flushEvents(true);
+    });
     return;
   }
+
   if (now - lastSnap >= SNAP_INTERVAL) {
     lastSnap = now;
     flushEvents();

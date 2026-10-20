@@ -229,7 +229,7 @@ export const OVERLAY_PRESETS: OverlayPreset[] = [
 // ---------------------------------------------------------------- helpers
 
 /** fixedRuns: the fixed-time special trains of the day (default: the regular ones) */
-export interface PlanContext { topo: Topology; rt: RunTimes; dayType: DayType; fixedRuns?: FixedRun[] }
+export interface PlanContext { topo: Topology; rt: RunTimes; dayType: DayType; fixedRuns?: FixedRun[]; initialStock?: number[] }
 
 const TERMINAL_DEPOT: Record<number, string> = { 0: 'BZL', 30: 'CSD', 4: 'BZL', 22: 'LYD', 1: 'BZL', 2: 'BZL', 19: 'LYD', 28: 'CSD' };
 /** trains a terminal can hold at once: two tail tracks or paired stubs + the
@@ -498,6 +498,7 @@ export function yardNeed(topo: Topology, plan: Plan): number[] {
 /** Physical morning stock, including unused spares. Shared by initialization
  * and the daily ledger, so validation cannot silently invent extra vehicles. */
 export function initialDepotStock(topo: Topology, plan: Plan): number[] {
+  if (plan.initialStock) return plan.initialStock.slice();
   const stock = yardNeed(topo, plan);
   let fleet = stock.reduce((a, b) => a + b, 0)
     + plan.blocks.filter(block => block.start.kind === 'stable').length;
@@ -1081,7 +1082,27 @@ export function allocateTerminalServices(ctx: PlanContext, requests: readonly Se
 
 /** Match draft requests to stock and daily homes, publish their final passenger
  * boundaries, then resolve bounded timing conflicts. Published routes are fixed. */
+const generatedPlans = new Map<string, Plan>();
+/** Cache only pristine diagrams; every caller gets its own mutable copy and
+ * validation metadata. Include all mutable planning inputs in the key. */
 export function generatePlan(ctx: PlanContext, shift?: number[], stock?: number[]): Plan {
+  if (shift || stock) return buildPlan(ctx,shift,stock);
+  const key=JSON.stringify([ctx,OPERATIONS,TEMPLATES,SHOWN_PERIODS,DWELL_BANDS,RUN_BANDS,FIXED_LATE_TRAINS,FIRST_LAST]);
+  let pristine=generatedPlans.get(key);
+  if(!pristine) {
+    pristine=buildPlan(ctx);
+    if(generatedPlans.size>=8)generatedPlans.delete(generatedPlans.keys().next().value!);
+    generatedPlans.set(key,pristine);
+  }
+  const plan=structuredClone(pristine);
+  const identities=laidOutService.get(pristine);
+  if(identities)laidOutService.set(plan,new Map([...identities].map(([trip,identity])=>[plan.trips[trip.id],structuredClone(identity)])));
+  generationIssues.set(plan,structuredClone(generationIssues.get(pristine)??[]));
+  rejectedTurns.set(plan,[...(rejectedTurns.get(pristine)??[])]);
+  return plan;
+}
+
+function buildPlan(ctx: PlanContext, shift?: number[], stock?: number[]): Plan {
   const { topo } = ctx;
   const { requests, periods, firstService: published } = layoutService(ctx);
   const { services, supply } = allocateTerminalServices(ctx, requests, published);
@@ -1151,6 +1172,7 @@ export function generatePlan(ctx: PlanContext, shift?: number[], stock?: number[
   }
   const plan: Plan = {
     dayType: ctx.dayType, trips, blocks,
+    ...(ctx.initialStock ? { initialStock: ctx.initialStock.slice() } : {}),
     periods: SHOWN_PERIODS[ctx.dayType].map((p) => ({ from: p.from, to: p.to, template: p.template, label: p.label })),
     overlays: [], fleetPeak: 0,
   };
@@ -1161,7 +1183,7 @@ export function generatePlan(ctx: PlanContext, shift?: number[], stock?: number[
   plan.fleetPeak = fleetPeak(plan);
   if (!shift) {
     const need = yardNeed(topo, plan);
-    const over = need.map((n, d) => Math.max(0, n - topo.depots[d].capacity));
+    const over = need.map((n, d) => Math.max(0, n - (ctx.initialStock?.[d] ?? topo.depots[d].capacity)));
     if (over.some((n) => n > 0)) return generatePlan(ctx, over, need);
   }
   return plan;
@@ -1876,7 +1898,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
       if ((dep <= firstDepFrom(T) + 1500 || D.kind === 'small') && (left[T] ?? 0) > 0) { left[T]--; continue; }
       byDepot[depotIndex(topo, TERMINAL_DEPOT[T])].push(D);
     }
-    const spare = topo.depots.map((dp, i) => dp.capacity - (stock?.[i] ?? byDepot[i].length));
+    const spare = topo.depots.map((dp, i) => (ctx.initialStock?.[i] ?? dp.capacity) - (stock?.[i] ?? byDepot[i].length));
     shift.forEach((n, d) => {
       // Redirect after opening: sending a BZL/LYD train to the airport before
       // 06:00 would cross GLL's occupied DN platform. Actual yardNeed, rather
@@ -2129,8 +2151,8 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
       endOf.set(A.id, { kind: 'stable', station: T, berth: places[stablingNight[T]].arrivalBerth });
     }
   }
-  if (!overlay) allocateDepotHomes(ctx, trips, pool, sinks.filter(A => A.next === undefined && !endOf.has(A.id)),
-    startOf, endOf, allForGaps, factorAt);
+  const retainedHomes = !overlay ? allocateDepotHomes(ctx, trips, pool, sinks.filter(A => A.next === undefined && !endOf.has(A.id)),
+    startOf, endOf, allForGaps, factorAt) : new Map<number, number>();
   /**
    * An added train that cannot get back to the depot between the trains of
    * the peak build-up takes over a base duty whose train has not yet left
@@ -2236,7 +2258,11 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
     const T = A.to;
     const planned = supply?.withdrawals.get(A.id);
     if (planned) {
-      const withdrawal = addTo(trips, planned.dir, planned.revenue ? 'wd' : 'empty', T, planned.to, planned.stops, planned.revenue);
+      // Retaining the terminal does not discard its already fitted withdrawal
+      // clocks/stops. Only clear the passenger flag after the terminal: a fresh
+      // non-stop fit can reach the shared depot lead ahead of its reserved slot.
+      const revenue = planned.revenue && !retainedHomes.has(A.id);
+      const withdrawal = addTo(trips, planned.dir, revenue ? 'wd' : 'empty', T, planned.to, planned.stops, revenue);
       A.next = withdrawal.id;
       withdrawal.prev = A.id;
       endOf.set(withdrawal.id, { kind: 'depot', depot: planned.depot });
@@ -2264,7 +2290,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
         continue;
       }
     }
-    const depot = overlay ? returnHome(A) ?? depotIndex(topo, TERMINAL_DEPOT[T]) : depotIndex(topo, TERMINAL_DEPOT[T]);
+    const depot = retainedHomes.get(A.id) ?? (overlay ? returnHome(A) ?? depotIndex(topo, TERMINAL_DEPOT[T]) : depotIndex(topo, TERMINAL_DEPOT[T]));
     // (an added service ends inside the day: its trains go back as ordinary withdrawals)
     const night = !overlay && arr >= lastDepFrom(T) - 60;
     if (night && T === 22 && A.dir === 'DN') {
@@ -2297,7 +2323,9 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
       // is freed promptly, while retaining the full path/headway checks.
       let st = !overlay && T === topo.stations.length - 1 ? fitAfter(awayDir, arr + mt,
         t0 => buildStops(ctx, awayDir, T, en, t0, false, 1)) : null;
-      let withdrawalRevenue = !st;
+      // The retained working has already served its required terminal. Its
+      // return stays empty even when stopping is needed to fit the UP stream.
+      let withdrawalRevenue = !st && !retainedHomes.has(A.id);
       st ??= fitAfter(awayDir, overlay ? Math.max(arr+mt,earliest) : arr+mt, (t0) => buildStops(ctx, awayDir, T, en, t0, true, factorAt),
         stops => outerQuiet(stops) && frontTurnClear(ctx, allForGaps(), A, stops[0].dep, new Set([A.id]))
           && (!overlay || entryClear(depot, { to: en, stops } as unknown as Trip))
@@ -2457,8 +2485,27 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
   movements: () => GenTrip[], factor: (t: number) => number) {
   const { topo } = ctx;
   const arrival = (trip: Trip) => trip.stops.at(-1)!.arr;
-  const rules: { depot: number; dir: TrackDir; station: number; berth?: number; after?: number }[] = OPERATIONS.depotReturns.map(rule => ({ depot: depotIndex(topo, rule.depot),
-    dir: rule.dir, station: STATIONS.findIndex(st => st.id === rule.station) }));
+  const retainedHomes = new Map<number, number>();
+  const rules: { depot: number; dir: TrackDir; station: number; berth?: number; after?: number; service?: { terminal: number; intervalMultiplier: number } }[] = OPERATIONS.depotReturns.map(rule => ({ depot: depotIndex(topo, rule.depot),
+    dir: rule.dir, station: STATIONS.findIndex(st => st.id === rule.station),
+    service: rule.service && { ...rule.service, terminal: STATIONS.findIndex(st => st.id === rule.service!.terminal) } }));
+  // Snapshot the requested endpoint stream before selecting retirement homes.
+  // Direct returns are preferred; retain a through working only when removing
+  // it would exceed the local requested interval budget. This is a route
+  // choice during matching, never a repair of a published/validated diagram.
+  const coverage = new Map(rules.filter(rule => rule.service).map(rule => [rule.depot,
+    services.filter(trip => trip.revenue && trip.dir === rule.dir && trip.to === rule.service!.terminal)
+      .map(trip => ({ trip, at: arrival(trip) })).sort((a,b) => a.at - b.at)]));
+  const needsThrough = (trip: GenTrip, rule: typeof rules[number]) => {
+    if (!rule.service || trip.to !== rule.service.terminal || !turnbackAt(topo, trip.to, trip.dir)) return false;
+    const requested = coverage.get(rule.depot)!;
+    const current = requested.filter(call => call.trip !== trip && call.trip.to === rule.service!.terminal);
+    const at = arrival(trip), before = current.filter(call => call.at < at).at(-1), after = current.find(call => call.at > at);
+    if (!before || !after) return false;
+    const span = requested.filter(call => call.at >= before.at && call.at <= after.at);
+    const interval = Math.max(...span.slice(1).map((call,i) => call.at - span[i].at));
+    return after.at - before.at > interval * rule.service.intervalMultiplier + .001;
+  };
   for (const place of overnightPlaces(topo).filter(place => place.kind === 'origin' || place.kind === 'feeder')) {
     const berth = topo.berths[place.arrivalBerth], link = topo.links[berth.link];
     rules.push({ depot: rules.length, station: place.kind === 'feeder' ? place.station - 1 : place.station, berth: place.arrivalBerth, after: place.nightAfter,
@@ -2559,6 +2606,10 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
         - Math.abs(topo.stations[b.station].chain - topo.stations[trip.to].chain))[0];
     if (!home) continue; // An infeasible daily balance remains a validation error.
     quota[home.depot]--;
+    if (needsThrough(trip, home)) {
+      retainedHomes.set(trip.id, home.depot);
+      continue; // Existing terminal withdrawal fitting supplies the empty return.
+    }
     if (trip.stops.some(stop => stop.st === home.station)) trimRoute(trip, trip.from, home.station, 'wd');
     else {
       const stops = buildStops(ctx, trip.dir, trip.to, home.station, arrival(trip) + 45, true, factor);
@@ -2576,6 +2627,7 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
     } else ends.set(trip.id, home.berth === undefined ? { kind: 'depot', depot: home.depot }
       : { kind: 'stable', station: home.station, berth: home.berth });
   }
+  return retainedHomes;
 }
 
 /** A returning service replaces an earlier depot feeder for the same duty.
@@ -3859,12 +3911,15 @@ export function departureBerthAfterReverse(topo: Topology, reversedAt: number, p
 // ---------------------------------------------------------------- validation
 
 export interface PlanIssue {
+  /** Whole-day yard aggregates compare by yard and magnitude, never display text/time. */
+  depot?: number;
+  delta?: number;
   /** Exact interval for resolving timing conflicts; text is rounded for display. */
   gap?: number;
   /** Circulations contributing to this conflict; used by pure overlay fitting. */
   blocks?: number[];
   severity: 'error' | 'warn';
-  code: 'SERVICE_STRUCTURE' | 'TURN_SHORT' | 'TURN_UNAVAILABLE' | 'BLOCK_BREAK' | 'TERMINAL_FULL' | 'TAIL_ORDER' | 'FRONT_CONFLICT' | 'LAYOVER_LONG' | 'DEPOT_CONFLICT' | 'HEADWAY' | 'FLEET' | 'TIME_ORDER' | 'UNASSIGNED' | 'STABLE_CONFLICT' | 'TURN_HEADWAY' | 'YARD_CAPACITY' | 'YARD_BALANCE';
+  code: 'SERVICE_STRUCTURE' | 'TURN_SHORT' | 'TURN_UNAVAILABLE' | 'BLOCK_BREAK' | 'TERMINAL_FULL' | 'TAIL_ORDER' | 'FRONT_CONFLICT' | 'LAYOVER_LONG' | 'DEPOT_CONFLICT' | 'HEADWAY' | 'FLEET' | 'TIME_ORDER' | 'UNASSIGNED' | 'STABLE_CONFLICT' | 'TURN_HEADWAY' | 'YARD_CAPACITY' | 'YARD_BALANCE' | 'POSSESSION';
   t: number;
   text: string;
 }
@@ -4063,10 +4118,10 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
     const ledger = depotLedger(topo, plan);
     for (const [depot, yard] of topo.depots.entries()) {
       if (ledger.peak[depot] > yard.capacity)
-        out.push({ severity: 'error', code: 'YARD_CAPACITY', t: ledger.peakAt[depot],
+        out.push({ severity: 'error', code: 'YARD_CAPACITY', t: ledger.peakAt[depot], depot, delta: ledger.peak[depot] - yard.capacity,
           text: `${yard.name} 库存峰值 ${ledger.peak[depot]} 列，超过库位 ${yard.capacity} 列` });
       if (ledger.final[depot] !== ledger.initial[depot])
-        out.push({ severity: 'error', code: 'YARD_BALANCE', t: ledger.events.at(-1)?.time ?? OPENING.dayStart,
+        out.push({ severity: 'error', code: 'YARD_BALANCE', t: ledger.events.at(-1)?.time ?? OPENING.dayStart, depot, delta: ledger.final[depot] - ledger.initial[depot],
           text: `${yard.name} 夜间库存 ${ledger.final[depot]} 列，次日早晨需 ${ledger.initial[depot]} 列（含备车）` });
     }
   }

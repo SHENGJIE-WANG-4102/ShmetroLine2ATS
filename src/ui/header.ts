@@ -141,6 +141,7 @@ export class Header {
       h('div', { class: 'msep' }),
       item('运营日 / 重新开始…', close(() => this.hooks.restart())),
       item('诊断导出', close(() => this.store.send({ type: 'diagnostics' })), {}),
+      item('上一运营日诊断导出', close(() => {void this.store.exportPreviousDiagnostics();})),
       item('帮助', close(() => this.hooks.help()), { key: 'F1' }),
     );
   }

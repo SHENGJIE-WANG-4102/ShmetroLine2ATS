@@ -25,6 +25,8 @@ export interface OriginalAnnouncement {
   transferRange?: [number, number]; terminalOnly?: boolean;
   recordedDirection?: 'DN' | 'UP';
   delayS?: number | null; advanceS?: number; measuredAdvance?: boolean;
+  /** Confirmed English-first arrival cut: prepend the recorded Chinese call. */
+  arrivalRecipe?: readonly string[];
 }
 export const VOICE_SOURCES = [
   // User-supplied door reference: only the two door-direction sentences.
@@ -42,6 +44,10 @@ export const VOICE_SOURCES = [
  * passenger overlap is excluded.
  */
 export const FIELD_1016_VOICE_PARTS: readonly VoicePart[] = ([
+  // The arrival excerpts below begin with English. These contiguous Chinese
+  // calls retain “下一站、站名、开门侧” from the same journey's departure PA.
+  { id:'zh-arrival-gjh',language:'zh',speaker:'onboard-zh',role:'arrival-prefix',name:'国家会展中心',source:'ride-1016-west-end',range:[641.22,646.10],confidence:'medium' },
+  { id:'zh-arrival-hqz',language:'zh',speaker:'onboard-zh',role:'arrival-prefix',name:'虹桥火车站',source:'ride-1016-west-end',range:[518.22,521.98],confidence:'medium' },
   { id: 'zh-name-gjh', language: 'zh', speaker: 'onboard-zh', role: 'name', name: '国家会展中心', source: 'ride-1016-west-end', range: [642.28, 644.00], confidence: 'medium' },
   { id: 'en-name-gjh', language: 'en', speaker: 'onboard-en', role: 'name', name: '国家会展中心', source: 'ride-1016-west-end', range: [661.74, 664.88], confidence: 'medium' },
   { id: 'zh-name-hqz', language: 'zh', speaker: 'onboard-zh', role: 'name', name: '虹桥火车站', source: 'ride-1016-west-end', range: [519.36, 520.60], confidence: 'medium' },
@@ -65,7 +71,7 @@ export const FIELD_1016_VOICE_PARTS: readonly VoicePart[] = ([
   { id: 'en-next-terminal-pxl', language: 'en', speaker: 'onboard-en', role: 'terminal-next', source: 'ride-1016-west-end', range: [853.72, 857.04], confidence: 'medium' },
   { id: 'en-arrived-terminal-pxl', language: 'en', speaker: 'onboard-en', role: 'terminal-arrived', source: 'ride-1016-west-end', range: [915.32, 917.24], confidence: 'medium' },
 ] satisfies VoicePart[]).map(p => ({ ...p, effects: p.language === 'zh' ? 'clean-speech-zh' : 'clean-speech-en', file: `voice-${p.id}.mp3` }));
-export const VOICE_PARTS: readonly VoicePart[] = [
+const BASE_VOICE_PARTS: readonly VoicePart[] = [
   ...FIELD_1016_VOICE_PARTS,
   // 用户决定：江苏路站名借站台录音。【假设】英文用专名江苏 + Road；
   // this is mixed-source pronunciation, not an original English station name.
@@ -226,26 +232,26 @@ export const ONBOARD_DESTINATIONS = ['蟠祥路·国家会计学院', '广兰路
  */
 export const FIELD_ORIGINAL_ONBOARD: readonly OriginalAnnouncement[] = [
   { id: 'field-original-next-up-lsg', station: '娄山关路', direction: 'UP', type: 'next', source: 'ride-1016-west-core', recordedDestination: '蟠祥路·国家会计学院', range: [8.20, 40.05], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-up-lsg', station: '娄山关路', direction: 'UP', type: 'arrived', source: 'ride-1016-west-core', recordedDestination: '蟠祥路·国家会计学院', range: [97.40, 114.30], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-up-lsg', station: '娄山关路', direction: 'UP', type: 'arrived', source: 'ride-1016-west-core', recordedDestination: '蟠祥路·国家会计学院', range: [97.40, 114.30], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-lsg','zh-left','field-original-arrived-up-lsg'] },
   { id: 'field-original-next-up-wnl', station: '威宁路', direction: 'UP', type: 'next', source: 'ride-1016-west-core', recordedDestination: '蟠祥路·国家会计学院', range: [168.94, 195.00], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-up-wnl', station: '威宁路', direction: 'UP', type: 'arrived', source: 'ride-1016-west-core', recordedDestination: '蟠祥路·国家会计学院', range: [258.40, 275.20], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-up-wnl', station: '威宁路', direction: 'UP', type: 'arrived', source: 'ride-1016-west-core', recordedDestination: '蟠祥路·国家会计学院', range: [258.40, 275.20], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-wnl','zh-left','field-original-arrived-up-wnl'] },
   { id: 'field-original-next-up-shr', station: '淞虹路', direction: 'UP', type: 'next', source: 'cabin-reference', recordedDestination: '蟠祥路·国家会计学院', range: [173.70, 199.98], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-up-shr', station: '淞虹路', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [49.96, 66.30], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-up-shr', station: '淞虹路', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [49.96, 66.30], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-shr','zh-left','field-original-arrived-up-shr'] },
   { id: 'field-original-next-up-bxj', station: '北新泾', direction: 'UP', type: 'next', source: 'cabin-reference', recordedDestination: '蟠祥路·国家会计学院', range: [20.60, 46.80], doorSide: 'L', confidence: 'medium' },
   { id: 'field-original-arrived-up-bxj', station: '北新泾', direction: 'UP', type: 'arrived', source: 'cabin-reference', recordedDestination: '蟠祥路·国家会计学院', range: [91.00, 109.20], doorSide: 'L', confidence: 'medium' },
   { id: 'field-original-next-up-hq2', station: '虹桥2号航站楼', direction: 'UP', type: 'next', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [140.88, 206.90], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-up-hq2', station: '虹桥2号航站楼', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [421.90, 439.80], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-dn-hq2', station: '虹桥2号航站楼', direction: 'DN', type: 'arrived', source: 'ride-1016-east-end', recordedDestination: '未确认', range: [53.30, 73.40], doorSide: 'B', confidence: 'medium' },
+  { id: 'field-original-arrived-up-hq2', station: '虹桥2号航站楼', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [421.90, 439.80], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-hq2','zh-left','field-original-arrived-up-hq2'] },
+  { id: 'field-original-arrived-dn-hq2', station: '虹桥2号航站楼', direction: 'DN', type: 'arrived', source: 'ride-1016-east-end', recordedDestination: '未确认', range: [53.30, 73.40], doorSide: 'B', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-hq2','zh-both','field-original-arrived-dn-hq2'] },
   { id: 'field-original-next-up-hqz', station: '虹桥火车站', direction: 'UP', type: 'next', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [513.88, 534.20], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-up-hqz', station: '虹桥火车站', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [546.40, 563.60], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-up-hqz', station: '虹桥火车站', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [546.40, 563.60], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-arrival-hqz','field-original-arrived-up-hqz'] },
   { id: 'field-original-next-up-gjh', station: '国家会展中心', direction: 'UP', type: 'next', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [636.90, 666.80], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-up-gjh', station: '国家会展中心', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [734.40, 752.90], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-up-gjh', station: '国家会展中心', direction: 'UP', type: 'arrived', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [734.40, 752.90], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-arrival-gjh','field-original-arrived-up-gjh'] },
   { id: 'field-original-next-up-pxl', station: '蟠祥路·国家会计学院', direction: 'UP', type: 'next', source: 'ride-1016-west-end', recordedDestination: '蟠祥路·国家会计学院', range: [829.80, 863.40], doorSide: 'L', confidence: 'medium', terminalOnly: true },
-  { id: 'field-original-arrived-dn-bxj', station: '北新泾', direction: 'DN', type: 'arrived', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [37.60, 54.00], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-dn-bxj', station: '北新泾', direction: 'DN', type: 'arrived', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [37.60, 54.00], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-bxj','zh-left','field-original-arrived-dn-bxj'] },
   { id: 'field-original-next-dn-wnl', station: '威宁路', direction: 'DN', type: 'next', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [125.48, 152.80], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-dn-wnl', station: '威宁路', direction: 'DN', type: 'arrived', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [198.40, 216.00], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-dn-wnl', station: '威宁路', direction: 'DN', type: 'arrived', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [198.40, 216.00], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-wnl','zh-left','field-original-arrived-dn-wnl'] },
   { id: 'field-original-next-dn-lsg', station: '娄山关路', direction: 'DN', type: 'next', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [290.80, 323.40], doorSide: 'L', confidence: 'medium' },
-  { id: 'field-original-arrived-dn-lsg', station: '娄山关路', direction: 'DN', type: 'arrived', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [380.40, 397.65], doorSide: 'L', confidence: 'medium' },
+  { id: 'field-original-arrived-dn-lsg', station: '娄山关路', direction: 'DN', type: 'arrived', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [380.40, 397.65], doorSide: 'L', confidence: 'medium', arrivalRecipe: ['zh-next','zh-name-lsg','zh-left','field-original-arrived-dn-lsg'] },
   { id: 'field-original-next-dn-zsg', station: '中山公园', direction: 'DN', type: 'next', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [477.40, 511.25], doorSide: 'L', confidence: 'medium' },
   { id: 'field-original-arrived-dn-zsg', station: '中山公园', direction: 'DN', type: 'arrived', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [577.20, 592.10], doorSide: 'L', confidence: 'medium' },
   { id: 'field-original-next-dn-jsl', station: '江苏路', direction: 'DN', type: 'next', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [672.48, 704.40], doorSide: 'L', confidence: 'medium' },
@@ -259,6 +265,9 @@ export const FIELD_ORIGINAL_ONBOARD: readonly OriginalAnnouncement[] = [
   { id: 'field-original-next-dn-pdn', station: '浦东南路', direction: 'DN', type: 'next', source: 'ride-1016-east-night', recordedDestination: '浦东1号2号航站楼', range: [1727.48, 1755.80], doorSide: 'L', confidence: 'medium' },
 ];
 export const RECORDED_ONBOARD = [...ORIGINAL_ONBOARD, ...FIELD_ORIGINAL_ONBOARD];
+export const VOICE_PARTS: readonly VoicePart[] = [...BASE_VOICE_PARTS,
+  ...FIELD_ORIGINAL_ONBOARD.filter(a=>a.arrivalRecipe).map(a=>({id:a.id,language:'bilingual' as const,speaker:'recorded-pair' as const,role:'body',source:a.source,range:a.range,confidence:a.confidence})),
+];
 const parts = new Map(VOICE_PARTS.map(p => [p.id, p]));
 const length = (id: string) => { const p = parts.get(id)!; return p.range[1] - p.range[0]; };
 const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length;
@@ -295,7 +304,8 @@ const originalClip = (a: OriginalAnnouncement): SoundClip => ({ id: a.id, file: 
   confidence: a.confidence, provenance: 'original', recordedDestination: a.recordedDestination,
   doorSide: a.doorSide, ...(a.recordedDirection ? { recordedDirection: a.recordedDirection } : {}) });
 rendered.push(...RECORDED_ONBOARD.map(originalClip));
-function recordedClip(a: OriginalAnnouncement): SoundClip {
+function recordedClip(a: OriginalAnnouncement, destination=a.recordedDestination): SoundClip {
+  if(a.arrivalRecipe)return composed(a.station,a.direction,destination,a.doorSide,a.type,[...a.arrivalRecipe])!;
   const existing = rendered.find(c => c.id === a.id);
   if (existing) return existing;
   const clip = originalClip(a); rendered.push(clip); return clip;
@@ -347,7 +357,7 @@ for (let st = first; st <= last; st++) for (const direction of ['DN', 'UP'] as c
     const matching = matchingOriginal(station.name, direction, destination, side, type);
     // Do not use terminal-only GLL notices on a through service, or tell an
     // airport-bound passenger to get off and transfer to another airport train.
-    let clip = matching ? recordedClip(matching) : undefined;
+    let clip = matching ? recordedClip(matching,destination) : undefined;
     const base = originals.find(a => a.type === type);
     if (!clip && base && !base.terminalOnly && side === base.doorSide) {
       const recipe = type === 'next'
@@ -427,10 +437,10 @@ for (let st = 0; st < first; st++) for (const direction of ['DN', 'UP'] as const
     }
     const original = matchingOriginal(station.name, direction, destination, side, type);
     if (original) {
-      recordedClip(original);
-      slot.source = original.source;
+      const clip=recordedClip(original,destination);
+      slot.source = clip.source;
       if (type === 'next') slot.next = { clipId: original.id, phraseAt: original.range[0], delayS: original.delayS ?? null, confidence: original.confidence };
-      else slot.arrived = { clipId: original.id, phraseAt: original.range[0], advanceS: ONBOARD_ARRIVAL_ADVANCE_S, measuredAdvance: false, confidence: original.confidence };
+      else slot.arrived = { clipId: clip.id, phraseAt: original.range[0], advanceS: ONBOARD_ARRIVAL_ADVANCE_S, measuredAdvance: false, confidence: original.confidence };
       continue;
     }
     const recipe: string[] = [];

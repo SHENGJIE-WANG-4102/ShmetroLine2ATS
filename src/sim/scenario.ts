@@ -3,12 +3,107 @@
  * injection by difficulty, run metrics and the scored end-of-run report.
  */
 import type { Sim } from './engine';
-import type { DayType, Metrics, ScenarioReport, Train } from './model';
-import { STATIONS, LINE_INFO, HQ_LATE_RUN, type FixedRun } from '../data/line2';
+import type { DayType, Metrics, ScenarioReport, Train, Plan } from './model';
+import { STATIONS, LINE_INFO, HQ_LATE_RUN, OPERATIONS, type FixedRun } from '../data/line2';
 import { closeStation } from './holiday';
 import { injectFault } from './faults';
 import { setWeather, addPossession } from './env';
 import { callPecu, callTrackPerson } from './radio';
+import { dayRandom, OPERATING_DAY } from './dayRandom';
+
+export interface InstructorScheduleEntry { event: string; at: number; step?: number }
+export interface InstructorOccurrence extends InstructorScheduleEntry {
+  result: string; faults: number[]; calls: number[]; possessions: number[]; weatherUntil: number;
+}
+/** Migrate the previous checkbox IDs once, including merged sequences. */
+const PREVIOUS_EVENT_IDS: Record<string,string> = {
+  "lyl-insert-1": "longyang-depot-exit-switch-failure",
+  "lyl-insert-2": "century-avenue-morning-crowd",
+  "lyl-insert-3": "longyang-morning-crowd",
+  "shr-switch-1": "songhong-turnback-switch-failure",
+  "rmg-surge-1": "peoples-square-evening-crowd",
+  "rmg-surge-2": "peoples-square-train-pecu",
+  "cbtc-tbtc-1": "zc2-failure",
+  "rescue-1": "jingansi-nanjingwest-train-failure",
+  "dawn-poss-1": "jingansi-possession-extension",
+  "dawn-poss-2": "first-westbound-train-failure",
+  "gll-loop-1": "guanglan-middle-switch-failure",
+  "hq-night-1": "hongqiao-railway-evening-crowd",
+  "hq-night-2": "hongqiao-terminal2-evening-crowd",
+  "hq-night-3": "hongqiao-railway-down-psd-failure",
+  "ciie-close-1": "exhibition-centre-closing-crowd",
+  "ciie-close-2": "exhibition-centre-train-pecu",
+  "ciie-close-3": "hongqiao-railway-down-start-signal-failure",
+  "ljz-person-1": "lujiazui-down-track-intrusion",
+  "ljz-person-2": "lujiazui-pudongsouth-axle-disturbance",
+  "river-tunnel-1": "river-tunnel-westbound-train-failure",
+  "holiday-return-1": "hongqiao-railway-return-crowd",
+  "holiday-return-2": "pudong-airport-return-crowd",
+  "holiday-return-3": "hongqiao-terminal2-return-crowd",
+  "holiday-return-4": "hongqiao-terminal2-down-psd-failure",
+  "holiday-return-5": "extra-train-pecu",
+  "njd-closure-3": "peoples-square-diverted-crowd",
+  "njd-closure-4": "lujiazui-diverted-crowd",
+  "storm-1": "severe-wind-sequence",
+  "storm-2": "severe-wind-sequence",
+  "storm-3": "severe-wind-sequence",
+  "storm-4": "severe-wind-sequence",
+  "njd-closure-1": "nanjing-east-closure-sequence",
+  "njd-closure-2": "nanjing-east-closure-sequence",
+  "njd-closure-5": "nanjing-east-closure-sequence"
+};
+export function instructorEventIds(ids:readonly string[]):string[] {
+  return [...new Set(ids.map(id=>PREVIOUS_EVENT_IDS[id]??id))];
+}
+
+/** Separate per-event streams also make checkbox order irrelevant. */
+export function scheduleInstructorEvents(seed: number, start: number, selected: readonly string[], library = INSTRUCTOR_EVENTS): InstructorScheduleEntry[] {
+  const out: InstructorScheduleEntry[] = [];
+  const ids = new Set(instructorEventIds(selected));
+  for (const ev of library) {
+    if (!ids.has(ev.id)) continue;
+    let hash = 2166136261;
+    for (const ch of ev.id) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619);
+    const rng = dayRandom(seed, hash ^ 0x1e7e2026);
+    if (rng() >= ev.probability) continue;
+    const span=Math.max(0,...(ev.steps??[]).map(step=>step.after));
+    const windows = ev.windows.map(([a,b]) => [Math.max(a,start,OPERATING_DAY.from),Math.min(b,OPERATING_DAY.to-span)])
+      .filter(([a,b]) => b > a);
+    const total = windows.reduce((n,[a,b]) => n+b-a,0);
+    if (!total) continue;
+    let offset = rng()*total;
+    for (const [a,b] of windows) {
+      if (offset < b-a) {
+        const at=a+offset;
+        out.push({event:ev.id,at});
+        ev.steps?.forEach((step,index)=>out.push({event:ev.id,at:at+step.after,step:index+1}));
+        break;
+      }
+      offset -= b-a;
+    }
+  }
+  return out.sort((a,b) => a.at-b.at || a.event.localeCompare(b.event) || (a.step??0)-(b.step??0));
+}
+
+function instructorTick(sim: Sim) {
+  while (sim.instructorFired < sim.instructorSchedule.length && sim.t >= sim.instructorSchedule[sim.instructorFired].at) {
+    const entry = sim.instructorSchedule[sim.instructorFired++];
+    const ev = INSTRUCTOR_EVENTS.find(e=>e.id===entry.event);
+    if (!ev) continue;
+    const faults = new Set(sim.faults.map(f=>f.id)), calls = new Set(sim.calls.map(c=>c.id)), possessions = new Set(sim.possessions.map(p=>p.id));
+    const weather = {...sim.env};
+    const action=entry.step?ev.steps?.[entry.step-1]:ev;
+    if(!action)continue;
+    const result = action.run(sim) ?? '';
+    sim.instructorOccurred.push({...entry,result,faults:sim.faults.filter(f=>!faults.has(f.id)).map(f=>f.id),
+      calls:sim.calls.filter(c=>!calls.has(c.id)).map(c=>c.id),possessions:sim.possessions.filter(p=>!possessions.has(p.id)).map(p=>p.id),
+      weatherUntil:Math.max(weather.windUntil!==sim.env.windUntil?sim.env.windUntil:0,weather.rainUntil!==sim.env.rainUntil?sim.env.rainUntil:0)});
+    const label=entry.step?`${ev.name}：${action.name}`:ev.name;
+    sim.log('B','教员',`教员事件：${label}${result?`（${result}）`:''}`);
+    sim.bookmark(label,true);
+  }
+  if (sim.config.instructorEvents?.length && !sim.dailyEvaluationEnded && sim.t >= OPERATING_DAY.to) endScenario(sim);
+}
 
 export interface ScenarioDef {
   id: string;
@@ -19,7 +114,7 @@ export interface ScenarioDef {
   /** start time (s since midnight) */
   start: number;
   duration: number;
-  events: { at: number; label: string; run: (sim: Sim) => string | void }[];
+  events: { at: number; event: string; step?: number }[];
   /** the day's fixed-time special trains, in place of the regular ones */
   fixedRuns?: FixedRun[];
 }
@@ -66,6 +161,115 @@ const stationClosed = (sim: Sim, id: string) => {
   return sim.plat[st.platforms.DN].skip && sim.plat[st.platforms.UP].skip;
 };
 
+export interface InstructorStep {after:number;name:string;run:(sim:Sim)=>string|void}
+export interface InstructorEvent {id:string;name:string;category:string;windows:[number,number][];probability:number;run:(sim:Sim)=>string|void;steps?:InstructorStep[]}
+/** 【假设】初始概率统一为 0.5；可发生时段按事件性质给定，可逐项调整。 */
+export const INSTRUCTOR_EVENTS: InstructorEvent[] = [
+  {id:"longyang-depot-exit-switch-failure",name:"龙阳路车辆段出段道岔失表",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const dp = sim.topo.depots.find((d) => d.key === 'LYD')!;
+          // the exit lead's main-line turnout
+          const lead = dp.transferPaths.find((p) => p.flow === 'out') ?? dp.transferPaths[0];
+          const stub = sim.topo.nodes[lead.throat].links.find((l) => sim.topo.links[l].track === 'SID')!;
+          const start = sim.topo.links[stub].chainA;
+          const sw = findSwitch(sim, dp.station, (id) => sim.topo.switches[id].kind === 'depot'
+            && sim.topo.switches[id].nodes.some((n) => Math.abs(sim.topo.nodes[n].chain - start) < 60));
+          injectFault(sim, 'switch', sw, 18 * 60);
+        }},
+  {id:"century-avenue-morning-crowd",name:"世纪大道大客流",category:"客流",windows:[[23400,34200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('SJD'), 30 * 60, 3); }},
+  {id:"longyang-morning-crowd",name:"龙阳路大客流",category:"客流",windows:[[23400,34200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('LYL'), 25 * 60, 2.5); }},
+  {id:"songhong-turnback-switch-failure",name:"淞虹路折返线道岔失表",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const st = stationIdx('SHR');
+          // the merging turnout in front of 1道 (its toe is the start of the track)
+          const { topo } = sim;
+          const sw = findSwitch(sim, st, (id) => topo.switches[id].kind === 'siding' && topo.switches[id].nodes.length === 1
+            && topo.links[topo.nodes[topo.switches[id].nodes[0]].toe!].track === 'SID');
+          injectFault(sim, 'switch', sw, 25 * 60);
+        }},
+  {id:"peoples-square-evening-crowd",name:"人民广场大客流（×5）",category:"客流",windows:[[57600,70200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('RMG'), 35 * 60, 5); }},
+  {id:"peoples-square-train-pecu",name:"列车乘客紧急报警",category:"列车故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const c = sim.topo.stations[stationIdx('RMG')].chain;
+          const tr = trainIn(sim, c - 3000, c - 300, true) ?? trainIn(sim, c - 6000, c, true);
+          if (tr) callPecu(sim, tr);
+        }},
+  {id:"zc2-failure",name:"ZC2 故障",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => { injectFault(sim, 'zcFail', 1, 25 * 60); }},
+  {id:"jingansi-nanjingwest-train-failure",name:"静安寺—南京西路列车故障",category:"列车故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const a = sim.topo.stations[stationIdx('JAS')].chain;
+          const b = sim.topo.stations[stationIdx('NJX')].chain;
+          const tr = trainIn(sim, a + 150, b - 150, true) ?? trainIn(sim, a - 2500, b - 150, true);
+          if (!tr) return '未找到合适列车';
+          injectFault(sim, 'trainFail', tr.id, 0, undefined, false);
+        }},
+  {id:"severe-wind-sequence",name:"雷暴大风过程",category:"天气",windows:[[14400,99900]],probability:.5,
+    run:sim=>{setWeather(sim,{wind:2,duration:40*60});},steps:[
+      {after:6*60,name:'暴雨',run:sim=>{setWeather(sim,{rain:true,duration:30*60});}},
+      {after:13*60,name:'阵风≥10级，高架段停运',run:sim=>{setWeather(sim,{wind:4,duration:12*60});}},
+      {after:25*60,name:'风力减弱（黄色）',run:sim=>{setWeather(sim,{wind:2,duration:15*60});}},
+    ]},
+  {id:"jingansi-possession-extension",name:"静安寺—南京西路施工延时销点",category:"施工",windows:[[16200,18360]],probability:.5,run:(sim) => {
+          const p = addPossession(sim, stationIdx('JAS'), H(5, 50));
+          sim.log('B', '施工', `${p.name} 施工负责人报告：作业未完，申请延时至 05:50 销点`);
+        }},
+  {id:"first-westbound-train-failure",name:"上行首班车故障",category:"列车故障",windows:[[20520,22500]],probability:.5,run:(sim) => {
+          const tr = trainIn(sim, chainOf(sim, 'KJG') - 600, chainOf(sim, 'LYL') + 300, false) ?? trainIn(sim, chainOf(sim, 'RMG'), chainOf(sim, 'GLL'), false);
+          if (!tr) return '未找到合适列车';
+          injectFault(sim, 'trainFail', tr.id, 300, undefined, true);
+        }},
+  {id:"guanglan-middle-switch-failure",name:"广兰路中间线道岔P2305失表",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => { injectFault(sim, 'switch', switchNamed(sim, 'P2305', stationIdx('GLL')), 25 * 60); }},
+  {id:"hongqiao-railway-evening-crowd",name:"虹桥火车站大客流（×4）",category:"客流",windows:[[57600,70200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('HQZ'), 40 * 60, 4); }},
+  {id:"hongqiao-terminal2-evening-crowd",name:"虹桥2号航站楼大客流（×3）",category:"客流",windows:[[57600,70200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('HQ2'), 35 * 60, 3); }},
+  {id:"hongqiao-railway-down-psd-failure",name:"虹桥火车站下行站台门故障",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => { injectFault(sim, 'psd', sim.topo.stations[stationIdx('HQZ')].platforms.DN, 15 * 60); }},
+  {id:"exhibition-centre-closing-crowd",name:"国家会展中心散场客流（×6）",category:"客流",windows:[[57600,70200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('GJH'), 40 * 60, 6); }},
+  {id:"exhibition-centre-train-pecu",name:"下行列车乘客紧急报警",category:"列车故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const tr = trainIn(sim, chainOf(sim, 'GJH') + 200, chainOf(sim, 'SHR'), true);
+          if (!tr) return '未找到合适列车';
+          callPecu(sim, tr);
+        }},
+  {id:"hongqiao-railway-down-start-signal-failure",name:"虹桥火车站下行出站信号机故障",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const st = stationIdx('HQZ');
+          const sig = sim.topo.signals.find((x) => x.role === 'start' && x.station === st && sim.topo.links[x.link].track === 'DN');
+          if (!sig) return '未找到信号机';
+          injectFault(sim, 'signal', sig.id, 15 * 60);
+        }},
+  {id:"lujiazui-down-track-intrusion",name:"陆家嘴下行站台人员侵入",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => { callTrackPerson(sim, sim.topo.stations[stationIdx('LJZ')].platforms.DN); }},
+  {id:"lujiazui-pudongsouth-axle-disturbance",name:"陆家嘴—浦东南路计轴受扰",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const a = chainOf(sim, 'LJZ'), b = chainOf(sim, 'PDN');
+          const sec = sim.topo.sections.find((x) => x.track === 'DN' && x.kind === 'plain' && x.chainFrom > a + 200 && x.chainTo < b - 200);
+          if (!sec) return '未找到区段';
+          injectFault(sim, 'axle', sec.id, 6 * 60);
+        }},
+  {id:"river-tunnel-westbound-train-failure",name:"越江隧道上行列车故障",category:"列车故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const tr = trainIn(sim, chainOf(sim, 'NJD') + 150, chainOf(sim, 'LJZ') - 150, false) ?? trainIn(sim, chainOf(sim, 'NJD') + 150, chainOf(sim, 'SJD'), false);
+          if (!tr) return '未找到合适列车';
+          injectFault(sim, 'trainFail', tr.id, 0, undefined, false);
+        }},
+  {id:"hongqiao-railway-return-crowd",name:"虹桥火车站返程大客流（×5）",category:"客流",windows:[[75600,86400]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('HQZ'), 70 * 60, 5); }},
+  {id:"pudong-airport-return-crowd",name:"浦东机场到达大客流（×4）",category:"客流",windows:[[75600,86400]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('PDA'), 60 * 60, 4); }},
+  {id:"hongqiao-terminal2-return-crowd",name:"虹桥2号航站楼大客流（×3）",category:"客流",windows:[[75600,86400]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('HQ2'), 60 * 60, 3); }},
+  {id:"hongqiao-terminal2-down-psd-failure",name:"虹桥2号航站楼下行站台门故障",category:"设备故障",windows:[[25200,79200]],probability:.5,run:(sim) => { injectFault(sim, 'psd', sim.topo.stations[stationIdx('HQ2')].platforms.DN, 12 * 60); }},
+  {id:"extra-train-pecu",name:"加班车乘客紧急报警",category:"列车故障",windows:[[25200,79200]],probability:.5,run:(sim) => {
+          const tr = extraTrain(sim);
+          if (!tr) return '未找到加班车';
+          callPecu(sim, tr);
+          return `${tr.tripNo} 车厢内乘客按下紧急报警（错过下车站）`;
+        }},
+  {id:"nanjing-east-closure-sequence",name:"南京东路封站过程",category:"运营调整",windows:[[55800,57600]],probability:.5,
+    run:sim=>{sim.log('B','客流','公安通告：20分钟后南京东路站临时封站，列车跳站通过，出入口关闭；随后处置通过列车的乘客报警。');},steps:[
+      {after:20*60,name:'封站',run:(sim) => {
+          if (stationClosed(sim, 'NJD')) { sim.log('I', '客流', '南京东路站已封站，出入口关闭'); return; }
+          closeStation(sim, 'NJD', true);
+          sim.log('B', '客流', '南京东路站封站：上、下行站台跳停（计划），出入口关闭');
+         }},
+      {after:32*60,name:'通过列车乘客要求下车',run:(sim)=>{
+        const tr=trainIn(sim,chainOf(sim,'RMG')+200,chainOf(sim,'LJZ')-200,true)??trainIn(sim,chainOf(sim,'JAS'),chainOf(sim,'PDN'),true);
+        if(!tr)return '未找到合适列车';
+        callPecu(sim,tr);
+      }},
+    ]},
+  {id:"peoples-square-diverted-crowd",name:"人民广场客流激增（×3）",category:"客流",windows:[[57600,61200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('RMG'), 38 * 60, 3); }},
+  {id:"lujiazui-diverted-crowd",name:"陆家嘴客流激增（×3.5）",category:"客流",windows:[[57600,61200]],probability:.5,run:(sim) => { injectFault(sim, 'surge', stationIdx('LJZ'), 35 * 60, 3.5); }},
+
+];
+
 export const SCENARIOS: ScenarioDef[] = [
   {
     id: 'lyl-insert',
@@ -78,21 +282,9 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(6, 52), duration: 45 * 60,
     events: [
-      {
-        at: 60, label: '龙阳路车辆段出段道岔失表',
-        run: (sim) => {
-          const dp = sim.topo.depots.find((d) => d.key === 'LYD')!;
-          // the exit lead's main-line turnout
-          const lead = dp.transferPaths.find((p) => p.flow === 'out') ?? dp.transferPaths[0];
-          const stub = sim.topo.nodes[lead.throat].links.find((l) => sim.topo.links[l].track === 'SID')!;
-          const start = sim.topo.links[stub].chainA;
-          const sw = findSwitch(sim, dp.station, (id) => sim.topo.switches[id].kind === 'depot'
-            && sim.topo.switches[id].nodes.some((n) => Math.abs(sim.topo.nodes[n].chain - start) < 60));
-          injectFault(sim, 'switch', sw, 18 * 60);
-        },
-      },
-      { at: 8 * 60, label: '世纪大道大客流', run: (sim) => { injectFault(sim, 'surge', stationIdx('SJD'), 30 * 60, 3); } },
-      { at: 10 * 60, label: '龙阳路大客流', run: (sim) => { injectFault(sim, 'surge', stationIdx('LYL'), 25 * 60, 2.5); } },
+      {at:60,event:"longyang-depot-exit-switch-failure"},
+      {at:8 * 60,event:"century-avenue-morning-crowd"},
+      {at:10 * 60,event:"longyang-morning-crowd"},
     ],
   },
   {
@@ -106,17 +298,7 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(7, 40), duration: 40 * 60,
     events: [
-      {
-        at: 90, label: '淞虹路折返线道岔失表',
-        run: (sim) => {
-          const st = stationIdx('SHR');
-          // the merging turnout in front of 1道 (its toe is the start of the track)
-          const { topo } = sim;
-          const sw = findSwitch(sim, st, (id) => topo.switches[id].kind === 'siding' && topo.switches[id].nodes.length === 1
-            && topo.links[topo.nodes[topo.switches[id].nodes[0]].toe!].track === 'SID');
-          injectFault(sim, 'switch', sw, 25 * 60);
-        },
-      },
+      {at:90,event:"songhong-turnback-switch-failure"},
     ],
   },
   {
@@ -130,15 +312,8 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(17, 25), duration: 40 * 60,
     events: [
-      { at: 120, label: '人民广场大客流（×5）', run: (sim) => { injectFault(sim, 'surge', stationIdx('RMG'), 35 * 60, 5); } },
-      {
-        at: 12 * 60, label: '列车乘客紧急报警',
-        run: (sim) => {
-          const c = sim.topo.stations[stationIdx('RMG')].chain;
-          const tr = trainIn(sim, c - 3000, c - 300, true) ?? trainIn(sim, c - 6000, c, true);
-          if (tr) callPecu(sim, tr);
-        },
-      },
+      {at:120,event:"peoples-square-evening-crowd"},
+      {at:12 * 60,event:"peoples-square-train-pecu"},
     ],
   },
   {
@@ -151,7 +326,7 @@ export const SCENARIOS: ScenarioDef[] = [
       'ZC修复后恢复CBTC',
     ],
     dayType: 'weekday', start: H(9, 55), duration: 45 * 60,
-    events: [{ at: 120, label: 'ZC2 故障', run: (sim) => { injectFault(sim, 'zcFail', 1, 25 * 60); } }],
+    events: [{at:120,event:"zc2-failure"}],
   },
   {
     id: 'rescue',
@@ -164,16 +339,7 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(9, 5), duration: 45 * 60,
     events: [
-      {
-        at: 90, label: '静安寺—南京西路列车故障',
-        run: (sim) => {
-          const a = sim.topo.stations[stationIdx('JAS')].chain;
-          const b = sim.topo.stations[stationIdx('NJX')].chain;
-          const tr = trainIn(sim, a + 150, b - 150, true) ?? trainIn(sim, a - 2500, b - 150, true);
-          if (!tr) return '未找到合适列车';
-          injectFault(sim, 'trainFail', tr.id, 0, undefined, false);
-        },
-      },
+      {at:90,event:"jingansi-nanjingwest-train-failure"},
     ],
   },
   {
@@ -187,10 +353,10 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(16, 30), duration: 50 * 60,
     events: [
-      { at: 120, label: '大风黄色预警', run: (sim) => { setWeather(sim, { wind: 2, duration: 40 * 60 }); } },
-      { at: 8 * 60, label: '暴雨', run: (sim) => { setWeather(sim, { rain: true, duration: 30 * 60 }); } },
-      { at: 15 * 60, label: '阵风≥10级，高架段停运', run: (sim) => { setWeather(sim, { wind: 4, duration: 12 * 60 }); } },
-      { at: 27 * 60, label: '风力减弱（黄色）', run: (sim) => { setWeather(sim, { wind: 2, duration: 15 * 60 }); } },
+      {at:120,event:"severe-wind-sequence"},
+      {at:8 * 60,event:"severe-wind-sequence",step:1},
+      {at:15 * 60,event:"severe-wind-sequence",step:2},
+      {at:27 * 60,event:"severe-wind-sequence",step:3},
     ],
   },
   {
@@ -204,21 +370,8 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(4, 50), duration: 90 * 60,
     events: [
-      {
-        at: 60, label: '静安寺—南京西路施工延时销点',
-        run: (sim) => {
-          const p = addPossession(sim, stationIdx('JAS'), H(5, 50));
-          sim.log('B', '施工', `${p.name} 施工负责人报告：作业未完，申请延时至 05:50 销点`);
-        },
-      },
-      {
-        at: 66 * 60, label: '上行首班车故障',
-        run: (sim) => {
-          const tr = trainIn(sim, chainOf(sim, 'KJG') - 600, chainOf(sim, 'LYL') + 300, false) ?? trainIn(sim, chainOf(sim, 'RMG'), chainOf(sim, 'GLL'), false);
-          if (!tr) return '未找到合适列车';
-          injectFault(sim, 'trainFail', tr.id, 300, undefined, true);
-        },
-      },
+      {at:60,event:"jingansi-possession-extension"},
+      {at:66 * 60,event:"first-westbound-train-failure"},
     ],
   },
   {
@@ -232,7 +385,7 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(17, 20), duration: 45 * 60,
     events: [
-      { at: 90, label: '广兰路中间线道岔P2305失表', run: (sim) => { injectFault(sim, 'switch', switchNamed(sim, 'P2305', stationIdx('GLL')), 25 * 60); } },
+      {at:90,event:"guanglan-middle-switch-failure"},
     ],
   },
   {
@@ -246,9 +399,9 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(19, 40), duration: 50 * 60,
     events: [
-      { at: 60, label: '虹桥火车站大客流（×4）', run: (sim) => { injectFault(sim, 'surge', stationIdx('HQZ'), 40 * 60, 4); } },
-      { at: 5 * 60, label: '虹桥2号航站楼大客流（×3）', run: (sim) => { injectFault(sim, 'surge', stationIdx('HQ2'), 35 * 60, 3); } },
-      { at: 18 * 60, label: '虹桥火车站下行站台门故障', run: (sim) => { injectFault(sim, 'psd', sim.topo.stations[stationIdx('HQZ')].platforms.DN, 15 * 60); } },
+      {at:60,event:"hongqiao-railway-evening-crowd"},
+      {at:5 * 60,event:"hongqiao-terminal2-evening-crowd"},
+      {at:18 * 60,event:"hongqiao-railway-down-psd-failure"},
     ],
   },
   {
@@ -262,24 +415,9 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(16, 40), duration: 50 * 60,
     events: [
-      { at: 60, label: '国家会展中心散场客流（×6）', run: (sim) => { injectFault(sim, 'surge', stationIdx('GJH'), 40 * 60, 6); } },
-      {
-        at: 10 * 60, label: '下行列车乘客紧急报警',
-        run: (sim) => {
-          const tr = trainIn(sim, chainOf(sim, 'GJH') + 200, chainOf(sim, 'SHR'), true);
-          if (!tr) return '未找到合适列车';
-          callPecu(sim, tr);
-        },
-      },
-      {
-        at: 22 * 60, label: '虹桥火车站下行出站信号机故障',
-        run: (sim) => {
-          const st = stationIdx('HQZ');
-          const sig = sim.topo.signals.find((x) => x.role === 'start' && x.station === st && sim.topo.links[x.link].track === 'DN');
-          if (!sig) return '未找到信号机';
-          injectFault(sim, 'signal', sig.id, 15 * 60);
-        },
-      },
+      {at:60,event:"exhibition-centre-closing-crowd"},
+      {at:10 * 60,event:"exhibition-centre-train-pecu"},
+      {at:22 * 60,event:"hongqiao-railway-down-start-signal-failure"},
     ],
   },
   {
@@ -293,16 +431,8 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(8, 15), duration: 40 * 60,
     events: [
-      { at: 90, label: '陆家嘴下行站台人员侵入', run: (sim) => { callTrackPerson(sim, sim.topo.stations[stationIdx('LJZ')].platforms.DN); } },
-      {
-        at: 12 * 60, label: '陆家嘴—浦东南路计轴受扰',
-        run: (sim) => {
-          const a = chainOf(sim, 'LJZ'), b = chainOf(sim, 'PDN');
-          const sec = sim.topo.sections.find((x) => x.track === 'DN' && x.kind === 'plain' && x.chainFrom > a + 200 && x.chainTo < b - 200);
-          if (!sec) return '未找到区段';
-          injectFault(sim, 'axle', sec.id, 6 * 60);
-        },
-      },
+      {at:90,event:"lujiazui-down-track-intrusion"},
+      {at:12 * 60,event:"lujiazui-pudongsouth-axle-disturbance"},
     ],
   },
   {
@@ -316,14 +446,7 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekday', start: H(18, 0), duration: 50 * 60,
     events: [
-      {
-        at: 90, label: '越江隧道上行列车故障',
-        run: (sim) => {
-          const tr = trainIn(sim, chainOf(sim, 'NJD') + 150, chainOf(sim, 'LJZ') - 150, false) ?? trainIn(sim, chainOf(sim, 'NJD') + 150, chainOf(sim, 'SJD'), false);
-          if (!tr) return '未找到合适列车';
-          injectFault(sim, 'trainFail', tr.id, 0, undefined, false);
-        },
-      },
+      {at:90,event:"river-tunnel-westbound-train-failure"},
     ],
   },
   {
@@ -342,19 +465,11 @@ export const SCENARIOS: ScenarioDef[] = [
       { from: 'PDA', to: 'ZSG', departures: [H(22, 50), H(23, 10), H(23, 30)], board: ['PDA'], alight: ['LYL', 'SJD', 'RMG'], depotFrom: 'CSD', depotTo: 'BZL' },
     ],
     events: [
-      { at: 60, label: '虹桥火车站返程大客流（×5）', run: (sim) => { injectFault(sim, 'surge', stationIdx('HQZ'), 70 * 60, 5); } },
-      { at: 2 * 60, label: '浦东机场到达大客流（×4）', run: (sim) => { injectFault(sim, 'surge', stationIdx('PDA'), 60 * 60, 4); } },
-      { at: 4 * 60, label: '虹桥2号航站楼大客流（×3）', run: (sim) => { injectFault(sim, 'surge', stationIdx('HQ2'), 60 * 60, 3); } },
-      { at: 50 * 60, label: '虹桥2号航站楼下行站台门故障', run: (sim) => { injectFault(sim, 'psd', sim.topo.stations[stationIdx('HQ2')].platforms.DN, 12 * 60); } },
-      {
-        at: 70 * 60, label: '加班车乘客紧急报警',
-        run: (sim) => {
-          const tr = extraTrain(sim);
-          if (!tr) return '未找到加班车';
-          callPecu(sim, tr);
-          return `${tr.tripNo} 车厢内乘客按下紧急报警（错过下车站）`;
-        },
-      },
+      {at:60,event:"hongqiao-railway-return-crowd"},
+      {at:2 * 60,event:"pudong-airport-return-crowd"},
+      {at:4 * 60,event:"hongqiao-terminal2-return-crowd"},
+      {at:50 * 60,event:"hongqiao-terminal2-down-psd-failure"},
+      {at:70 * 60,event:"extra-train-pecu"},
     ],
   },
   {
@@ -369,28 +484,11 @@ export const SCENARIOS: ScenarioDef[] = [
     ],
     dayType: 'weekend', start: H(15, 40), duration: 60 * 60,
     events: [
-      {
-        at: 60, label: '公安通告：16:00起南京东路站封站',
-        run: (sim) => { sim.log('B', '客流', '公安通告：外滩地区客流管控，16:00起南京东路站临时封站，列车跳站通过（运行图已排计划跳停，ATS 届时自动设置）'); },
-      },
-      {
-        at: 21 * 60, label: '南京东路站封站',
-        run: (sim) => {
-          if (stationClosed(sim, 'NJD')) { sim.log('I', '客流', '南京东路站已封站，出入口关闭'); return; }
-          closeStation(sim, 'NJD', true);
-          sim.log('B', '客流', '南京东路站封站：上、下行站台跳停（计划），出入口关闭');
-        },
-      },
-      { at: 21 * 60, label: '人民广场客流激增（×3）', run: (sim) => { injectFault(sim, 'surge', stationIdx('RMG'), 38 * 60, 3); } },
-      { at: 24 * 60, label: '陆家嘴客流激增（×3.5）', run: (sim) => { injectFault(sim, 'surge', stationIdx('LJZ'), 35 * 60, 3.5); } },
-      {
-        at: 33 * 60, label: '下行列车乘客要求在南京东路下车',
-        run: (sim) => {
-          const tr = trainIn(sim, chainOf(sim, 'RMG') + 200, chainOf(sim, 'LJZ') - 200, true) ?? trainIn(sim, chainOf(sim, 'JAS'), chainOf(sim, 'PDN'), true);
-          if (!tr) return '未找到合适列车';
-          callPecu(sim, tr);
-        },
-      },
+      {at:60,event:"nanjing-east-closure-sequence"},
+      {at:21 * 60,event:"nanjing-east-closure-sequence",step:1},
+      {at:21 * 60,event:"peoples-square-diverted-crowd"},
+      {at:24 * 60,event:"lujiazui-diverted-crowd"},
+      {at:33 * 60,event:"nanjing-east-closure-sequence",step:2},
     ],
   },
 ];
@@ -416,15 +514,20 @@ export function startScenario(sim: Sim, id: string) {
 }
 
 export function scenarioTick(sim: Sim) {
+  instructorTick(sim);
   const sc = sim.scenario;
   if (!sc || sc.ended) return;
   const def = SCENARIOS.find((s) => s.id === sc.id);
   if (def) {
     while (sim.scenarioFired < def.events.length && sim.t - sc.start >= def.events[sim.scenarioFired].at) {
-      const ev = def.events[sim.scenarioFired++];
-      const r = ev.run(sim);
-      sim.log('B', '教员', `场景事件：${ev.label}${r ? `（${r}）` : ''}`);
-      sim.bookmark(ev.label, true);
+      const scheduled = def.events[sim.scenarioFired++];
+      const ev = INSTRUCTOR_EVENTS.find(e=>e.id===scheduled.event)!;
+      const action=scheduled.step?ev.steps?.[scheduled.step-1]:ev;
+      if(!action)continue;
+      const r = action.run(sim);
+      const label=scheduled.step?`${ev.name}：${action.name}`:ev.name;
+      sim.log('B', '教员', `场景事件：${label}${r ? `（${r}）` : ''}`);
+      sim.bookmark(label, true);
     }
   }
   if (sim.t >= sc.end) endScenario(sim);
@@ -434,6 +537,7 @@ export function endScenario(sim: Sim): ScenarioReport {
   const sc = sim.scenario;
   const report = buildReport(sim, sc ? sc.name : '自由运营评估', sc ? sc.start : sim.metrics.since);
   if (sc) { sc.ended = true; sc.report = report; }
+  sim.dailyEvaluationEnded = true;
   sim.reportReady = report;
   sim.log('B', '教员', `${report.title}结束：得分 ${report.score}（${report.grade}）`);
   return report;
@@ -483,6 +587,17 @@ export function buildReport(sim: Sim, title: string, from: number): ScenarioRepo
   if (delivery < 0.98) notes.push(`运行图兑现率 ${(delivery * 100).toFixed(1)}%，有车次未开行或被取消`);
   if (m.stranded > 500) notes.push(`站台滞留乘客较多（约 ${Math.round(m.stranded)} 人次），可考虑限流、加开或均衡间隔`);
   if (!notes.length) notes.push('处置得当，运营秩序良好');
+  for (const event of sim.instructorOccurred.filter(e=>e.at>=from)) {
+    const name=INSTRUCTOR_EVENTS.find(e=>e.id===event.event)?.name??event.event;
+    const faults=sim.faults.filter(f=>event.faults.includes(f.id));
+    const calls=sim.calls.filter(c=>event.calls.includes(c.id));
+    const possessions=sim.possessions.filter(p=>event.possessions.includes(p.id));
+    const details=[event.result,...(faults.length?[`故障修复 ${faults.filter(f=>f.repaired).length}/${faults.length}`]:[]),
+      ...(calls.length?[`呼叫应答 ${calls.filter(c=>c.state==='answered').length}/${calls.length}`]:[]),
+      ...(possessions.length?[`施工完成 ${possessions.filter(p=>['done','cancelled'].includes(p.state)).length}/${possessions.length}`]:[]),
+      ...(event.weatherUntil?[sim.t>=event.weatherUntil?'天气时段已结束':'天气影响中']:[])].filter(Boolean);
+    notes.push(`${name}：${details.join('；')||'已执行，见事件日志'}`);
+  }
   return {
     title, from, to: now, delayMinutes, affected, delivery, plannedTrips: planned.length, deliveredTrips: delivered, punctuality,
     safety: { ...s }, safetyTotal, callsAnswered: m.callsAnswered, callsExpired: m.callsExpired, driving, score, grade, notes,
@@ -491,48 +606,89 @@ export function buildReport(sim: Sim, title: string, from: number): ScenarioRepo
 
 // ---------------------------------------------------------------- random faults
 
-const LEVELS = [
-  null,
-  { label: '初级', mean: 25 * 60, kinds: [['trainFailR', 3], ['trainComm', 1], ['trainDto', 1], ['traction', 1], ['door', 1], ['psd', 2], ['surge', 2], ['pecu', 2]] as [string, number][] },
-  { label: '中级', mean: 14 * 60, kinds: [['trainFailR', 3], ['trainComm', 1], ['trainDto', 1], ['traction', 2], ['door', 2], ['brake', 1], ['psd', 2], ['surge', 2], ['pecu', 2], ['switch', 2], ['axle', 2], ['signal', 2], ['wind', 1]] as [string, number][] },
-  { label: '高级', mean: 8 * 60, kinds: [['trainFailR', 2], ['trainFail', 2], ['trainComm', 1], ['trainDto', 1], ['traction', 2], ['door', 2], ['brake', 2], ['psd', 2], ['surge', 2], ['pecu', 2], ['switch', 3], ['axle', 2], ['signal', 2], ['zcFail', 1], ['wind', 1], ['rain', 1], ['trackPerson', 2]] as [string, number][] },
-];
-
 export const RANDOM_LEVELS = ['关闭', '初级', '中级', '高级'];
+
+export interface RandomFaultEntry extends InstructorScheduleEntry {
+  kind: string; major: boolean; vehicle: boolean; windows: number[][];
+  retryAt?: number; status: 'pending'|'fired'|'unavailable'; vehicleId?: string;
+}
+
+/** Draw kinds once, then reuse the instructor time-window lottery. */
+export function scheduleRandomFaults(seed:number,start:number,level:number,plan:Plan,count=OPERATIONS.randomFaults.levels[level-1]?.count??0,allowMajor=true):RandomFaultEntry[] {
+  if(!count)return [];
+  const rules=OPERATIONS.randomFaults,rng=dayRandom(seed,0x72616e64^level);
+  const calls=plan.trips.filter(t=>t.revenue&&!t.cancelled).flatMap(t=>t.stops);
+  const passenger:[[number,number]]=[[Math.max(start,Math.min(...calls.map(s=>s.dep))),Math.max(...calls.map(s=>s.arr))]];
+  const peak=rules.crowdWindows.map(([a,b])=>[Math.max(a,passenger[0][0]),Math.min(b,passenger[0][1])]).filter(([a,b])=>b>a);
+  const major=allowMajor&&rng()<rules.levels[level-1].majorProbability?Math.floor(rng()*count):-1;
+  const entries:RandomFaultEntry[]=[];
+  for(let slot=0;slot<count;slot++) {
+    const choices=rules.kinds.filter(k=>k.minLevel<=level&&(k.scope!=='peak'||peak.length)&&(k.scope==='all'||passenger[0][1]>passenger[0][0]));
+    const total=choices.reduce((n,k)=>n+k.weight,0);let weight=rng()*total;
+    const selected=choices.find(k=>(weight-=k.weight)<0)??choices.at(-1);
+    if(!selected)continue;
+    const isMajor=slot===major&&passenger[0][1]>passenger[0][0];
+    const kind=isMajor?rules.majorKinds[Math.floor(rng()*rules.majorKinds.length)]:selected.kind;
+    const windows=isMajor||selected.scope==='passenger'?passenger:selected.scope==='peak'?peak:[[start,OPERATING_DAY.to]];
+    const id=`random-${level}-${slot}-${kind}`;
+    const event:InstructorEvent={id,name:kind,category:'随机故障',probability:1,windows:windows.map(([a,b])=>[a,b]),run:()=>{}};
+    const [draw]=scheduleInstructorEvents(seed,start,[id],[event]);
+    if(draw)entries.push({...draw,kind,major:isMajor,vehicle:isMajor||!!selected.vehicle,windows,status:'pending'});
+  }
+  return entries.sort((a,b)=>a.at-b.at||a.event.localeCompare(b.event));
+}
 
 export function setRandomFaults(sim: Sim, level: number) {
   sim.randomLevel = Math.max(0, Math.min(3, level));
-  sim.nextRandomAt = sim.randomLevel ? sim.t + 120 + sim.rng() * 300 : Infinity;
+  if(sim.randomLevel) {
+    const done=sim.randomSchedule.filter(e=>e.status!=='pending');
+    const count=Math.max(0,OPERATIONS.randomFaults.levels[sim.randomLevel-1].count-done.filter(e=>e.status==='fired').length);
+    sim.randomSchedule=[...done,...scheduleRandomFaults(sim.config.seed,Math.max(sim.t,sim.config.startTime),sim.randomLevel,sim.plan,count,!done.some(e=>e.major&&e.status==='fired'))];
+  }
+  sim.nextRandomAt=sim.randomLevel?Math.min(...sim.randomSchedule.filter(e=>e.status==='pending').map(e=>e.at)):Infinity;
   return { ok: true, msg: `随机故障：${RANDOM_LEVELS[sim.randomLevel]}` };
 }
 
 export function randomTick(sim: Sim) {
   // nothing is injected during the warm-up before the session starts
   if (!sim.randomLevel || sim.t < sim.nextRandomAt || sim.t < sim.config.startTime) return;
-  const lv = LEVELS[sim.randomLevel]!;
-  // exponential inter-arrival
-  sim.nextRandomAt = sim.t + Math.max(180, -Math.log(1 - sim.rng()) * lv.mean);
-  const total = lv.kinds.reduce((a, k) => a + k[1], 0);
-  let r = sim.rng() * total;
-  let kind = lv.kinds[0][0];
-  for (const [k, w] of lv.kinds) { r -= w; if (r <= 0) { kind = k; break; } }
-  const msg = injectRandom(sim, kind);
-  if (msg) {
-    sim.log('B', '教员', `随机故障（${lv.label}）：${msg}`);
-    sim.bookmark(`随机故障：${msg}`, true);
+  for(const entry of sim.randomSchedule.filter(e=>e.status==='pending'&&(e.retryAt??e.at)<=sim.t)) {
+    const window=entry.windows.find(([a,b])=>sim.t>=a&&sim.t<b);
+    if(!window) {
+      const later=entry.windows.find(([a])=>a>sim.t);
+      if(later)entry.retryAt=later[0];
+      else {entry.status='unavailable';sim.log('I','教员',`随机故障未执行：${entry.kind}，允许时段内没有合适对象`);}
+      continue;
+    }
+    const before=sim.faults.length;
+    const msg=injectRandom(sim,entry.kind,entry.vehicle?sim.randomFaultVehicles:undefined);
+    if(!msg) {entry.retryAt=Math.min(window[1],sim.t+30);continue;}
+    entry.status='fired';
+    if(entry.vehicle) {
+      const vehicle=sim.trains.get(sim.faults.slice(before).find(f=>sim.trains.has(f.target))?.target??-1)?.vehicle;
+      if(vehicle){entry.vehicleId=vehicle;sim.randomFaultVehicles.push(vehicle);}
+    }
+    sim.log('B','教员',`随机故障（${RANDOM_LEVELS[sim.randomLevel]}）：${msg}`);
+    sim.bookmark(`随机故障：${msg}`,true);
   }
+  sim.nextRandomAt=Math.min(...sim.randomSchedule.filter(e=>e.status==='pending').map(e=>e.retryAt??e.at));
 }
 
 function pick<T>(sim: Sim, arr: T[]): T | undefined {
   return arr.length ? arr[Math.floor(sim.rng() * arr.length)] : undefined;
 }
 
-function injectRandom(sim: Sim, kind: string): string {
+function injectRandom(sim: Sim, kind: string, usedVehicles?: string[]): string {
   const { topo } = sim;
   const level = sim.randomLevel;
   const dur = (base: number) => Math.round(base * (0.7 + sim.rng() * 0.6) * (level === 3 ? 1.4 : 1));
-  const running = sim.trainList.filter((t) => t.inService && t.phase === 'run' && !t.failed && !t.manual && topo.links[t.link].track !== 'DEP');
-  const busy = topo.stations.filter((s) => STATIONS[s.index].demand >= 1.2).map((s) => s.index);
+  const passengerTrains=sim.trainList.filter(t=>t.inService&&t.phase!=='stabled');
+  const running = sim.trainList.filter((t) => t.inService && t.phase === 'run' && !t.failed && !t.manual && topo.links[t.link].track !== 'DEP'&&!usedVehicles?.includes(t.vehicle));
+  const served=topo.stations.filter(s=>{
+    const calls=sim.plan.trips.filter(t=>t.revenue&&!t.cancelled).flatMap(t=>t.stops.filter(stop=>stop.st===s.index&&stop.stop));
+    return calls.some(c=>c.arr<=sim.t)&&calls.some(c=>c.dep>=sim.t);
+  });
+  const busy = served.filter((s) => STATIONS[s.index].demand >= 1.2).map((s) => s.index);
   const result = (r: { ok: boolean; msg: string }) => (r.ok ? r.msg.replace('已注入故障：', '') : '');
   switch (kind) {
     case 'trainFailR': {
@@ -561,14 +717,16 @@ function injectRandom(sim: Sim, kind: string): string {
       return tr ? result(injectFault(sim, 'trainComm', tr.id, dur(420))) : '';
     }
     case 'trainDto': {
-      const tr = pick(sim, running.filter((t) => t.mode === 'DTO'));
+      const tr = pick(sim, running.filter((t) => ['DTO','AM'].includes(t.mode) && !t.dtoInhibit));
       return tr ? result(injectFault(sim, 'trainDto', tr.id, dur(1800))) : '';
     }
     case 'psd': {
-      const p = pick(sim, topo.platforms.filter((pp) => pp.station > 0 && pp.station < topo.stations.length - 1).map((pp) => pp.id));
+      if(!passengerTrains.length)return '';
+      const p = pick(sim, topo.platforms.filter(pp=>served.some(s=>s.index===pp.station)).map(pp=>pp.id));
       return p !== undefined ? result(injectFault(sim, 'psd', p, dur(600))) : '';
     }
     case 'surge': {
+      if(!passengerTrains.length)return '';
       const st = pick(sim, busy);
       return st !== undefined ? result(injectFault(sim, 'surge', st, dur(1500), 2 + Math.round(sim.rng() * 3))) : '';
     }
