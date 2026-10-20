@@ -1080,18 +1080,12 @@ export class TrackView {
       if (!bands.has(key)) bands.set(key, { band: this.trainWindowBand(input.row, input.side), inputs: [] });
       bands.get(key)!.inputs.push(input);
     }
-    // Full 表号-车次 windows while they all fit; a crowded view switches every
-    // normal train to its trip number alone before anything is folded.
-    const layout = (compact: boolean) => {
-      const taken = idx.placed.map(o => o.r);
-      return [...bands.values()].map(({ band, inputs }) => {
-        const ps = placeTrainWindows(inputs, band, taken, compact);
-        taken.push(...ps.map(p => p.r));
-        return { inputs, ps };
-      });
-    };
-    let placed = layout(false);
-    if (placed.some(b => b.ps.some(p => p.text))) placed = layout(true);
+    const taken = idx.placed.map(o => o.r);
+    const placed = [...bands.values()].map(({ band, inputs }) => {
+      const ps = placeTrainWindows(inputs, band, taken);
+      taken.push(...ps.map(p => p.r));
+      return { inputs, ps };
+    });
     let groupUsed = 0;
     for (const { inputs, ps } of placed) {
       for (const p of ps) {

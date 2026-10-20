@@ -64,7 +64,7 @@ export const lateText = (delay: number) => delay > LATE_SHOWN_S ? `+${Math.floor
 /** `delay` is service lateness (0 out of service). `keep`: an abnormal or
  * selected train whose number must stay visible, never folded into a group. */
 export interface TrainWindowInput { id: number; head: {x:number;y:number}; side: 1|-1; width: number; delay: number; keep?: boolean;
-  /** width with the trip number alone (no 表号), used when the view is crowded */
+  /** width with the trip number alone (no 表号), used where windows collide */
   compactWidth?: number }
 export interface TrainWindowPlacement { ids: number[]; r: Rect; leader: Leader; text?: string; compact?: boolean }
 export const trainGroupText = (count: number, delay: number) =>
@@ -72,24 +72,26 @@ export const trainGroupText = (count: number, delay: number) =>
 
 /** One bounded band, with capacity reserved for the overflow group. Never
  * add more vertical layers to make a queue fit into the next station row.
- * Abnormal trains claim their windows first; only normal ones are folded. */
-export function placeTrainWindows(all: TrainWindowInput[], band: Rect, obstacles: Rect[], compact = false): TrainWindowPlacement[] {
-  // crowded view: normal trains show the trip number alone
-  const inputs = compact ? all.map(t => t.keep || !t.compactWidth ? t : { ...t, width: t.compactWidth }) : all;
+ * Abnormal trains claim their windows first. Where windows collide, the
+ * normal trains of that spot show the trip number alone (no 表号); only what
+ * still does not fit is folded into a group next to its trains. The rest of
+ * the view keeps full windows, so a passing crowd does not flip the picture. */
+export function placeTrainWindows(inputs: TrainWindowInput[], band: Rect, obstacles: Rect[]): TrainWindowPlacement[] {
   const out: TrainWindowPlacement[] = [], hidden: TrainWindowInput[] = [];
   const layers = Math.max(1, Math.ceil(band.h / 44));
-  for (const input of [...inputs.filter(t => t.keep), ...inputs.filter(t => !t.keep)]) {
-    const p = placeTrainLabel(input.head, input.side, input.width, out, obstacles, layers, [], band);
-    if (p) out.push({ ...p, ids: [input.id] }); else hidden.push(input);
-  }
   const byId = new Map(inputs.map(t => [t.id, t]));
-  const kept = (p: TrainWindowPlacement) => !p.text && !!byId.get(p.ids[0])?.keep;
-  // Fold locally: trains whose windows would touch form one cluster, and each
-  // cluster gets its own group next to its trains, not one group per band.
+  const short = new Set<number>();
+  const width = (t: TrainWindowInput) => short.has(t.id) ? t.compactWidth! : t.width;
+  const place = (t: TrainWindowInput, shifts?: number[]) => {
+    const p = placeTrainLabel(t.head, t.side, width(t), out, obstacles, layers, [], band, shifts);
+    if (p) out.push({ ...p, ids: [t.id] });
+    return !!p;
+  };
+  for (const t of [...inputs.filter(t => t.keep), ...inputs.filter(t => !t.keep)]) if (!place(t)) hidden.push(t);
   const clusters: TrainWindowInput[][] = [];
   for (const t of hidden.sort((a, b) => a.head.x - b.head.x)) {
     const last = clusters.at(-1)?.at(-1);
-    if (last && t.head.x - last.head.x <= Math.max(t.width, last.width)) clusters.at(-1)!.push(t);
+    if (last && t.head.x - last.head.x <= Math.max(width(t), width(last))) clusters.at(-1)!.push(t);
     else clusters.push([t]);
   }
   const group = (c: TrainWindowInput[]) => {
@@ -99,40 +101,36 @@ export function placeTrainWindows(all: TrainWindowInput[], band: Rect, obstacles
     return p && { ...p, ids: c.map(t => t.id), text };
   };
   while (clusters.length) {
-    let c = clusters.shift()!;
-    const g = group(c);
-    if (g) { out.push(g); continue; }
-    // Make room where the cluster is: lift the windows within reach, place
-    // the group first, then put them back around it; a group within reach
-    // merges. Whatever no longer fits joins the group.
+    const c = clusters.shift()!;
+    // Lift the windows around the spot and lay the spot out again.
     const cx = c.reduce((n, t) => n + t.head.x, 0) / c.length;
     const reach = 2 * Math.max(...c.map(t => t.width));
-    const dist = (o: TrainWindowPlacement) => Math.abs(o.r.x + o.r.w / 2 - cx);
-    let lifted = out.filter(o => dist(o) <= reach);
+    const dist = (x: number) => Math.abs(x - cx);
+    let lifted = out.filter(o => dist(o.r.x + o.r.w / 2) <= reach);
     // nothing close: the nearest window anywhere (a clipped band may hold none)
-    if (!lifted.length && out.length) lifted = [out.reduce((a, b) => dist(a) <= dist(b) ? a : b)];
-    if (!lifted.length) break;
+    if (!lifted.length && out.length) lifted = [out.reduce((a, b) => dist(a.r.x + a.r.w / 2) <= dist(b.r.x + b.r.w / 2) ? a : b)];
     for (const o of lifted) out.splice(out.indexOf(o), 1);
-    c = [...c, ...lifted.filter(o => o.text).flatMap(o => o.ids.map(id => byId.get(id)!))];
-    // abnormal first, then nearest: keep as many of them as still leave room for the group
-    const singles = lifted.filter(o => !o.text).sort((a, b) => Number(kept(b)) - Number(kept(a)) || dist(a) - dist(b))
-      .map(o => byId.get(o.ids[0])!);
+    const members = [...new Map([...c, ...lifted.flatMap(o => o.ids.map(id => byId.get(id)!))].map(t => [t.id, t])).values()]
+      // abnormal first, then nearest
+      .sort((a, b) => Number(!!b.keep) - Number(!!a.keep) || dist(a.head.x) - dist(b.head.x));
+    for (const t of members) if (!t.keep && t.compactWidth) short.add(t.id);
     const base = out.length;
-    let done = false;
+    // first: every train of the spot in its own (compact) window
+    if (members.every(t => place(t))) continue;
+    out.length = base;
+    // then keep as many as still leave room for a group of the rest
     // (a queue on one head: kept windows step aside so the group can sit over it)
-    for (let k = singles.length; k >= 0 && !done; k--) for (const shifts of [undefined, [-1, 1, -.75, .75, -.5, .5]]) {
+    let done = false;
+    for (let k = members.length - 1; k >= 0 && !done; k--) for (const shifts of [undefined, [-1, 1, -.75, .75, -.5, .5]]) {
       if (done) break;
-      const fold = singles.slice(k);
-      for (const t of singles.slice(0, k)) {
-        const p = placeTrainLabel(t.head, t.side, t.width, out, obstacles, layers, [], band, shifts);
-        if (p) out.push({ ...p, ids: [t.id] }); else fold.push(t);
-      }
-      const g = group([...c, ...fold]);
+      const fold = members.slice(k);
+      for (const t of members.slice(0, k)) if (!place(t, shifts)) fold.push(t);
+      const g = group(fold);
       if (g) { out.push(g); done = true; } else out.length = base;
     }
-    if (!done) { clusters.unshift([...c, ...singles]); if (!out.length) break; }
+    if (!done) { if (!lifted.length) break; clusters.unshift(members); }
   }
-  return out.map(o => !o.text && inputs !== all && byId.get(o.ids[0]) !== all.find(t => t.id === o.ids[0]) ? { ...o, compact: true } : o);
+  return out.map(o => !o.text && short.has(o.ids[0]) ? { ...o, compact: true } : o);
 }
 
 export class LabelIndex {
