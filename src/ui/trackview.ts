@@ -1144,9 +1144,16 @@ export class TrackView {
       box.addChild(bg, label); this.labelLayer.addChild(box);
       box.eventMode = 'static'; box.cursor = 'pointer';
       const target = group;
-      box.on('pointerover', () => this.store.showTrainGroup(target.ids));
-      box.on('pointerout', () => this.store.showTrainGroup(null));
-      box.on('pointertap', (e: FederatedPointerEvent) => { e.stopPropagation(); if (!this.dragMoved) this.store.showTrainGroup(target.ids, true); });
+      // a box naming one train behaves like that train's window
+      const one = () => target.ids.length === 1 ? { kind: 'train', id: target.ids[0] } as const : null;
+      box.on('pointerover', () => { const t = one(); if (t) this.h.hover(t); else this.store.showTrainGroup(target.ids); });
+      box.on('pointerout', () => { if (one()) this.h.hover(null); else this.store.showTrainGroup(null); });
+      box.on('pointertap', (e: FederatedPointerEvent) => {
+        e.stopPropagation();
+        if (this.dragMoved) return;
+        const t = one();
+        if (t) this.h.device(t); else this.store.showTrainGroup(target.ids, true);
+      });
       this.store.emit('textsChanged');
     }
     group.ids = ids; group.box.visible = true; group.box.position.set(r.x, r.y);
@@ -1192,7 +1199,7 @@ export class TrackView {
     const compactWidth = trainWindowWidth(charW * tr.trip.length, chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
     const keep = !!chips || (this.store.selection?.kind === 'train' && this.store.selection.id === tr.id);
-    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, chips, status, right };
+    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, trip: tr.trip, chips, status, right };
   }
 
   private drawWindow(tg: TrainGfx, tr: TrainSnap, text: string, chips: string, r: Rect, status: number, right: boolean) {

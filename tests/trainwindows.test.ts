@@ -58,6 +58,15 @@ describe('train window placement',()=>{
   expect(result.flatMap(p=>p.ids).sort((a,b)=>a-b)).toEqual(inputs.map(t=>t.id));
   expect(result.filter(p=>!p.text).length).toBeGreaterThan(0);
  });
+ it('a fold of one train names its trip, never "+1 列"',()=>{
+  // two trains side by side in a narrow band: one window and one more box fit
+  const band={x:0,y:420,w:330,h:44};
+  const inputs=[0,1].map(id=>({id,head:{x:160+id*4,y:400},side:1 as const,width:150,compactWidth:120,delay:id?200:0,trip:`401${id}`}));
+  const result=placeTrainWindows(inputs,band,[]);
+  expect(result.flatMap(p=>p.ids).sort()).toEqual([0,1]);
+  for(const p of result.filter(p=>p.text&&p.ids.length===1)) expect(p.text).toBe(`401${p.ids[0]}${p.ids[0]?"+3'":''}`);
+  expect(result.some(p=>p.text==='+1 列')).toBe(false);
+ });
  it('stacks crowded windows locally with clear leaders and measured text',()=>{
   const placed:{r:Rect;leader:Leader}[]=[];
   const inputs=[[600,174,48],[650,210,0],[710,192,48],[770,174,0],[830,192,0]];

@@ -65,7 +65,9 @@ export const lateText = (delay: number) => delay > LATE_SHOWN_S ? `+${Math.floor
  * selected train whose number must stay visible, never folded into a group. */
 export interface TrainWindowInput { id: number; head: {x:number;y:number}; side: 1|-1; width: number; delay: number; keep?: boolean;
   /** width with the trip number alone (no 表号), used where windows collide */
-  compactWidth?: number }
+  compactWidth?: number;
+  /** the trip number, written on a group of this train alone */
+  trip?: string }
 export interface TrainWindowPlacement { ids: number[]; r: Rect; leader: Leader; text?: string; compact?: boolean }
 export const trainGroupText = (count: number, delay: number) =>
   `+${count} 列${delay > LATE_SHOWN_S ? ` · 最晚 ${Math.floor(delay / 60)}分` : ''}`;
@@ -96,7 +98,8 @@ export function placeTrainWindows(inputs: TrainWindowInput[], band: Rect, obstac
   }
   const group = (c: TrainWindowInput[]) => {
     const cx = c.reduce((n, t) => n + t.head.x, 0) / c.length;
-    const text = trainGroupText(c.length, Math.max(...c.map(t => t.delay)));
+    // a "group" of one names its train: no narrower than "+1 列", and says more
+    const text = c.length === 1 && c[0].trip ? c[0].trip + lateText(c[0].delay) : trainGroupText(c.length, Math.max(...c.map(t => t.delay)));
     const p = placeTrainLabel({ x: cx, y: c[0].head.y }, c[0].side, textWidth(text, 24) + 24, out, obstacles, layers, [], band);
     return p && { ...p, ids: c.map(t => t.id), text };
   };
