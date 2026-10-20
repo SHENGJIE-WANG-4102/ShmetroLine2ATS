@@ -1080,16 +1080,28 @@ export class TrackView {
       if (!bands.has(key)) bands.set(key, { band: this.trainWindowBand(input.row, input.side), inputs: [] });
       bands.get(key)!.inputs.push(input);
     }
+    // Full 表号-车次 windows while they all fit; a crowded view switches every
+    // normal train to its trip number alone before anything is folded.
+    const layout = (compact: boolean) => {
+      const taken = idx.placed.map(o => o.r);
+      return [...bands.values()].map(({ band, inputs }) => {
+        const ps = placeTrainWindows(inputs, band, taken, compact);
+        taken.push(...ps.map(p => p.r));
+        return { inputs, ps };
+      });
+    };
+    let placed = layout(false);
+    if (placed.some(b => b.ps.some(p => p.text))) placed = layout(true);
     let groupUsed = 0;
-    for (const { band, inputs } of bands.values()) {
-      for (const p of placeTrainWindows(inputs, band, idx.placed.map(o => o.r))) {
+    for (const { inputs, ps } of placed) {
+      for (const p of ps) {
         if (p.text) {
           this.drawTrainGroup(groupUsed++, p.ids, p.text, p.r, Math.max(...p.ids.map(id => inputs.find(t => t.id === id)!.delay)));
           idx.add(p.r, `train-group:${p.ids.join(',')}`);
         } else {
           const data = inputs.find(t => t.id === p.ids[0])!, tg = this.trains.get(data.id)!;
           tg.box.visible = true;
-          this.drawWindow(tg, data.tr, `${data.tr.svc}-${data.tr.trip}`, data.chips, p.r, data.status, data.right);
+          this.drawWindow(tg, data.tr, p.compact ? data.tr.trip : `${data.tr.svc}-${data.tr.trip}`, data.chips, p.r, data.status, data.right);
           idx.add(p.r, `train:${data.tr.svc}-${data.tr.trip}`);
         }
         leaders.moveTo(p.leader.x1,p.leader.y1).lineTo(p.leader.x2,p.leader.y2).stroke({width:1.5,color:0x5d7086,alpha:.9});
@@ -1178,12 +1190,15 @@ export class TrackView {
     if (tr.hold) chips += '扣';
     if (tr.hot) chips += '热备';
     if (tr.inService) chips += lateText(tr.delay);
-    tg.label.text = full;
     tg.chips.text = chips;
-    const width = trainWindowWidth(tg.label.width, chips ? tg.chips.width : 0);
+    // The label may show the compact or the full text (drawWindow sets it);
+    // it is monospaced, so one measured advance sizes both.
+    const charW = tg.label.text ? tg.label.width / tg.label.text.length : textWidth('0', 30, true);
+    const width = trainWindowWidth(charW * full.length, chips ? tg.chips.width : 0);
+    const compactWidth = trainWindowWidth(charW * tr.trip.length, chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
     const keep = !!chips || (this.store.selection?.kind === 'train' && this.store.selection.id === tr.id);
-    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, chips, status, right };
+    return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, chips, status, right };
   }
 
   private drawWindow(tg: TrainGfx, tr: TrainSnap, text: string, chips: string, r: Rect, status: number, right: boolean) {

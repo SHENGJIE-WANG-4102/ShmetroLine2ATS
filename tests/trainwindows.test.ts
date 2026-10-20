@@ -29,6 +29,25 @@ describe('train window placement',()=>{
   expect(lateText(120)).toBe('');
   expect(lateText(179)).toBe("+2'");
  });
+ it('folds each crowded spot on its own, next to its trains, and a crowded view goes compact first',()=>{
+  const band={x:0,y:420,w:2000,h:44};
+  const queue=(x0:number,id0:number)=>Array.from({length:5},(_,i)=>({id:id0+i,head:{x:x0+i*20,y:400},side:1 as const,width:120,compactWidth:70,delay:0}));
+  const inputs=[...queue(300,0),...queue(1500,10)];
+  const groups=placeTrainWindows(inputs,band,[]).filter(p=>p.text);
+  expect(groups.length).toBe(2);
+  for(const g of groups) {
+   const xs=g.ids.map(id=>inputs.find(t=>t.id===id)!.head.x);
+   expect(Math.max(...xs)-Math.min(...xs)).toBeLessThan(200);
+   expect(Math.abs(g.r.x+g.r.w/2-xs.reduce((a,b)=>a+b)/xs.length)).toBeLessThan(250);
+  }
+  // spread trains that collide only at full width all fit once compact
+  const spread=Array.from({length:12},(_,id)=>({id,head:{x:100+id*100,y:400},side:1 as const,width:120,compactWidth:70,delay:0,keep:id===3}));
+  const full=placeTrainWindows(spread,band,[]),compact=placeTrainWindows(spread,band,[],true);
+  expect(full.some(p=>p.text)).toBe(true);
+  expect(compact.some(p=>p.text)).toBe(false);
+  expect(compact.find(p=>p.ids[0]===3)!.compact).toBeFalsy();
+  expect(compact.filter(p=>p.compact).length).toBe(11);
+ });
  it('stacks crowded windows locally with clear leaders and measured text',()=>{
   const placed:{r:Rect;leader:Leader}[]=[];
   const inputs=[[600,174,48],[650,210,0],[710,192,48],[770,174,0],[830,192,0]];
