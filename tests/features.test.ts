@@ -302,13 +302,17 @@ describe('environment', () => {
 describe('yards, PIS', () => {
   it('vehicles are conserved between yards, the line and terminal stabling', () => {
     const sim = makeSim('weekday', H);
-    const count = () => sim.yards.reduce((a, y) => a + yardCount(y), 0) + sim.trainList.reduce((a, t) => a + 1 + (t.coupledVehicle ? 1 : 0), 0);
+    // Workshop admissions remove a physical car from the available yard stock.
+    const count = () => sim.yards.reduce((a, y) => a + yardCount(y), 0) + sim.trainList.reduce((a, t) => a + 1 + (t.coupledVehicle ? 1 : 0), 0)
+      + sim.stabledPool.length + [...sim.vehicles.values()].filter(v => v.work).length;
     expect(count()).toBe(LINE_INFO.fleet);
     runFor(sim, 3600, check);
     expect(count()).toBe(LINE_INFO.fleet);
     const ids = new Set<string>();
     for (const y of sim.yards) for (const t of y.tracks) for (const v of t) ids.add(v);
-    for (const t of sim.trainList) ids.add(t.vehicle);
+    for (const t of sim.trainList) { ids.add(t.vehicle); if (t.coupledVehicle) ids.add(t.coupledVehicle); }
+    for (const no of sim.stabledPool) ids.add(no);
+    for (const [no, v] of sim.vehicles) if (v.work) ids.add(no);
     expect(ids.size).toBe(LINE_INFO.fleet);
   });
 

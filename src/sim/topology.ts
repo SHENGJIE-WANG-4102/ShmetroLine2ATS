@@ -1562,3 +1562,14 @@ export function linkChain(topo: Topology, link: number, offset: number): number 
   const l = topo.links[link];
   return l.chainA + (l.chainB - l.chainA) * Math.min(1, Math.max(0, offset / l.len));
 }
+
+/** Forward order on the current linear topology; callers do not compare station indices. */
+export function ahead(direction: 'DN' | 'UP', from: number, to: number): boolean {
+  return direction === 'DN' ? to > from : to < from;
+}
+
+/** Geographic running direction of a physical train, including depot/siding links. */
+export function travelDirection(topo: Topology, train: { link: number; dir: Dir }): 'DN' | 'UP' {
+  const link = topo.links[train.link];
+  return (train.dir === 1 ? link.chainB >= link.chainA : link.chainA > link.chainB) ? 'DN' : 'UP';
+}

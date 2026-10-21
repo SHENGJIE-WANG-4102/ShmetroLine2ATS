@@ -24,9 +24,10 @@ import { HALT, rootCause } from './halt';
 
 export type ViolationKind =
   | 'OVERLAP' | 'BEYOND_MA' | 'MA_NO_ROUTE' | 'SWITCH_UNDER_LOAD' | 'EB_ACCEL' | 'OVERSPEED' | 'FSM'
-  | 'LIVENESS' | 'DEADLOCK' | 'NEGATIVE_COUNT';
+  | 'LIVENESS' | 'DEADLOCK' | 'NEGATIVE_COUNT' | 'ARS_FOREIGN_CANCEL';
 
 export const VIOLATION_LABEL: Record<ViolationKind, string> = {
+  ARS_FOREIGN_CANCEL: 'ARS取消了其他列车的进路',
   OVERLAP: '两列车占用同一段线路',
   BEYOND_MA: '列车越过移动授权终点',
   MA_NO_ROUTE: '移动授权越过未锁闭进路的信号机',
@@ -51,7 +52,7 @@ export interface Violation {
 export interface DiagSnapshot {
   t: number;
   trains: Record<string, unknown>[];
-  routes: { route: number; name: string; state: string; owner: number; committed: number; cancelAt: number }[];
+  routes: { route: number; name: string; state: string; owner: number; arsTrain?: number; committed: number; cancelAt: number }[];
   zones: string[];
 }
 
@@ -111,7 +112,7 @@ export function diagSnapshot(sim: Sim, trains: number[]): DiagSnapshot {
   for (const ar of sim.routes.values()) {
     const r = topo.routes[ar.route];
     const near = r.steps.some((s) => links.has(s.link)) || trs.some((tr) => tr.nextSignal === r.start);
-    if (near) routes.push({ route: ar.route, name: r.name, state: routeState(sim, ar.route), owner: ar.owner, committed: ar.committed, cancelAt: ar.cancelAt });
+    if (near) routes.push({ route: ar.route, name: r.name, state: routeState(sim, ar.route), owner: ar.owner, arsTrain: ar.arsTrain, committed: ar.committed, cancelAt: ar.cancelAt });
   }
   return { t: sim.t, trains: trs.map((tr) => trainSnap(sim, tr)), routes, zones: sim.zoneState.slice() };
 }
@@ -133,6 +134,17 @@ export function violate(sim: Sim, kind: ViolationKind, trains: number[], detail:
   if (g.violations.length > MAX_KEPT) g.violations.splice(0, g.violations.length - MAX_KEPT);
   g.seq++;
   sim.log('A', '完整性', `仿真完整性：${VIOLATION_LABEL[kind]} — ${detail}`, { key: `integrity-${kind}-${g.seq}`, code: `INTEGRITY_${kind}`, train: trains[0], snapshot: v.snapshot });
+}
+
+/** Audit the accepted cancellation before CI releases or delays the route. */
+export function checkArsCancellation(sim: Sim, signal: number, requester: number) {
+  const ar = sim.routes.get(sim.sig[signal].route);
+  if (!ar) return;
+  const assigned = ar.arsTrain ?? -1; // old unassigned automatic routes remain unclaimed
+  const other = [assigned, ar.owner, ar.committed].find(id => id >= 0 && id !== requester && sim.trains.has(id));
+  if (other === undefined) return;
+  const label = (id: number) => { const t = sim.trains.get(id); return t ? `${t.svc}-${t.tripNo}（ID ${id}）` : `ID ${id}`; };
+  violate(sim, 'ARS_FOREIGN_CANCEL', [requester, other], `${label(requester)} 在 ${sim.topo.signals[signal].name} 取消为 ${label(other)} 排列的进路 ${sim.topo.routes[ar.route].name}`, `signal-${signal}`);
 }
 
 // ---------------------------------------------------------------- safety (every step)

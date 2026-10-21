@@ -6,6 +6,7 @@ import type { ActiveRoute, Train } from './model';
 import { withdrawAuthority, rescueRouteReady } from './movement';
 import { PERF } from './dynamics';
 import { nextLink } from './topology';
+import { checkArsCancellation } from './invariants';
 
 export const SWITCH_TIME = 5; // s, point machine throw time (approx)
 export const APPROACH_RELEASE = 30; // s, delayed release when approach-locked
@@ -121,7 +122,7 @@ export function trySetRoute(sim: Sim, rid: number, opts: { manual?: boolean; fle
   const ar: ActiveRoute = {
     route: rid, state: 'setting', fleeting: !!opts.fleeting, manual: !!opts.manual, guide: !!opts.guide,
     guideUntil: opts.guide ? sim.t + GUIDE_TIME : 0, occSeen: r.sections.map(() => false), released: r.sections.map(() => false),
-    entered: false, owner: -1, cancelAt: 0, committed: -1, setAt: sim.t,
+    entered: false, owner: -1, arsTrain: opts.train ?? -1, cancelAt: 0, committed: -1, setAt: sim.t,
     directionTrain: approaching?.id ?? -1,
     directionReverse: reverseInterval,
   };
@@ -188,6 +189,7 @@ export function signalPassed(sim: Sim, train: number, sig: number) {
   if (sg.route < 0) return;
   const ar = sim.routes.get(sg.route)!;
   if (ar.committed === train) ar.committed = -1;
+  if (ar.arsTrain === train && ar.fleeting) ar.arsTrain = -1;
   if (ar.fleeting || ar.entered) return;
   ar.entered = true;
   ar.owner = train;
@@ -222,7 +224,7 @@ export function committedTrain(sim: Sim, sig: number): number {
   return -1;
 }
 
-export function cancelRoute(sim: Sim, sig: number, opts: { force?: boolean; manual?: boolean } = {}): CmdResult {
+export function cancelRoute(sim: Sim, sig: number, opts: { force?: boolean; manual?: boolean; source?: 'ars' | 'dispatcher' | 'fault' | 'recovery'; train?: number } = {}): CmdResult {
   const sg = sim.sig[sig];
   const name = sim.topo.signals[sig].name;
   if (sg.route < 0) return { ok: false, msg: `${name} 无已建立进路` };
@@ -233,6 +235,7 @@ export function cancelRoute(sim: Sim, sig: number, opts: { force?: boolean; manu
     const occ = r.sections.some((s, i) => !ar.released[i] && sim.sec[s].trainOcc);
     if (occ) return { ok: false, msg: `进路 ${r.name} 内有车占用，不能取消` };
   }
+  if (opts.source === 'ars' && opts.train !== undefined) checkArsCancellation(sim, sig, opts.train);
   if (approachLocked(sim, sig) && !opts.force) {
     // the signal closes at once; the route is released after the approach-locking delay.
     // A train that can no longer stop before the signal with the service brake keeps

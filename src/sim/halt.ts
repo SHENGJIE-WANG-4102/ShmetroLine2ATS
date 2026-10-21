@@ -135,7 +135,9 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (!tr.tasks.length) return r('NO_TASK');
   if (tr.tasks[0].k === 'rescue') return r('RESCUE', tr.tasks[0].target);
   const plannedUntil = 0;
-  if (tr.maDist > 40 && tr.stopDist < 1.5) return r('STOP_POINT', -1, '', plannedUntil);
+  if (Number.isFinite(tr.stopDist) && tr.stopDist <= tr.maDist
+    && (tr.maCode === 'ROUTE_WAIT' || tr.maDist > 40 && tr.stopDist < 1.5))
+    return r('STOP_POINT', -1, `停车点前 ${tr.stopDist.toFixed(1)} m，授权足够`, plannedUntil);
   let code = tr.maCode;
   let train = tr.maTrain;
   let detail = tr.maReason;

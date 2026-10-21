@@ -649,7 +649,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   vT = Math.min(vT, vPerm, tr.vCap);
   // standing a few metres short of a signal at stop: ATO does not start into
   // so short an authority (it could not ease off in time under the jerk limit)
-  if (!rm && !tr.manual && tr.v < 0.05 && scan.maCode === 'ROUTE_WAIT' && scan.maDist < 15) vT = 0;
+  if (!rm && !tr.manual && tr.v < 0.05 && scan.maCode === 'ROUTE_WAIT' && scan.maDist < 15 && scan.stopDist > scan.maDist) vT = 0;
   if (tr.mode === 'CM') vT *= 0.96;
   if (tr.hold && tr.v < 0.1) vT = 0;
   if (standStill) vT = 0;

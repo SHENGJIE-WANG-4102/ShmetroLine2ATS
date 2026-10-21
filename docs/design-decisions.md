@@ -1758,3 +1758,25 @@ violations []
 - 本批文件清单：`src/data/line2.ts`；`src/sim/{ats,diagnostics,engine,env,model,operatingDay,planning,state,topology,worker,yard}.ts`；`src/ui/yardview.ts`；`tests/{continuous-day,fleet,operating-day,timetable}.test.ts`；`docs/design-decisions.md`。任务文档留给后续审核处理，未删除；未提交、推送或切分支。
 
 - 最终验证：`npx tsc --noEmit` 通过；`npx vitest run tests/operating-day.test.ts tests/dispatcher.test.ts tests/timetable.test.ts tests/continuous-day.test.ts tests/fleet.test.ts` 共5文件82项全过，最后新增的每日检修前/后 `validatePlan` 校验单独复跑4项通过，120天均0 error。`npx tsx scripts/validate-plan.ts weekday` / `weekend` 均0问题；`npx tsx scripts/firstlast.ts`、`npx tsx scripts/gaode-compare.ts` 与改前逐行一致；`git diff --check` 通过。命令输出留在 `work/day-fleet-final-all.txt`、`work/day-fleet-forecast-verified.txt` 及 `work/day-fleet-{before,after}-*`。
+
+## D113 ARS 进路归属和短授权对标，随机跨日排查
+
+- 用户决定：本轮只修两条已确认根因 A/B；其他随机现场先按根因归类，诊断、等待链、源码位置和建议放在 `work/fuzz/findings.md`，不边查边修改运营规则。随机测试经过 `sim.command`，拒绝也进入输入日志，不能直接改状态制造操作。
+- A：`movement` 的红灯前不足15米不起步规则，只在停车目标位于授权外时生效。停车点在授权内，继续沿原制动模型对标，不改制动/ATP曲线、停站模型或运行时分。`halt` 对这类静止状态显示“停车点前…米，授权足够”，保留其他故障、扣车、人工驾驶的真实原因。两份原始现场分别在约5.7秒和5.6秒后重新对标并开门。
+- B：`ActiveRoute.arsTrain` 保存 `trySetRoute(opts.train)` 的申请车ID，不能把自动进路推测到的接近车当成永久归属。常规自动通过进路可以被多车连续使用；`directionTrain` 继续只承担方向防护，不能拿它代替归属。`arsTrain` 为旧存档保留可选形式，未记过归属的旧自动进路按无归属处理；已有 `owner/committed` 仍受保护。
+- ATS 六处自动撤路统一经过 `cancelArsRoute`：申请车自己的旧进路可以撤；无归属、无接近锁闭的空闲自动进路可以撤；别车的申请、已进入车、已承诺车不得由当前车撤销，等待链写实际车号。救援处置单独标明 `recovery`，故障处置标明 `fault`；人工/故障/救援撤路不计为ARS违规。
+- 同时补齐归属的释放：后车可能在中间停车前提前排列前方进路。前车后来形成自己的出发请求时，沿用现有 `firstAt` 的前车优先排序，由原申请车撤销自己的未使用预约。不能让前车替后车撤路，也不能保留一个已失去前车优先权的预约造成互等。这是原预约规则的生命周期，不另加按站名或车次的让行规则。
+- 联锁在接受ARS撤路时独立检查 `ARS_FOREIGN_CANCEL`，记录请求车、被撤进路的申请/占用/承诺车和信号机。仅加检查、未加防护的版本重放原现场，在第二天07:59:46准确抓到024取消002的S2914进路，证据 `work/ars-rule-conflicts/b-audit-proof.json`。完整性时限和豁免未改变。
+- `arsTrain` 是物理列车ID，不是每日车次编号，不减一天、不重映射；外层 `routes` 已在 `DAY_STATE` 归为carry，跨日测试增加该字段的保存断言。没有新增Sim顶层状态。
+- `topology.ahead/travelDirection` 集中表达线性拓扑的前方关系，压测不按站名选回段目标；原 `dirOf` 转调同一辅助函数。【假设】无指定目标时，固定回段压力选择有独立入/出转换路径的车场，默认UP；可通过参数指定车场和方向。
+- `scripts/stress-day2.ts` 保留原12例的阶段：第一天04:00至27:45、换日、第二天至24:00，天气07:00/15:00，支持故障、种子、风级、回段间隔、车场、方向、日型和缓存。`scripts/fuzz-day.ts` 则两天都跑到27:45，默认每小时随机3至8个主操作，清理操作和配置天气另记，遇首条完整性/数值/守恒/过夜问题立即停止并导出标准诊断。
+- 【假设】随机调度遵循有限干预：人工接管只选已停稳车，10至30秒后恢复自动；封锁选空闲且未锁闭区段，30至120秒后解除；临时限速60至240秒后解除；退出服务每30分钟最多一列，并保留至少12列、约65%计划高峰车底的正常运营车。操作条件不满足记跳过，命令拒绝照常记录，不绕过命令校验。
+- 回归新增：短授权对标开门后继续任务；共用出入段线被让车的进路不被回段车撤销；独立审计只追踪ARS来源；原申请车释放过时预约；跨日保留归属。旧features车辆守恒断言补计检修库、待分配实车池及救援连挂车号，总数要求仍为100，没有降低预期。原断言漏计检修库，因而错误地算成99列。
+- 两种日型的 `trips/blocks` 改前改后哈希完全一致。完整批次、回放与分类结果在 `work/fuzz/findings.md`；所有试跑、废弃实现的失败留在 `work/fuzz-pilot-v1` 和 `work/ars-rule-conflicts/matrix-pilot-v1`，不纳入最终统计。未运行全量测试、soak或simday，未提交、推送或切分支。
+
+- 本轮最终文件：`src/sim/{ats,faults,halt,interlocking,invariants,model,movement,topology}.ts`；`tests/{core,features,continuous-day}.test.ts`；`scripts/{stress-day2,fuzz-day}.ts`；`docs/design-decisions.md`。新Sim顶层字段0个，静态运行图数据改动0处。
+- 最终结果（2026-10-21收尾）：随机60例 **3过/57失败**，归10个首失败主根因；另有等待边误归属、命令注册/风级校验2项附带问题。原12例 **11过/1失败**，未达0违例：`2 5 3 20`已越过原B故障，在第二天09:29:52暴露川沙5车入段预约环。追加18例 **11过/7失败**，其中2例S2018安全违例、5例等待环；其他根因均按用户要求未改代码。全表、复现参数、车辆、等待链、行号与建议在 `work/fuzz/findings.md`。
+- 回放6份：5份核对首条完整性违例、1份单独重演换日边界，均在同一时刻复现相同事件，包括第二天startState和换日构造崩溃；57份随机失败诊断的inputLog与工具操作逐项核对0差异。5915条调度命令中4636受理/1279拒绝。风4的45次、低粘着145次均被既有校验拒绝，实际环境覆盖有缺口，不能把参数出现当作已经生效。人工换车次/恢复服务请求也未成功受理，已明确限制。
+- 单测四文件完整回归134项通过，加后增预约释放1项，共135项；清理尾空行后A/B四项复核通过。`npx tsc --noEmit`及新脚本补充类型检查0错误，`git diff --check`通过。两种日型trips/blocks的哈希与改前完全一致。运行源码2c1b55a6a594b06d已完整留档；最后仅清理3文件尾空行，逐文件核对无行为差异，最终文本指纹28eac2fc22d1327d。日志在 `work/ars-rule-conflicts/`。
+- 真实跨夜在途专项：从04:00真实运行至次日，03:30加开的ID119/02115在风1、暴雨中跨03:45保持位置/方向/车号，第二天07:00前完成原任务，实车100列、完整性0；不是只摆一个跨日现场。常规随机操作时窗04–24，之后运行到27:45观察收车，【假设】夜间常规调度密度不沿用白天；跨夜加开另做专项。
+- 120×人工重点：07:00后机场下行对标、08:00附近川沙共用线进路保持；未修问题优先看S2018前方进路回收、龙阳路反向回段/川沙预约，以及临时折返接续。原026↔034的17:43同车次现场未复现，未声称已修。未提交、推送、切分支，任务文档留待审核。

@@ -10,7 +10,7 @@ import { trySetRoute, cancelRoute, committedTrain, bindRouteApproach, updateInte
 import { setMode, grantRM, updateOnboard, applyEB, ebCauseCleared, answerEbRelease, authoriseEBRelease } from '../src/sim/onboard';
 import { parseTime } from '../src/sim/calendar';
 import { computeBody, indexBodies, rescueRouteReady, scanAhead } from '../src/sim/movement';
-import { distanceToBerth, updateTrainTasks, rescueApproach, trainDesire, runARS, spawnDue, setTripFromTasks, intervalDepartureHold } from '../src/sim/ats';
+import { distanceToBerth, updateTrainTasks, rescueApproach, trainDesire, runARS, spawnDue, setTripFromTasks, intervalDepartureHold, cancelArsRoute } from '../src/sim/ats';
 import { dispatcherTick } from '../src/sim/dispatcher';
 import { faultsTick } from '../src/sim/faults';
 import { updateHalts, rootCause } from '../src/sim/halt';
@@ -1236,7 +1236,7 @@ describe('standby trains (D45)', () => {
     // wait on the lead behind planned exits, D79: by the trip's departure)
     advance(sim, Math.max(...sb.trips.slice(0, 2).map(id => sim.plan.trips[id].stops[0].dep)) - sim.t);
     expect(sb.train).toBeDefined();
-    expect(sim.integrity.violations).toHaveLength(0);
+    expect(sim.integrity.violations, JSON.stringify(sim.integrity.violations)).toHaveLength(0);
   });
   it('without the automatic dispatcher a withdrawal does not call a standby', () => {
     const sim = live(); sim.autoDispatch = false;
@@ -1592,4 +1592,84 @@ describe('audit hardening (D54)', () => {
     expect(parseTime('01:00')).toBe(90000);
     for (const bad of ['Infinity', 'Infinity:00', '1e9', '30:00', '07:75', '', 'NaN']) expect(parseTime(bad)).toBeNaN();
   });
+});
+
+describe('ARS rule conflicts', () => {
+  it('creeps the last five metres to a stop within its short red-signal authority, opens and resumes', () => {
+    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
+    for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
+    for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
+    const station = sim.topo.stations.at(-1)!, berth = sim.topo.berths[platformBerth(sim.topo, station.index, 'DN')];
+    const turn = turnbackAt(sim.topo, station.index, 'DN')!; expect(turn.kind).toBe('rear');
+    if (turn.kind !== 'rear') return;
+    Object.assign(tr, {link:berth.link,off:berth.offset-berth.dir*5.6,dir:berth.dir,hist:[{link:berth.link,dir:berth.dir}],
+      v:0,a:0,eb:false,phase:'run',mode:'DTO',manual:false,block:-1,tripId:-1,inService:true,hold:false,
+      tbStage:'none',depotStage:'none',lastMa:Infinity,lastDs:0,maDist:0,maFar:0,maSigs:[],doorsOpen:false});
+    tr.tasks=[{k:'stop',berth:berth.id,station:station.index,trip:-1,arr:null,dep:sim.t+30,doors:true,revenue:true},
+      {k:'reverse',station:station.index,berths:turn.berths,chosen:turn.berths[0],minTime:40},
+      {k:'stop',berth:platformBerth(sim.topo,station.index,'UP'),station:station.index,trip:-1,arr:null,dep:null,doors:true,revenue:true}];
+    computeBody(sim,tr);indexBodies(sim);computeOccupancy(sim);
+    const scan=scanAhead(sim,tr,berth.id);expect(scan.stopDist).toBeCloseTo(5.6,1);expect(scan.maDist).toBeLessThan(15);expect(scan.maDist).toBeGreaterThan(scan.stopDist);
+    tr.stopDist=scan.stopDist;tr.maDist=scan.maDist;tr.maCode=scan.maCode;updateHalts(sim);expect(tr.halt.code).toBe('STOP_POINT');
+    expect(trainDesire(sim,tr)).toBeNull();
+    const startStops=tr.stopsMade;let opened=false;
+    const end=sim.t+300;while(sim.t<end&&(!opened||tr.tasks[0]?.k==='stop')){sim.step();opened ||= tr.doorsOpen;}
+    expect(opened).toBe(true);expect(tr.stopsMade).toBeGreaterThan(startStops);expect(tr.tasks[0]?.k).not.toBe('stop');
+    expect(sim.integrity.violations).toHaveLength(0);
+  });
+  const sharedLead = () => {
+    const sim=make();advance(sim,2);const [exit,arrival]=sim.trainList;
+    for(const other of [...sim.trainList])if(other!==exit&&other!==arrival)sim.removeTrain(other);
+    for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
+    const depot=sim.topo.depots.find(d=>d.transferPaths.some(p=>p.flow==='shared')&&d.portals.entry.UP.reverse)!;
+    const path=depot.transferPaths.find(p=>p.flow==='shared')!,goal=platformBerth(sim.topo,depot.station,'UP');
+    const table=sim.routeTable.next.get(goal)!;
+    const signal=sim.topo.signals.filter(s=>s.station===depot.station&&s.dir===-1&&sim.topo.links[s.link].track==='UP')
+      .find(s=>table[s.id]>=0&&sim.topo.links[s.link].chainA>sim.topo.stations[depot.station].chain+100)!;
+    const route=table[signal.id],approach=sim.topo.links.find(l=>l.a===signal.node&&l.track==='UP')!;
+    Object.assign(exit,{link:path.stub,off:sim.topo.links[path.stub].len-10,dir:1,hist:[{link:path.stub,dir:1}],v:0,phase:'run',block:-1,tripId:-1});
+    exit.tasks=[{k:'stop',berth:goal,station:depot.station,trip:-1,arr:null,dep:null,doors:false,revenue:false}];computeBody(sim,exit);
+    Object.assign(arrival,{link:approach.id,off:Math.min(approach.len-1,200),dir:-1,hist:[{link:approach.id,dir:-1}],v:0,phase:'run',block:-1,tripId:-1,
+      nextSignal:signal.id,nextSignalDist:200,stopDist:Infinity});
+    arrival.tasks=[{k:'stop',berth:goal,station:depot.station,trip:-1,arr:null,dep:null,doors:false,revenue:false},
+      {k:'reverse',berths:[goal],chosen:goal,station:depot.station,minTime:40},{k:'depot',depot:depot.id}];computeBody(sim,arrival);
+    indexBodies(sim);computeOccupancy(sim);
+    const result=trySetRoute(sim,route,{train:exit.id});expect(result.ok,result.msg).toBe(true);
+    return {sim,exit,arrival,signal,route};
+  };
+  it('leaves the departure route intact while the returning train yields on a shared depot lead',()=>{
+    const {sim,exit,arrival,signal,route}=sharedLead();const active=sim.routes.get(route)!;
+    expect(active.arsTrain).toBe(exit.id);expect(active.owner).toBe(-1);
+    const desire=trainDesire(sim,arrival);expect(desire?.ready).toBe(false);expect(arrival.arsWait?.train).toBe(exit.id);
+    expect(sim.sig[signal.id].route).toBe(route);expect(active.cancelAt).toBe(0);expect(sim.integrity.violations).toHaveLength(0);
+    expect(cancelArsRoute(sim,arrival,signal.id).ok).toBe(false);
+  });
+  it('audits an accepted foreign ARS cancellation immediately, but permits dispatcher and fault cancellation',()=>{
+    for(const source of ['ars','dispatcher','fault','recovery'] as const){
+      const {sim,exit,arrival,signal}=sharedLead();
+      expect(cancelRoute(sim,signal.id,{source,train:arrival.id}).ok).toBe(true);
+      if(source==='ars'){expect(sim.integrity.violations[0]).toMatchObject({kind:'ARS_FOREIGN_CANCEL',t:sim.t,trains:[arrival.id,exit.id]});expect(sim.integrity.violations[0].detail).toContain(signal.name);}
+      else expect(sim.integrity.violations).toHaveLength(0);
+    }
+  });
+});
+
+it('the applicant relinquishes an unused reservation when a physical front train needs another route',()=>{
+  const sim=make();advance(sim,2);const [front,rear]=sim.trainList;
+  for(const other of [...sim.trainList])if(other!==front&&other!==rear)sim.removeTrain(other);
+  for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
+  const {signal,link}=depotApproach(sim),depot=sim.topo.depots[0],goal=platformBerth(sim.topo,3,'UP');
+  for(const [tr,off]of [[front,6.1],[rear,Math.min(212.1,link.len-.1)]]as const){
+    Object.assign(tr,{link:link.id,off,dir:-1,hist:[{link:link.id,dir:-1}],v:0,eb:false,phase:'run',block:-1,tripId:-1,
+      nextSignal:signal.id,nextSignalDist:off,stopDist:Infinity});computeBody(sim,tr);
+  }
+  front.tasks=[{k:'stop',berth:goal,station:3,trip:-1,arr:sim.t+100,dep:null,doors:false,revenue:false}];
+  rear.tasks=[{k:'depot',depot:depot.id}];indexBodies(sim);computeOccupancy(sim);
+  const old=sim.routeTable.next.get(depot.berth)![signal.id],next=sim.routeTable.next.get(goal)![signal.id];
+  expect(old).not.toBe(next);expect(trySetRoute(sim,old,{train:rear.id}).ok).toBe(true);
+  expect(cancelArsRoute(sim,front,signal.id).ok).toBe(false);
+  runARS(sim);
+  expect(sim.sig[signal.id].route).toBe(next);expect(sim.routes.get(next)?.arsTrain).toBe(front.id);
+  expect(sim.integrity.violations).toHaveLength(0);
 });

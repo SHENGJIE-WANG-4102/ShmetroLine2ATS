@@ -67,7 +67,7 @@ describe('continuous operating days',()=>{
   const stamp=100000;
   Object.assign(s.trainList[0],{ebSince:stamp,ebCallAt:stamp,modeSince:stamp,tbCallAt:stamp,pendingModeAt:stamp,phaseSince:stamp,dwellUntil:stamp,arrivedAt:stamp,depReadyAt:stamp,failRecoverAt:stamp,lastTraceT:stamp,stopUntil:stamp,waitSince:stamp});
   s.sw[0].moveUntil=stamp;s.plat[0].lastDep=stamp;s.plat[0].lastArr=stamp;s.plat[0].limitUntil=stamp;
-  const ar=[...s.routes.values()][0];ar.committed=70001;ar.guideUntil=stamp;ar.cancelAt=stamp;ar.setAt=stamp;
+  const ar=[...s.routes.values()][0];ar.committed=70001;ar.arsTrain=70002;ar.guideUntil=stamp;ar.cancelAt=stamp;ar.setAt=stamp;
   s.command({c:'fault',kind:'signal',target:0,duration:0});
   s.faults[0].stageAt=stamp;
   s.env.wind=2;s.env.windUntil=stamp;s.env.rainUntil=stamp;s.env.dryAt=stamp;
@@ -79,11 +79,12 @@ describe('continuous operating days',()=>{
   const n=new Sim({...nextOperatingConfig(s),noPossessions:false},s);
   expect(n.faults[0].repairAt).toBe(Infinity);expect(n.faults[0].stageAt).toBe(stamp-DAY_S);expect(n.sig[0].failed).toBe(true);
   expect(n.routes.get(ar.route)?.committed).toBe(70001);
+  expect(n.routes.get(ar.route)?.arsTrain).toBe(70002);
   expect(n.sec[0].poss).toBe(0);expect(n.calls[0].target).toBe(0);expect(n.pendingCalls[0].spec.target).toBe(0);
   expect(n.alarms.get('test')?.t).toBe(13500);expect(n.events[0].id).toBeGreaterThanOrEqual(eid);
   // Scan all carried numbers. These keys are identifiers, physical metres
   // or counters, not second-of-day timestamps; daily schedules are not carried.
-  const nonTimes=new Set(['committed','lastTraceCh','km','id','owner','train','target','nextTrainId','nextFaultId','nextCallId','nextBookmarkId']);
+  const nonTimes=new Set(['arsTrain','committed','lastTraceCh','km','id','owner','train','target','nextTrainId','nextFaultId','nextCallId','nextBookmarkId']);
   function scan(x:unknown,key='',path=''){
    if(typeof x==='number'&&Number.isFinite(x)&&!nonTimes.has(key))expect(x>=12*3600&&x<=30*3600,`unshifted ${path}: ${x}`).toBe(false);
    else if(x instanceof Map)for(const [k,v]of x)scan(v,key,`${path}.${k}`);

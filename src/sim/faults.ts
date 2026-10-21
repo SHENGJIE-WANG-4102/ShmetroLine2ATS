@@ -146,7 +146,7 @@ export function injectFault(sim: Sim, kind: FaultKind, target: number, duration:
         // Occupancy may prohibit cancellation before cancelRoute reaches its
         // approach-locking branch. Keep the already issued MA in that case too.
         if (committed >= 0) sim.routes.get(s.route)!.committed = committed;
-        cancelRoute(sim, target);
+        cancelRoute(sim, target, {source:'fault'});
       }
       // the ZC takes the failure into the next MA at once (not a ZC cycle later)
       for (const tr of sim.trainList) withdrawAuthority(sim, tr);

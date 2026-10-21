@@ -8,8 +8,8 @@ import { doorCloseHold, departureHold, DOOR_CUT_DWELL } from './vehicle';
 import type { Sim } from './engine';
 import { cancelTrip, STANDBY_CALL, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import type { Dir, Topology } from './topology';
-import { nextLink } from './topology';
-import { cancelRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach } from './interlocking';
+import { nextLink, travelDirection } from './topology';
+import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach } from './interlocking';
 import { computeBody, reverseTrain, goalBerth, stopError, moveBack, rescueRouteReady } from './movement';
 import { takeVehicle, putVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
@@ -191,6 +191,7 @@ function routeUser(sim: Sim, rid: number): number {
   const ar = sim.routes.get(rid);
   if (!ar) return -1;
   if (ar.owner >= 0 && sim.trains.has(ar.owner)) return ar.owner;
+  if (ar.arsTrain !== undefined && sim.trains.has(ar.arsTrain)) return ar.arsTrain;
   const start = sim.topo.routes[rid].start;
   let best = -1;
   let bd = Infinity;
@@ -263,6 +264,28 @@ export function routeFaultCode(sim: Sim, rid: number): HaltCode | null {
 function setArsWait(sim: Sim, tr: Train, code: HaltCode, train: number, signal: number, detail = '') {
   const w: ArsWait = { code, train: train === tr.id ? -1 : train, signal, t: sim.t, detail };
   tr.arsWait = w;
+}
+
+/** ARS may release its own claim, or an unclaimed idle automatic route.
+ * Yielding changes only this train: another train's claim/issued MA stays intact. */
+export function cancelArsRoute(sim: Sim, tr: Train, signal: number) {
+  const ar = sim.routes.get(sim.sig[signal].route);
+  if (!ar) return { ok: false, msg: '无已建立进路' };
+  const claims = [ar.arsTrain ?? -1, ar.owner, ar.committed];
+  const other = claims.find(id => id >= 0 && id !== tr.id && sim.trains.has(id));
+  const refuse = (train: number, detail: string) => {
+    setArsWait(sim, tr, 'ROUTE_CONFLICT', train, signal, detail);
+    return { ok: false, msg: detail };
+  };
+  if (other !== undefined) {
+    const t = sim.trains.get(other)!;
+    return refuse(other, `${sim.topo.signals[signal].name} 的进路保留给列车 ${trainLabel(t)}`);
+  }
+  if (ar.manual) return refuse(-1, `${sim.topo.signals[signal].name} 已排人工进路`);
+  const own = claims.includes(tr.id) || ((ar.arsTrain ?? -1) < 0 && routeUser(sim, ar.route) === tr.id);
+  if (!own && (!(ar.fleeting || ar.defleeted) || approachLocked(sim, signal)))
+    return refuse(routeUser(sim, ar.route), `${sim.topo.signals[signal].name} 的进路尚未空闲`);
+  return cancelInterlockedRoute(sim, signal, { source: 'ars', train: tr.id });
 }
 
 /**
@@ -353,7 +376,7 @@ function resolveDepot(sim: Sim, tr: Train): boolean {
       || approachLocked(sim, topo.routes[ar.route].start)
       || topo.routes[ar.route].sections.some(s => sim.sec[s].trainOcc))) return true;
     for (const ar of changedRoutes) {
-      if (!cancelRoute(sim, topo.routes[ar.route].start).ok || sim.routes.has(ar.route)) return false;
+      if (!cancelArsRoute(sim, tr, topo.routes[ar.route].start).ok || sim.routes.has(ar.route)) return false;
     }
     for (const x of leadStubBerths(topo, task.depot, cur)) if (sim.berthRes.get(x) === tr.id) sim.berthRes.delete(x);
     const t = cowTask(tr, task);
@@ -1209,6 +1232,16 @@ export function runARS(sim: Sim) {
     claim(d.signal, d.train, d.route, d.dist);
     for (const [sig, route, dist] of d.via) claim(sig, d.train, route, dist);
   }
+  // A route requested ahead of an intermediate stop may outlive that
+  // request's priority. Its applicant relinquishes its own unused claim
+  // when the existing front-train ordering now gives that signal to another
+  // train; the front train must never cancel the rear train's route itself.
+  for (const ar of [...sim.routes.values()]) {
+    const signal = topo.routes[ar.route].start, first = firstAt.get(signal);
+    const applicant = sim.trains.get(ar.arsTrain ?? -1);
+    if (!ar.entered && !ar.manual && applicant && first && first.train !== applicant)
+      cancelArsRoute(sim, applicant, signal);
+  }
   // a train about to change ends at a platform and then run against the
   // normal direction keeps that move's sections: a following train let up to
   // the platform meanwhile would stand in its way, and wait for it in turn
@@ -1226,7 +1259,7 @@ export function runARS(sim: Sim) {
       const start = topo.routes[lr].start;
       if (!sim.sig[start].ars) continue;
       if (approachLocked(sim, start) || topo.routes[lr].sections.some((x) => sim.sec[x].trainOcc)) { ar.fleeting = false; ar.defleeted = true; }
-      else cancelRoute(sim, start);
+      else cancelArsRoute(sim, tr, start);
     }
   }
   for (const d of desires) {
@@ -1269,7 +1302,7 @@ export function runARS(sim: Sim) {
     if (sg.route >= 0 && sg.route !== d.route) {
       const ar = sim.routes.get(sg.route)!;
       if (ar.manual) { setArsWait(sim, d.train, 'ROUTE_CONFLICT', -1, d.signal, `${topo.signals[d.signal].name} 已排人工进路`); continue; }
-      const res = cancelRoute(sim, d.signal);
+      const res = cancelArsRoute(sim, d.train, d.signal);
       if (!res.ok || sg.route >= 0) {
         const owner = routeUser(sim, sg.route);
         setArsWait(sim, d.train, owner < 0 ? routeFaultCode(sim, sg.route) ?? 'ROUTE_CONFLICT' : 'ROUTE_CONFLICT',
@@ -1305,7 +1338,7 @@ export function runARS(sim: Sim) {
           ar.defleeted = true;
           continue;
         }
-        const c = cancelRoute(sim, other.start);
+        const c = cancelArsRoute(sim, d.train, other.start);
         if (c.ok) cleared = true;
       }
       if (cleared) res = trySetRoute(sim, d.route, { fleeting: false, train: d.train.id });
@@ -1404,7 +1437,8 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
       const exit=depot>=0 && goingIn(sim,tr,depot) ? exitOnLead(sim,tr,depot) : undefined;
       if (exit) {
         const active=sg.route>=0?sim.routes.get(sg.route):undefined;
-        if (active && !active.entered && !active.manual) cancelRoute(sim,sig);
+        if (active && !active.entered && !active.manual && !cancelArsRoute(sim,tr,sig).ok && tr.arsWait?.train !== exit.id)
+          return {train:tr,signal:sig,route:rid,prio:plannedTime(goalTask,sim.t),eta,ready:false,dist,via};
         setArsWait(sim,tr,'REGULATION',exit.id,sig,'回段车让出段换端车先出');
         return {train:tr,signal:sig,route:rid,prio:plannedTime(goalTask,sim.t),eta,ready:false,dist,via};
       }
@@ -1553,7 +1587,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
       if (free && ok) for (const sec of chainSecs) {
         const lr = sim.sec[sec].lockRoute;
         const ar = lr >= 0 && !chain.includes(lr) ? sim.routes.get(lr) : undefined;
-        if (ar && ar.fleeting && !ar.manual && sim.sig[topo.routes[lr].start].ars) cancelRoute(sim, topo.routes[lr].start);
+        if (ar && ar.fleeting && !ar.manual && sim.sig[topo.routes[lr].start].ars) cancelArsRoute(sim,tr,topo.routes[lr].start);
         if (ar && sim.routes.has(lr)) held = lr;
       }
       if (held !== undefined) {
@@ -1846,10 +1880,7 @@ export function cmdSkip(_sim: Sim, tr: Train, station: number, on: boolean) {
 }
 
 function dirOf(tr: Train, topo: Topology): TrackDir {
-  // direction of travel by chainage
-  const l = topo.links[tr.link];
-  const east = tr.dir === 1 ? l.chainB >= l.chainA : l.chainA > l.chainB;
-  return east ? 'DN' : 'UP';
+  return travelDirection(topo, tr);
 }
 
 /** stations ahead of the train in its travel direction */
@@ -2461,7 +2492,7 @@ export function cmdRescue(sim: Sim, failed: Train, rescuer: Train) {
     // Cancel the failed train's unused pull-out through normal CI checks. Its
     // route can otherwise keep both tail tracks and the rescue approach locked.
     for (const [rid, ar] of [...sim.routes]) if (ar.directionTrain === failed.id && !ar.entered)
-      cancelRoute(sim, topo.routes[rid].start);
+      cancelInterlockedRoute(sim, topo.routes[rid].start,{source:'recovery',train:failed.id});
     reverseTrain(sim, failed);
     failed.rescueReverse = true;
     failed.tbStage = 'arrive'; failed.tbExitSig = -1;
