@@ -4,7 +4,8 @@
  */
 import type { Sim } from './engine';
 import type { DayType, Metrics, ScenarioReport, Train, Plan } from './model';
-import { STATIONS, LINE_INFO, HQ_LATE_RUN, OPERATIONS, type FixedRun } from '../data/line2';
+import { STATIONS, LINE_INFO, OPERATIONS, type FixedRun } from '../data/line2';
+import { HQ_LATE_RUN } from '../data/firstlast';
 import { closeStation } from './holiday';
 import { injectFault } from './faults';
 import { setWeather, addPossession } from './env';

@@ -16,7 +16,8 @@
  */
 import type { Sim } from './engine';
 import { injectFault } from './faults';
-import { STATIONS, HQ_LATE_RUN, type FixedRun } from '../data/line2';
+import { STATIONS, type FixedRun } from '../data/line2';
+import { HQ_LATE_RUN } from '../data/firstlast';
 import { holidayOf, type HolidayDay } from './calendar';
 export { holidayOf, type HolidayDay };
 

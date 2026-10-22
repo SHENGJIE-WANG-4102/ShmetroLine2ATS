@@ -14,7 +14,8 @@ import { ahead } from './topology';
 import type { RunTimes } from './dynamics';
 import { cancelTrip, type Block, type DayType, type Plan, type PlanStop, type StopTask, type Task, type Trip, type TripKind, type TrackDir } from './model';
 import { plannedDwell } from './calibration';
-import { STATIONS, OPERATIONS, LINE_INFO, FIXED_LATE_TRAINS, type FixedRun } from '../data/line2';
+import { STATIONS, OPERATIONS, LINE_INFO, type FixedRun } from '../data/line2';
+import { FIXED_LATE_TRAINS } from '../data/firstlast';
 import { FIRST_LAST } from '../data/firstlast';
 
 export interface Template {

@@ -57,7 +57,7 @@
 
 依据按下面的优先级，冲突时上面的赢（用户决定，2026-10-22，D125）：
 
-1. **官方资料**：首末班（`src/data/firstlast.ts`）必须对上；官方运行间隔（`reference/official-headways-line2.md`，各时段平均间隔）定各时段开行密度。
+1. **官方资料**：`src/data/firstlast.ts`（官网同一页：首末班、末班后定点班车、运行间隔）。首末班必须对上，运行间隔定各时段开行密度。
 2. **用户实地录音和 PIS 实拍**（`docs/recordings.md`、`docs/field-2026-10-16-pis.md`、`docs/field-calibration-2026-10.md`）：区间时分、停站、运行速度以它为准。
 3. **高德**（`reference/timetable-gaode/`）：只参考各时段开几列车（每 15 分钟车数，`scripts/gaode-compare.ts` 比的就是这个），和官方间隔冲突时以官方为准。高德分钟本身有约 ±30 s 偏差，不拿它定区间时分、停站或运行等级。
 - 没有任务明确要求时，不改运行时分、停站模型和运行等级（`calibration.ts`、`dynamics.ts`、D73/D74），也不改首末班常量（`src/data/firstlast.ts`）。

@@ -1,7 +1,13 @@
+import type { FixedRun } from './line2';
+
 /**
+ * Official Line 2 timetable data, all from the same service.shmetro.com page
+ * (screenshots supplied by the user): first / last trains, the regular
+ * fixed-time trains after the last train, and the published headways. Highest
+ * priority source for the plan (D125).
+ *
  * Line 2 published first / last trains per station (2号线首末班车时刻表),
- * service.shmetro.com, as shown on 2026-10-14 (screenshot supplied by the
- * user). Departure times at each station; the terminal rows marked 到达 are
+ * as shown on 2026-10-14, re-checked 2026-10-22. Departure times at each station; the terminal rows marked 到达 are
  * arrivals. Times after midnight are written past 24:00 (次00:05 → 24:05).
  * '' = no such service at that station.
  *
@@ -53,3 +59,46 @@ const T: [string, string, string, string, string, string][] = [
 ];
 
 export const FIRST_LAST: FirstLastRow[] = T.map(([station, firstE, firstW, lastE, lastW, lastG]) => ({ station, firstE, firstW, lastE, lastW, lastG }));
+
+/**
+ * Regular fixed-time trains after the last train (常态末班车后定点班车),
+ * published timetable: 虹桥火车站 23:04 / 23:30 → 龙阳路, boarding only at
+ * 虹桥火车站 and 虹桥2号航站楼 (two minutes later), set-down only at the listed
+ * stations (威宁路 since 2025-12-31), passing the others.
+ */
+export const HQ_LATE_RUN: FixedRun = {
+  from: 'HQZ', to: 'LYL',
+  departures: [23 * 3600 + 4 * 60, 23 * 3600 + 30 * 60],
+  board: ['HQZ', 'HQ2'],
+  alight: ['SHR', 'WNL', 'ZSG', 'JAS', 'RMG', 'SJD'],
+  depotFrom: 'BZL', depotTo: 'LYD',
+};
+export const FIXED_LATE_TRAINS: FixedRun[] = [HQ_LATE_RUN];
+
+/**
+ * Published headways (2号线列车运行间隔), as shown on 2026-10-22. Seconds;
+ * a [min, max] pair where only a range is published. `from`/`to` are clock
+ * times 'HH:MM'; null = 其他时段 (all hours outside the named periods).
+ * Sections are station-to-station stretches of the line.
+ */
+export interface OfficialHeadway {
+  name: string;
+  from: string | null; to: string | null;
+  sections: [string, string, number | readonly [number, number]][];
+}
+
+const WHOLE = ['蟠祥路·国家会计学院', '浦东1号2号航站楼'] as const;
+const OTHER = [300, 600] as const;
+
+export const OFFICIAL_HEADWAYS: Record<'weekday' | 'weekend', OfficialHeadway[]> = {
+  weekday: [
+    { name: '早高峰', from: '07:30', to: '10:00', sections: [['蟠祥路·国家会计学院', '淞虹路', 225], ['淞虹路', '广兰路', 150], ['广兰路', '浦东1号2号航站楼', 225]] },
+    { name: '平峰', from: '10:00', to: '17:00', sections: [[...WHOLE, 300]] },
+    { name: '晚高峰', from: '17:00', to: '20:30', sections: [['蟠祥路·国家会计学院', '淞虹路', 270], ['淞虹路', '广兰路', 180], ['广兰路', '浦东1号2号航站楼', 270]] },
+    { name: '其他时段', from: null, to: null, sections: [[...WHOLE, OTHER]] },
+  ],
+  weekend: [
+    { name: '高峰时段', from: '08:30', to: '20:30', sections: [[...WHOLE, 240]] },
+    { name: '其他时段', from: null, to: null, sections: [[...WHOLE, OTHER]] },
+  ],
+};

@@ -607,21 +607,6 @@ export interface FixedRun {
   depotFrom: string; depotTo: string;
 }
 
-/**
- * Regular fixed-time trains after the last train (常态末班车后定点班车),
- * published timetable: 虹桥火车站 23:04 / 23:30 → 龙阳路, boarding only at
- * 虹桥火车站 and 虹桥2号航站楼 (two minutes later), set-down only at the listed
- * stations (威宁路 since 2025-12-31), passing the others.
- */
-export const HQ_LATE_RUN: FixedRun = {
-  from: 'HQZ', to: 'LYL',
-  departures: [23 * 3600 + 4 * 60, 23 * 3600 + 30 * 60],
-  board: ['HQZ', 'HQ2'],
-  alight: ['SHR', 'WNL', 'ZSG', 'JAS', 'RMG', 'SJD'],
-  depotFrom: 'BZL', depotTo: 'LYD',
-};
-export const FIXED_LATE_TRAINS: FixedRun[] = [HQ_LATE_RUN];
-
 // ---------------------------------------------------------------------------
 // Environment (APPROXIMATIONS)
 // ---------------------------------------------------------------------------
