@@ -71,6 +71,13 @@ describe('Line 2 photographed cab content',()=>{
   t.link=s.topo.berths[depBerth].link;t.phase='dwell';t.tbStage='none';
   expect(computeDmi(s,t.id)?.next).toBe(STATIONS[departure.to].dmiName??STATIONS[departure.to].name);
   expect(computeDmi(s,t.id)?.dest).toBe(STATIONS[serviceEnd(s.plan,departure)].dmiName??STATIONS[serviceEnd(s.plan,departure)].name);
+  // stabled overnight in the tail: turned back there, the same until it stands at the platform
+  t.link=s.topo.berths[turn.berths[0]].link;t.phase='run';t.tbStage='none';t.v=0;
+  t.tasks=[{k:'stop',station:airport,berth:depBerth,trip:departure.id,arr:null,dep:s.t+3600,doors:true,revenue:true,stabledOut:true},
+   {k:'stop',station:departure.to,berth:platformBerth(s.topo,departure.to,'UP'),trip:departure.id,arr:null,dep:null,doors:true,revenue:true}];
+  expect(computeDmi(s,t.id)).toMatchObject({next:'浦东1_2航站楼',dest:'浦东1_2航站楼'});
+  t.link=s.topo.berths[depBerth].link;
+  expect(computeDmi(s,t.id)?.next).toBe(STATIONS[departure.to].dmiName??STATIONS[departure.to].name);
   t.tasks=[{k:'stop',station:airport,berth,trip:-1,arr:null,dep:null,doors:true,revenue:true}];t.destStation=airport;
   expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼');
   expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼');

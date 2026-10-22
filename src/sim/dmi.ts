@@ -145,9 +145,17 @@ function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
     const shown = tr.phase === 'reversing' ? name(after[0]?.station ?? reverse.station) : name(reverse.station) + '折';
     return { next: shown, dest: shown };
   }
-  if (tr.phase === 'run' && (tr.tbStage === 'depart' || tr.tbStage === 'manual')
-    && first?.k === 'stop' && first.doors && first.station === tr.lastStation) {
-    const shown = name(first.station);
+  // On the way to the departure platform of a working - out of the depot,
+  // from an overnight or hot-standby place, or back from a tail turnback -
+  // the train is not yet in passenger service (用户确认): both fields show
+  // that platform's station until it stands there.
+  const firstStop = tr.tasks.find((t): t is StopTask => t.k === 'stop' && t.doors);
+  const origin = firstStop && sim.plan.trips[firstStop.trip]?.stops.find(x => x.stop)?.st;
+  const pi = sim.topo.links[tr.link].platform;
+  const atOrigin = firstStop !== undefined && pi >= 0 && sim.topo.platforms[pi].station === firstStop.station && tr.v < 0.05;
+  if (firstStop && !atOrigin && (origin === firstStop.station
+    || ((tr.tbStage === 'depart' || tr.tbStage === 'manual') && first === firstStop && firstStop.station === tr.lastStation))) {
+    const shown = name(firstStop.station);
     return { next: shown, dest: shown };
   }
   const stops = tr.tasks.filter((t): t is StopTask => t.k === 'stop' && t.doors);
@@ -158,7 +166,7 @@ function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
   // A platform-only reversal changes at once to the next working: its next
   // call and real terminus (用户确认).
   const next = nextWorking ? after[1]
-    : tr.phase === 'dwell' && first?.k === 'stop' && first.dep !== null ? stops[1] : stops[0];
+    : (tr.phase === 'dwell' || atOrigin) && first?.k === 'stop' && first.dep !== null ? stops[1] : stops[0];
   return { next: next ? name(next.station) : '—', dest };
 }
 
