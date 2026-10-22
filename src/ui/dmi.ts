@@ -376,7 +376,8 @@ export class Dmi {
     else if (t.slip) { msg = t.slip === 'slip' ? '空转' : '滑行'; col = C.yellow; }
     else if (t.manual && t.doorSide && !t.doors) { msg = '非站台侧车门开启'; col = C.red; }
     else if (t.manual && t.doorsAwait) { msg = '停稳，待开门'; col = C.white; }
-    else if (t.manual) { msg = t.halt?.detail || '人工驾驶'; col = C.white; }
+    // 用户决定：no plain「人工驾驶」(the mode field says CM); only a real reason the train stands
+    else if (t.manual && t.halt?.detail && !['人工驾驶', '等待司机加牵引', '司机牵引起步'].includes(t.halt.detail)) { msg = t.halt.detail; col = C.white; }
     if (msg) {
       c.font = `bold ${msg.length > 12 ? 19 : 26}px ${FONT}`;
       c.fillStyle = col;
