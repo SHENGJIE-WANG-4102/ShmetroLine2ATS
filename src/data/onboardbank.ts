@@ -237,6 +237,27 @@ export interface OnboardAnnouncement {
   arrived?: { clipId: string; phraseAt: number; advanceS: number; measuredAdvance: boolean; confidence: SoundClip['confidence'] };
 }
 export const ONBOARD_DESTINATIONS = ['蟠祥路·国家会计学院', '广兰路', '浦东1号2号航站楼'] as const;
+/** Additional user-authorised PA coverage, independent of timetable generation.
+ * User decision: retain the existing revenue run to TZ before its empty
+ * continuation to the CXZ overnight berth; do not change its train times. */
+export const ADDITIONAL_ONBOARD_ROUTES: readonly { from: string; to: string; direction: 'DN' | 'UP' }[] = [
+  { from: 'PXL', to: 'TZ', direction: 'DN' },
+];
+const ALL_ONBOARD_DESTINATIONS = [...new Set<string>([...ONBOARD_DESTINATIONS,
+  ...ADDITIONAL_ONBOARD_ROUTES.map(route=>STATIONS.find(station=>station.id===route.to)!.name)])];
+function coversAdditionalDestination(station: number, direction: 'DN' | 'UP', destination: string): boolean {
+  const routes=ADDITIONAL_ONBOARD_ROUTES.filter(route=>STATIONS.find(s=>s.id===route.to)?.name===destination);
+  return !routes.length || routes.some(route=>{
+    const from=STATIONS.findIndex(s=>s.id===route.from),to=STATIONS.findIndex(s=>s.id===route.to);
+    return route.direction===direction && ahead(direction,from,station) && (station===to || ahead(direction,station,to));
+  });
+}
+/** Composed terminal messages are explicit data; ordinary arrivals must never
+ * silently acquire a clear-out sentence. All parts are recorded stock voice. */
+const COMPOSED_TERMINAL_RECIPES: readonly {station:string;direction:'DN'|'UP';side:AnnouncementDoorSide;type:'next'|'arrived';recipe:readonly string[]}[] = [
+  {station:'唐镇',direction:'DN',side:'L',type:'next',recipe:['zh-terminus','zh-name-tz','field1021-original-next-dn-tz-body']},
+  {station:'唐镇',direction:'DN',side:'L',type:'arrived',recipe:['zh-name-tz','zh-arrived','zh-left','zh-clearout-pxl','field1021-arrived-dn-tz-tail']},
+];
 /** User decision: use complete compatible recordings before compositions.
  * New sources stay outside ORIGINAL_ONBOARD to preserve the old timing means.
  * Ranges include recorded transfer/safety sentences; no word substitution.
@@ -396,8 +417,9 @@ function composed(station: string, direction: 'DN' | 'UP', destination: string, 
 // Each station's existing body retains its transfer lines, safety notices and
 // bilingual order. Generic fallback has the same CN -> EN sentence sequence.
 const first = STATIONS.findIndex(s => s.id === 'JSL'), oldLast = STATIONS.findIndex(s => s.id === 'GLL'), last = STATIONS.length - 1;
-for (let st = first; st <= last; st++) for (const direction of ['DN', 'UP'] as const) for (const destination of ONBOARD_DESTINATIONS) {
+for (let st = first; st <= last; st++) for (const direction of ['DN', 'UP'] as const) for (const destination of ALL_ONBOARD_DESTINATIONS) {
   const station = STATIONS[st], nameId = station.id.toLowerCase(), destId = destinationId(destination)!;
+  if (!coversAdditionalDestination(st,direction,destination)) continue;
   // New eastern slots cover recorded approach directions and reachable termini.
   if (st > oldLast && (!FIELD_1021_ORIGINALS.some(a => a.station === station.name && a.direction === direction) ||
     station.name !== destination && !ahead(direction, st, STATIONS.findIndex(s => s.name === destination)))) continue;
@@ -406,10 +428,11 @@ for (let st = first; st <= last; st++) for (const direction of ['DN', 'UP'] as c
   const slot: OnboardAnnouncement = { station: station.name, direction, source: 'ride-east', destination, doorSide: side, missingSentences: missing };
   for (const type of ['next', 'arrived'] as const) {
     const matching = matchingOriginal(station.name, direction, destination, side, type);
-    if (!matching && station.name === destination) missing.push(type === 'next' ? '终到专用出站句' : '终到清客句');
+    const terminal=station.name===destination?COMPOSED_TERMINAL_RECIPES.find(a=>a.station===station.name && a.direction===direction && a.side===side && a.type===type):undefined;
+    if (!matching && !terminal && station.name === destination) missing.push(type === 'next' ? '终到专用出站句' : '终到清客句');
     // Do not use terminal-only GLL notices on a through service, or tell an
     // airport-bound passenger to get off and transfer to another airport train.
-    let clip = matching ? recordedClip(matching,destination) : undefined;
+    let clip = matching ? recordedClip(matching,destination) : terminal ? composed(station.name,direction,destination,side,type,[...terminal.recipe]) : undefined;
     const base = originals.find(a => a.type === type);
     const bodyRecipe=type==='next'?nextBodyRecipe(station.name,direction,destination,side):undefined;
     if (!clip && bodyRecipe) clip=composed(station.name,direction,destination,side,type,bodyRecipe);
@@ -471,7 +494,8 @@ export const ONBOARD_HOLD_REPEAT_S = 45;
 // Western slots use the same original-first policy as the central stations.
 // Missing names suppress the affected language, allowing an independently
 // available English sentence when no usable complete recording exists.
-for (let st = 0; st < first; st++) for (const direction of ['DN', 'UP'] as const) for (const destination of ONBOARD_DESTINATIONS) {
+for (let st = 0; st < first; st++) for (const direction of ['DN', 'UP'] as const) for (const destination of ALL_ONBOARD_DESTINATIONS) {
+  if (!coversAdditionalDestination(st,direction,destination)) continue;
   if (st === 0 && (direction !== 'UP' || destination !== STATIONS[0].name)) continue;
   const station = STATIONS[st], nameId = station.id.toLowerCase(), destId = destinationId(destination)!;
   const side = onboardDoorSide(st, direction, destination), door = side === 'B' ? 'both' : side === 'L' ? 'left' : 'right';

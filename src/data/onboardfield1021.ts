@@ -8,7 +8,7 @@
  */
 import type { OriginalAnnouncement, VoicePart } from './onboardbank';
 export const FIELD_1021_ORIGINALS: readonly OriginalAnnouncement[] = [
-  {"id":"field1021-original-next-dn-tz","direction":"DN","type":"next","recordedDestination":"浦东1号2号航站楼","range":[15.92,42.78],"confidence":"medium","doorSide":"L","station":"唐镇","source":"ride-1021-east"},
+  {"id":"field1021-original-next-dn-tz","direction":"DN","type":"next","recordedDestination":"浦东1号2号航站楼","range":[15.92,42.78],"confidence":"medium","doorSide":"L","station":"唐镇","source":"ride-1021-east","destinationSentence":[15.92,21.18]},
   {"id":"field1021-original-arrived-dn-tz","direction":"DN","type":"arrived","recordedDestination":"浦东1号2号航站楼","range":[175.7,197.42],"confidence":"medium","doorSide":"L","station":"唐镇","source":"ride-1021-east"},
   {"id":"field1021-original-next-dn-cxz","direction":"DN","type":"next","recordedDestination":"浦东1号2号航站楼","range":[272.98,301.44],"confidence":"medium","doorSide":"R","station":"创新中路","source":"ride-1021-east"},
   {"id":"field1021-original-arrived-dn-cxz","direction":"DN","type":"arrived","recordedDestination":"浦东1号2号航站楼","range":[360.5,381.82],"confidence":"medium","doorSide":"R","station":"创新中路","source":"ride-1021-east"},
@@ -56,6 +56,9 @@ export const FIELD_1021_ORIGINALS: readonly OriginalAnnouncement[] = [
   {"id":"field1021-original-arrived-up-pdn","direction":"UP","type":"arrived","recordedDestination":"淞虹路","range":[3625.2,3646.32],"confidence":"medium","doorSide":"L","station":"浦东南路","source":"ride-1021-west"},
 ];
 export const FIELD_1021_PARTS: readonly VoicePart[] = [
+  {id:'zh-name-tz',language:'zh',speaker:'onboard-zh',role:'name',name:'唐镇',source:'ride-1021-east',range:[22.06,23.08],confidence:'medium',effects:'clean-speech-zh'},
+  {id:'field1021-original-next-dn-tz-body',language:'bilingual',speaker:'recorded-pair',role:'body',name:'唐镇',source:'ride-1021-east',range:[21.18,42.78],confidence:'medium'},
+  {id:'field1021-arrived-dn-tz-tail',language:'bilingual',speaker:'recorded-pair',role:'body',name:'唐镇',source:'ride-1021-east',range:[181.12,197.42],confidence:'medium'},
   {"id":"field1021-original-next-up-hts-body","language":"bilingual","speaker":"recorded-pair","role":"body","name":"海天三路","source":"ride-1021-west","range":[177.62,202.2],"confidence":"medium"},
   {"id":"field1021-original-next-up-ydd-body","language":"bilingual","speaker":"recorded-pair","role":"body","name":"远东大道","source":"ride-1021-west","range":[423.68,448.38],"confidence":"medium"},
   {"id":"field1021-original-next-up-lkl-body","language":"bilingual","speaker":"recorded-pair","role":"body","name":"凌空路","source":"ride-1021-west","range":[884.68,908.5],"confidence":"medium"},
