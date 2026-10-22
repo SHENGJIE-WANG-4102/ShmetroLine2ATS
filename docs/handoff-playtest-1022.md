@@ -174,3 +174,38 @@ Claude 已经量过（`computeRunTimes` 算出的全线最小走行合计，单�
 - 第一轮不碰运行时分、停站模型、运行等级；第二轮只改上面说的这些。
 - 不为了让测试通过去放宽对标、门使能、ATP 的检查。
 - 不往 DMI 上加用户没说的元素。
+
+---
+
+## 审查意见（2026-10-22，第一、二轮交付后）
+
+整体方向对，下面几条改完再交。
+
+### 必须改
+
+1. **`tests/calibration.test.ts` 没跑，新增 5 个失败。** 改前基线 3 个失败（`keeps core peak spacing…`、`bounds west-end peak gaps…`、`recovers seven seconds…`，与本任务无关）；改后 8 个。新增的：
+   - `includes the measured twelve-second closing/start…`：`DOOR_CYCLE` 期望值，按新口径改预期即可，写明原因。
+   - `caps early platform regulation at ten seconds…`：到站后 `dwellUntil - t` 是 85，应为 35。原因是自动车到站后先挂 `doorsAwait`，`dwellUntil` 先取图定发车，开门时才改成调整后的值，倒计时会在开门前跳一下。到站那一刻就要给出最终的 `dwellUntil`（开门延时只挪开门，不挪发车目标）。
+   - `records DEP at wheel start after a dispatcher hold…`（0.6 s，要求 ≥ 5 s）、`keeps the peak passenger minimum…`（23，要求 > 30）、`does not give 047-2006 a long LAYOVER…`（3.7，要求 < 0.3）：逐条查是真回归还是预期该变，真回归修根因，预期变了在汇报里逐条说明。
+   以后改了停站、门、ATO 起步，这个文件必须跑。
+2. **删掉 `SECTION_RUN_ALLOWANCE` 表。** 这是「改前图定时分 − 新最小走行 × 1.20」逐区间算出来存成常数，目的是让计划哈希不变，等于把旧结果硬编码回去（AGENTS 硬规矩 2、6）。按文档原意：停站走行统一用 `runMargin`，取一个能让 gaode-compare 不变差的值，计划哈希可以变。重跑 validate-plan 两种日型、firstlast、gaode-compare，贴改前改后的数字。任何统一余量都做不到不变差，就停下汇报数字，不要再造表。`passRunMargin` 保留可以，注释写清是因为通过站速度没变。
+3. **撤回 `availableMode` 里新加的 `RM && !cbtcAvailable → RM`。** 任务没要求，而且不对：TBTC 后备在没有 CBTC 时照样提供 AM，RM 车不等于只剩 RM 可用。这会改 DMI 的「AM-C」栏和消息，属于用户可见行为。
+4. **「ATO 启动条件」只写一处。** 现在 `atoButton`、`updateTrainTasks` 发车判断、`halt.ts` 停车原因各写了一套条件（AM、EB、pendingMode、maDist ≥ 15、门、扣车……），以后改一处另两处就对不上。抽一个 `atoStartReady(sim, tr)`，三处都调它；停车原因按它返回的第一个不满足条件写。
+5. **出库开门试验位置不要写死方向。** `doorEnable` 里 `tr.dir === -1`、`tr.off - beforeSignal` 假设了出段线的走向。改成用 `signalAheadFrom` 取到 `path.exitSignal` 的距离，和 `beforeSignal` 比 ±1 m，三个段都写一条测试。
+
+### 顺手改
+
+6. `plannedDwell` 里 `DOOR_CYCLE + (15 - DOOR_CYCLE)` 绕了一圈还是 15。直接写一个 `PLANNED_DOOR_BUDGET = 15`（D73 图定门作业预算，D119 保持），`PLANNED_EXCHANGE_RESERVE` 去掉；`MIN_DWELL` 的注释「door cycle + 7 s」已经不对，一起改。
+7. `updateTrainTasks` 停站段里只给 `atoDriver` 累计晚点（`if (tr.atoDriver && … ) tr.delay = …`）。晚点应该只有一处算法：说明为什么别的车不需要；如果别的车也有同样的漏算，就改通用的那处，不要按接管与否分叉。
+8. `sectionCruise` 去掉了旧的 12 km/h 下限，二分下限是 0.1 m/s。查一下实跑里选出来的最低巡航速度（整天、两种日型），如果会出现明显爬行，加一个下限，写成 `OPERATIONS` 里的数据并标依据。
+
+### 压测
+
+9. 22101、22102 在改前源码上同样失败，算既有问题，归到 `docs/handoff-fuzz-roots.md` 第二轮，这次不用修。22104 没在改前源码上跑过，补跑一次分清是不是这次引入的。是这次引入的，按「先汇报」处理。
+
+### 验证
+
+- `npx tsc --noEmit`。
+- 按文件跑：`calibration`、`core`、`features`、`driver`、`dmi`、`stopview`、`stationaudio`、`timetable`。`calibration` 只允许剩基线那 3 个失败。
+- 第 2 条改完跑 validate-plan 两种日型、firstlast、gaode-compare。
+- fuzz-day 补 22104 的改前对照；第 2、8 条改完后再跑同一批 4 个种子，和这次结果对比。
