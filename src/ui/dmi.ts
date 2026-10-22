@@ -40,9 +40,9 @@ export function recommendedSpeed(t: TrainSnap): number | null {
 
 const W = 760;
 const H = 640;
-/** dial range and sweep: 0–120 km/h over 300°, 60 at 12 o'clock (Line 2 photos) */
+/** dial range and sweep: 0–120 km/h over 270°, 60 at 12 o'clock (Line 2 photo 2026-10-21, rectified) */
 const VMAX = 120;
-const SWEEP = (300 * Math.PI) / 180;
+const SWEEP = (270 * Math.PI) / 180;
 const LATIN = 'Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif';
 const FONT = `${LATIN}, ${FONT_CN}`;
 
@@ -75,13 +75,13 @@ export const NOTCHES: { v: number; label: string; cls: string }[] = [
 /** on-screen wording */
 const modeWord = (m: string) => m;
 
-// dial geometry
-const CX = 205;
-const CY = 268;
-const R = 165;
-const LOG = { x: 16, y: 500, w: 480, row: 28, rows: 3 };
-const BTN_UP = { x: 504, y: 500, w: 48, h: 38 };
-const BTN_DN = { x: 504, y: 546, w: 48, h: 38 };
+// geometry measured on the rectified Line 2 photo (reference/dmi/IMG_20261021_202807)
+const CX = 266;
+const CY = 282;
+const R = 172;
+const LOG = { x: 30, y: 503, w: 424, row: 34, rows: 3 };
+const BTN_UP = { x: 461, y: 503, w: 40, h: 40 };
+const BTN_DN = { x: 461, y: 553, w: 40, h: 40 };
 
 export class Dmi {
   el: HTMLElement;
@@ -113,7 +113,9 @@ export class Dmi {
       const next = Math.max(0, Math.min(NOTCHES.length - 1, cur + (e.deltaY > 0 ? 1 : -1)));
       this.onNotch(NOTCHES[next].v);
     }, { passive: false });
-    this.el = h('div', { class: 'dmi-wrap' }, this.canvas, this.lever);
+    // bezel with the maker's name above the screen, as on the cab photo
+    const bezel = h('div', { class: 'dmi-bezel' }, h('div', { class: 'dmi-brand' }, 'CASCO'), this.canvas);
+    this.el = h('div', { class: 'dmi-wrap' }, bezel, this.lever);
     this.setResolution(resolution());
   }
 
@@ -185,32 +187,36 @@ export class Dmi {
     const field = (x: number, label: string, value: string, maxW: number) => {
       c.textAlign = 'center';
       c.fillStyle = C.white;
-      c.font = `18px ${FONT}`;
-      c.fillText(label, x + maxW / 2, 26);
-      c.font = `20px ${FONT}`;
-      c.fillText(value, x + maxW / 2, 53, maxW);
+      c.font = `17px ${FONT}`;
+      c.fillText(label, x, 30);
+      c.font = `19px ${FONT}`;
+      c.fillText(value, x, 60, maxW);
     };
-    field(12, '下一站', d?.next ?? '—', 200);
-    field(220, '终点站', d?.dest ?? t.dest ?? '—', 200);
+    field(164, '下一站', d?.next ?? '—', 156);
+    field(318, '终点站', d?.dest ?? t.dest ?? '—', 148);
     c.textAlign = 'center';
     c.fillStyle = C.white;
+    // HOLD: 用户确认 shown while an ATO/DTO train stands still; also while the train
+    // or its platform is held (扣车) in any mode
+    const hold = (t.mode === 'DTO' || t.mode === 'AM') && t.v < 0.05 || t.hold || !!d?.departureBoard?.held;
+    c.font = `bold 20px ${FONT}`;
+    c.fillText(hold ? 'HOLD' : '', 456, 50);
     c.font = `bold 23px ${FONT}`;
-    c.fillText(t.hold ? 'HOLD' : '', 463, 36);
-    c.fillText(d?.trainNo ?? '', 553, 36);
+    c.fillText(d?.trainNo ?? '', 556, 40);
     c.font = `22px ${FONT}`;
-    c.fillText(t.svc.replace(/^0+(?=\d)/, ''), 637, 36);
+    c.fillText(t.svc.replace(/^0+(?=\d)/, ''), 644, 40);
     c.fillStyle = '#b7bdc7';
-    c.fillRect(676, 10, 70, 44);
+    c.fillRect(686, 8, 64, 47);
     c.fillStyle = C.hlText;
-    c.fillText('C000', 711, 39);
-    button(c, 632, 64, 114, 44);
+    c.fillText('C000', 718, 40);
+    button(c, 636, 68, 114, 54);
     c.fillStyle = C.hlText;
-    c.fillText('菜单', 689, 93);
+    c.fillText('菜单', 693, 103);
     c.fillStyle = C.white;
     c.font = `20px ${FONT}`;
-    c.fillText('DEP', 553, 76);
+    c.fillText('DEP', 563, 86);
     c.font = `bold 22px ${FONT}`;
-    c.fillText(d && d.dep >= 0 ? fmtTime(d.dep) : '--:--:--', 553, 103);
+    c.fillText(d && d.dep >= 0 ? fmtTime(d.dep) : '--:--:--', 563, 113);
     void now;
   }
 
@@ -240,29 +246,30 @@ export class Dmi {
       const [x, y] = pt(ang(s), R - 42);
       c.fillText(String(s), x, y + 1);
     }
+    const marker = (speed: number, colour: string) => {
+      const a = ang(speed);
+      const [tx, ty] = pt(a, R + 4);
+      const [b1x, b1y] = pt(a - 0.07, R + 24);
+      const [b2x, b2y] = pt(a + 0.07, R + 24);
+      c.fillStyle = colour;
+      c.beginPath(); c.moveTo(tx, ty); c.lineTo(b1x, b1y); c.lineTo(b2x, b2y); c.closePath(); c.fill();
+    };
+    // CM advisory follows the Line 14 cab (user photo 2025-09-05): yellow = recommended,
+    // green = maximum (permitted), red = EB intervention with the red arc beyond it.
+    const recommendation = recommendedSpeed(t);
     // permitted speed: red arc on the outer rim from the permitted speed to the end of the scale + red marker
-    if (t.phase !== 'failed') {
+    // 【假设】no arc while standing without authority: the standing DTO photo (HOLD) shows none
+    if (t.phase !== 'failed' && !(v < 0.5 && vp < 1)) {
+      const red = recommendation !== null ? Math.min(VMAX, vp + PERF.atpTolerance * 3.6) : vp;
       c.strokeStyle = C.red;
       c.lineWidth = 6;
       c.lineCap = 'butt';
-      c.beginPath(); c.arc(CX, CY, R + 5, ang(vp), ang(VMAX)); c.stroke();
-      const a = ang(vp);
-      const [tx, ty] = pt(a, R + 4);
-      const [b1x, b1y] = pt(a - 0.07, R + 24);
-      const [b2x, b2y] = pt(a + 0.07, R + 24);
-      c.fillStyle = C.red;
-      c.beginPath(); c.moveTo(tx, ty); c.lineTo(b1x, b1y); c.lineTo(b2x, b2y); c.closePath(); c.fill();
+      c.beginPath(); c.arc(CX, CY, R + 5, ang(red), ang(VMAX)); c.stroke();
+      marker(red, C.red);
+      if (recommendation !== null) marker(vp, C.green);
     }
-    // the target speed of a coming restriction, in yellow on the rim, while it is announced
-    const recommendation = recommendedSpeed(t);
-    if (recommendation !== null || speedIndication(t)) {
-      const a = ang(recommendation ?? t.tgtV * 3.6);
-      const [tx, ty] = pt(a, R + 4);
-      const [b1x, b1y] = pt(a - 0.07, R + 24);
-      const [b2x, b2y] = pt(a + 0.07, R + 24);
-      c.fillStyle = C.yellow;
-      c.beginPath(); c.moveTo(tx, ty); c.lineTo(b1x, b1y); c.lineTo(b2x, b2y); c.closePath(); c.fill();
-    }
+    // the recommended speed, or the target speed of a coming restriction while it is announced
+    if (recommendation !== null || speedIndication(t)) marker(recommendation ?? t.tgtV * 3.6, C.yellow);
     // needle: tapered white pointer from the hub
     const na = ang(v);
     const [nx, ny] = pt(na, R - 24);
@@ -281,11 +288,15 @@ export class Dmi {
     c.fillText(String(Math.round(v)), CX, CY + 1);
     c.fillStyle = C.white;
     c.font = `bold 20px ${FONT}`;
-    c.fillText('km/h', CX, CY + R - 16);
+    c.fillText('km/h', CX, CY + 118);
     if (recommendation !== null) {
+      // one row inside the dial under the hub: white labels, values in the marker colours
       c.font = `18px ${FONT}`;
-      c.fillStyle = C.yellow;
-      c.fillText(`实际：${Math.round(v)}　推荐：${Math.round(recommendation)}　最大：${Math.round(vp)}`, CX, 448, 370);
+      c.textAlign = 'left';
+      const parts = [['推荐 ', C.white], [String(Math.round(recommendation)), C.yellow], ['　最大 ', C.white], [String(Math.round(vp)), C.green]] as const;
+      let x = CX - parts.reduce((w, [text]) => w + c.measureText(text).width, 0) / 2;
+      for (const [text, colour] of parts) { c.fillStyle = colour; c.fillText(text, x, CY + 72); x += c.measureText(text).width; }
+      c.textAlign = 'center';
     }
     c.textBaseline = 'alphabetic';
   }
@@ -297,16 +308,20 @@ export class Dmi {
     c.fillStyle = C.white;
     c.font = `bold 44px ${FONT}`;
     c.textAlign = 'left';
-    c.fillText(modeWord(t.mode), 418, 172);
-    c.fillText(t.level, 576, 172);
+    c.textAlign = 'center';
+    c.fillText(modeWord(t.mode), 560, 182);
+    c.fillText(t.level, 690, 182);
+    c.textAlign = 'left';
     // 用户决定（2026-10-22）：显示距模型停车点的距离；非实机含义断言。
     c.strokeStyle = C.white;
     c.lineWidth = 2;
-    c.strokeRect(418, 204, 128, 14);
-    c.font = `20px ${FONT}`;
-    c.fillText(Number.isFinite(t.stopDist) && t.stopDist >= 0 ? `${Math.round(t.stopDist)}m` : '--m', 440, 244, 112);
+    c.strokeRect(513, 238, 95, 12);
+    c.font = `17px ${FONT}`;
+    c.textAlign = 'center';
+    c.fillText(Number.isFinite(t.stopDist) && t.stopDist >= 0 ? `${Math.round(t.stopDist)}m` : '--m', 560, 270, 95);
+    c.textAlign = 'left';
     const state = eb ? 'eb' : t.a > 0.05 ? 'traction' : t.a < -0.12 && t.v > 0.05 ? 'brake' : 'coast';
-    trainFront(c, 600, 188, state);
+    trainFront(c, 656, 214, state);
     // Two distinct symbols: train doors always above AA; PSD only on a platform.
     // 用户确认：photograph shows OPEN leaves; closed leaves meet.
     // Train doors are white, PSD yellow in the reference.
@@ -316,31 +331,30 @@ export class Dmi {
     // closeDoors clears the open bit when closing STARTS. The symbol must
     // remain separated until the physical close/lock confirmation completes.
     const doorOpen = td === 'open' || td === 'closing' || t.doors || !!t.doorSide;
-    for (const x of doorOpen ? [418, 460] : [423, 455]) doorLeaf(c, x, 252, 32, 48, tc, false);
+    for (const x of doorOpen ? [518, 567] : [523, 555]) doorLeaf(c, x, 285, 34, 52, tc, false);
     if (td === 'fault' || td === 'isolated') {
       c.strokeStyle = tc; c.lineWidth = 3;
-      c.beginPath(); c.moveTo(416, 302); c.lineTo(494, 250);
-      if (td === 'fault') { c.moveTo(416, 250); c.lineTo(494, 302); }
+      c.beginPath(); c.moveTo(516, 339); c.lineTo(603, 283);
+      if (td === 'fault') { c.moveTo(516, 283); c.lineTo(603, 339); }
       c.stroke();
     }
     const psd = d?.psd ?? 'none';
-    // door mode: bar + AA / MM, and the train door icon
+    // door mode AA / MM (no bar on the photo)
     c.fillStyle = C.white;
-    roundRect(c, 418, 330, 9, 40, 2); c.fill();
-    c.font = `bold 40px ${FONT}`;
-    c.fillText(t.mode === 'DTO' || t.mode === 'AM' ? 'AA' : 'MM', 434, 368);
+    c.font = `bold 42px ${FONT}`;
+    c.fillText(t.mode === 'DTO' || t.mode === 'AM' ? 'AA' : 'MM', 527, 400);
     const pc = psd === 'fault' ? C.red : psd === 'bypass' ? '#ff9a2a' : C.yellow;
-    for (const x of psd === 'none' ? [] : psd === 'open' ? [598, 632] : [604, 626]) {
+    for (const x of psd === 'none' ? [] : psd === 'open' ? [663, 697] : [669, 691]) {
       c.strokeStyle = pc;
       c.lineWidth = 3;
-      c.strokeRect(x, 330, 22, 46);
+      c.strokeRect(x, 358, 22, 52);
       c.fillStyle = pc;
-      c.fillRect(x + 6, 336, 10, 34);
+      c.fillRect(x + 6, 364, 10, 40);
     }
     if (psd === 'fault' || psd === 'bypass') {
       c.strokeStyle = pc; c.lineWidth = 3; c.beginPath();
-      c.moveTo(594, 378); c.lineTo(658, 328);
-      if (psd === 'fault') { c.moveTo(594, 328); c.lineTo(658, 378); }
+      c.moveTo(659, 412); c.lineTo(723, 356);
+      if (psd === 'fault') { c.moveTo(659, 356); c.lineTo(723, 412); }
       c.stroke();
     }
     // door enable (CM: the ATP enables the platform side of a train stopped at
@@ -348,10 +362,10 @@ export class Dmi {
     if (t.manual && t.mode === 'CM') for (const side of ['L', 'R'] as const) {
       if (!t.doorEnable?.[side]) continue;
       const left = side === 'L';
-      const ax = left ? 404 : 506;
+      const ax = left ? 504 : 615;
       c.fillStyle = C.green;
       c.beginPath();
-      c.moveTo(ax + (left ? -12 : 12), 276); c.lineTo(ax, 262); c.lineTo(ax, 290); c.closePath(); c.fill();
+      c.moveTo(ax + (left ? -12 : 12), 311); c.lineTo(ax, 297); c.lineTo(ax, 325); c.closePath(); c.fill();
     }
     // supervision status line (extrapolated: the photos show no such state)
     let msg = '';
@@ -360,28 +374,27 @@ export class Dmi {
     else if (t.v * 3.6 > t.vPermit * 3.6 + 0.5) { msg = '超速'; col = C.yellow; }
     else if (speedIndication(t)) { msg = `${speedIndication(t)} · ${Math.round(t.tgtD)} m`; col = C.yellow; }
     else if (t.slip) { msg = t.slip === 'slip' ? '空转' : '滑行'; col = C.yellow; }
-    else if (t.hold) { msg = '扣车'; col = C.yellow; }
     else if (t.manual && t.doorSide && !t.doors) { msg = '非站台侧车门开启'; col = C.red; }
     else if (t.manual && t.doorsAwait) { msg = '停稳，待开门'; col = C.white; }
     else if (t.manual) { msg = t.halt?.detail || '人工驾驶'; col = C.white; }
     if (msg) {
       c.font = `bold ${msg.length > 12 ? 19 : 26}px ${FONT}`;
       c.fillStyle = col;
-      c.fillText(msg, 418, 424, 326);
+      c.fillText(msg, 520, 446, 230);
     }
   }
 
   // ------------------------------------------------------------ row under the dial
 
   private statusRow(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null) {
-    const y = 468;
-    wheel(c, 38, y);
+    const y = 460;
+    wheel(c, 62, y);
     c.fillStyle = C.white;
-    c.font = `bold 32px ${FONT}`;
+    c.font = `bold 26px ${FONT}`;
     c.textAlign = 'left';
-    c.fillText(`${modeWord(t.mode)}-${t.level}`, 72, y + 12);
+    c.fillText(`${modeWord(t.mode)}-${t.level}`, 125, y + 10);
     // train / door status: green = doors closed and locked, yellow = open, red = train fault
-    hexagon(c, 480, y, d?.stopWin ?? 'none');
+    hexagon(c, 478, y, d?.stopWin ?? 'none');
   }
 
   // ------------------------------------------------------------ bottom: date / time, message log, target
@@ -390,10 +403,13 @@ export class Dmi {
     c.fillStyle = C.white;
     c.textAlign = 'left';
     c.font = `bold 22px ${FONT}`;
-    c.fillText(d?.date ?? '', 96, 624);
-    c.fillText(fmtTime(now), 330, 624);
+    c.textAlign = 'center';
+    c.fillText(d?.date ?? '', 180, 630);
+    c.fillText(fmtTime(now), 418, 630);
+    c.textAlign = 'right';
     c.font = `20px ${FONT}`;
-    c.fillText('版本：1.0.0', 596, 624);
+    c.fillText('版本：1.0.0', 736, 628);
+    c.textAlign = 'left';
     // log
     const log = d?.log ?? [];
     const key = log.length ? `${log[0].t}|${log[0].m}` : '';
@@ -466,7 +482,9 @@ function wheel(c: CanvasRenderingContext2D, x: number, y: number) {
   c.strokeStyle = C.white;
   c.fillStyle = C.white;
   c.lineWidth = 3;
-  c.beginPath(); c.moveTo(x - 30, y); c.lineTo(x - 17, y); c.moveTo(x + 17, y); c.lineTo(x + 30, y); c.stroke();
+  // brake-disc symbol: B in a ring between two brackets with stubs (photo 2026-10-21)
+  c.beginPath(); c.moveTo(x - 34, y); c.lineTo(x - 26, y); c.moveTo(x + 26, y); c.lineTo(x + 34, y);
+  c.moveTo(x - 26, y - 13); c.lineTo(x - 26, y + 13); c.moveTo(x + 26, y - 13); c.lineTo(x + 26, y + 13); c.stroke();
   c.beginPath(); c.arc(x, y, 20, 0, Math.PI * 2); c.stroke();
   c.beginPath(); c.arc(x, y, 15, 0, Math.PI * 2); c.lineWidth = 2; c.stroke();
   // the glyph inside reads as "B" on both Line 2 photos (blurry: see README)
@@ -480,27 +498,34 @@ function wheel(c: CanvasRenderingContext2D, x: number, y: number) {
 
 /** cab front in profile with the traction / brake arrow (right column) */
 function trainFront(c: CanvasRenderingContext2D, x: number, y: number, state: 'traction' | 'brake' | 'coast' | 'eb') {
+  // outline cab in side view (photo 2026-10-21): flat roof, rounded nose to the right,
+  // a split window and a door window, standing on a floor line
   const col = state === 'eb' ? C.red : C.white;
+  c.strokeStyle = col;
   c.fillStyle = col;
+  c.lineWidth = 3;
   c.beginPath();
-  c.moveTo(x, y + 4);
-  c.lineTo(x + 46, y + 4);
-  c.quadraticCurveTo(x + 66, y + 6, x + 70, y + 32);
-  c.lineTo(x, y + 32);
-  c.closePath();
-  c.fill();
-  c.fillStyle = C.bg;
-  c.fillRect(x + 8, y + 12, 14, 10);
-  c.fillRect(x + 28, y + 12, 14, 10);
-  c.beginPath(); c.moveTo(x + 48, y + 12); c.lineTo(x + 56, y + 12); c.lineTo(x + 62, y + 22); c.lineTo(x + 48, y + 22); c.closePath(); c.fill();
-  if (state === 'coast') return;
-  const ac = state === 'traction' ? C.green : state === 'brake' ? C.yellow : C.red;
-  c.fillStyle = ac;
-  const ax = x + 58;
-  const ay = y + 38;
+  c.moveTo(x + 4, y + 40);
+  c.lineTo(x + 4, y + 2);
+  c.lineTo(x + 40, y + 2);
+  c.quadraticCurveTo(x + 66, y + 4, x + 70, y + 40);
+  c.stroke();
+  c.beginPath(); c.moveTo(x - 4, y + 42); c.lineTo(x + 74, y + 42); c.stroke();
+  c.lineWidth = 2;
+  c.strokeRect(x + 10, y + 10, 16, 26);
+  c.fillRect(x + 12, y + 12, 12, 10);
   c.beginPath();
-  if (state === 'traction') { c.moveTo(ax, ay); c.lineTo(ax - 10, ay + 12); c.lineTo(ax + 10, ay + 12); }
-  else { c.moveTo(ax, ay + 12); c.lineTo(ax - 10, ay); c.lineTo(ax + 10, ay); }
+  c.moveTo(x + 30, y + 36); c.lineTo(x + 30, y + 10); c.lineTo(x + 44, y + 10);
+  c.quadraticCurveTo(x + 58, y + 12, x + 60, y + 24); c.lineTo(x + 30, y + 24);
+  c.stroke();
+  // 【假设】the triangle under the nose (white upward on the standing photo) shows
+  // traction green, braking yellow, EB red, otherwise white
+  c.fillStyle = state === 'traction' ? C.green : state === 'brake' ? C.yellow : state === 'eb' ? C.red : C.white;
+  const ax = x + 62;
+  const ay = y + 46;
+  c.beginPath();
+  if (state === 'brake' || state === 'eb') { c.moveTo(ax, ay + 12); c.lineTo(ax - 13, ay); c.lineTo(ax + 13, ay); }
+  else { c.moveTo(ax, ay); c.lineTo(ax - 13, ay + 12); c.lineTo(ax + 13, ay + 12); }
   c.closePath();
   c.fill();
 }
