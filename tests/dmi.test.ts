@@ -2,7 +2,8 @@ import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {computeDmi,dmiTick} from '../src/sim/dmi';
 import {STATIONS} from '../src/data/line2';
-import {platformBerth,turnbackAt} from '../src/sim/timetable';
+import {platformBerth,turnbackAt,serviceEnd} from '../src/sim/timetable';
+import {setTripFromTasks} from '../src/sim/ats';
 import {openDoors,closeDoors,doorMotionTick,DOOR_STAGGER_S,psdRepaired} from '../src/sim/psd';
 import {capture} from '../src/sim/state';
 
@@ -55,16 +56,22 @@ describe('Line 2 photographed cab content',()=>{
    {k:'stop',station:departure.to,berth:platformBerth(s.topo,departure.to,'UP'),trip:departure.id,arr:null,dep:null,doors:true,revenue:true}];
   t.phase='run';
   expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼折');
+  // still moving into the tail: not yet changed
   t.link=s.topo.berths[turn.berths[0]].link;
+  expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼折');
+  expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼折');
+  // standing in the tail, and pulling out to the departure platform: that platform's station
+  t.phase='reversing';t.lastStation=airport;
   expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼');
-  expect(computeDmi(s,t.id)?.dest).toBe(STATIONS[departure.to].dmiName??STATIONS[departure.to].name);
-  t.phase='reversing';
+  expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼');
+  t.tasks.shift();t.tbStage='depart';t.phase='run';setTripFromTasks(s,t);
   expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼');
-  t.tasks.shift();t.tbStage='depart';t.phase='run';
-  expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼');
-  t.link=s.topo.berths[depBerth].link;t.phase='dwell';
+  expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼');
+  // standing at the departure platform: the real terminus
+  t.link=s.topo.berths[depBerth].link;t.phase='dwell';t.tbStage='none';
   expect(computeDmi(s,t.id)?.next).toBe(STATIONS[departure.to].dmiName??STATIONS[departure.to].name);
-  t.tasks=[{k:'stop',station:airport,berth,trip:-1,arr:null,dep:null,doors:true,revenue:true}];
+  expect(computeDmi(s,t.id)?.dest).toBe(STATIONS[serviceEnd(s.plan,departure)].dmiName??STATIONS[serviceEnd(s.plan,departure)].name);
+  t.tasks=[{k:'stop',station:airport,berth,trip:-1,arr:null,dep:null,doors:true,revenue:true}];t.destStation=airport;
   expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼');
   expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼');
   const other=STATIONS.findIndex(st=>st.id==='SHR');

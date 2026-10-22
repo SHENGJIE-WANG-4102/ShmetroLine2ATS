@@ -138,20 +138,26 @@ function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
   const reverse = first?.k === 'reverse' ? first : tr.phase === 'dwell' && first?.k === 'stop' && tr.tasks[1]?.k === 'reverse' ? tr.tasks[1] : undefined;
   const after = reverse ? tr.tasks.slice(tr.tasks.indexOf(reverse) + 1).filter((t): t is StopTask => t.k === 'stop' && t.doors) : [];
   const offPlatform = reverse?.berths.some(b => sim.topo.berths[b].platform < 0);
-  const link = sim.topo.links[tr.link];
-  const inTail = link.platform < 0 && ['tail', 'siding'].includes(sim.topo.sections[link.section].kind);
-  if (reverse && offPlatform && !inTail && tr.phase !== 'reversing') {
-    const folded = name(reverse.station) + '折';
-    return { next: folded, dest: folded };
+  // Turning back in a tail or siding (用户确认): "X折" until the train stands
+  // in the tail; from then until it stands at the departure platform, both
+  // fields show that platform's station; only there the real terminus.
+  if (reverse && offPlatform) {
+    const shown = tr.phase === 'reversing' ? name(after[0]?.station ?? reverse.station) : name(reverse.station) + '折';
+    return { next: shown, dest: shown };
+  }
+  if (tr.phase === 'run' && (tr.tbStage === 'depart' || tr.tbStage === 'manual')
+    && first?.k === 'stop' && first.doors && first.station === tr.lastStation) {
+    const shown = name(first.station);
+    return { next: shown, dest: shown };
   }
   const stops = tr.tasks.filter((t): t is StopTask => t.k === 'stop' && t.doors);
-  const nextWorking = reverse && (inTail || tr.phase === 'reversing') ? after[0] : undefined;
+  const nextWorking = reverse && tr.phase === 'reversing' ? after[0] : undefined;
   const trip = nextWorking ? sim.plan.trips[nextWorking.trip] : undefined;
   let dest = trip ? name(serviceEnd(sim.plan, trip)) : tr.destStation >= 0 ? name(tr.destStation) : tr.destText || '—';
   if (nextWorking && !trip) dest = name(after.at(-1)?.station ?? tr.destStation);
-  // At a departure platform, show its next call. Platform-only reversals use
-  // that same convention while changing ends (用户确认); entering a tail does not.
-  const next = nextWorking ? (!offPlatform ? after[1] : nextWorking)
+  // A platform-only reversal changes at once to the next working: its next
+  // call and real terminus (用户确认).
+  const next = nextWorking ? after[1]
     : tr.phase === 'dwell' && first?.k === 'stop' && first.dep !== null ? stops[1] : stops[0];
   return { next: next ? name(next.station) : '—', dest };
 }
