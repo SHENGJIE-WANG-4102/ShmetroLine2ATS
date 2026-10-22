@@ -58,19 +58,17 @@ def clock_seconds(value):
     return bits[0] * 3600 + bits[1] * 60 + (bits[2] if len(bits) == 3 else 0)
 
 
-def period(seconds):
-    h = seconds / 3600
-    if 7 <= h < 9.5:
-        return '早高峰'
-    if 9.5 <= h < 16.5:
-        return '白天平峰'
-    if 16.5 <= h < 20:
-        return '晚高峰'
-    if 20 <= h < 21 + 2 / 3:
-        return '晚间20:00–21:40'
-    if h >= 21 + 2 / 3:
-        return '夜间21:40后'
-    return '开班'
+HEADWAY_BANDS = []  # Filled from OFFICIAL_HEADWAYS by the TypeScript entry.
+
+
+def period(seconds, bands=None):
+    bands = HEADWAY_BANDS if bands is None else bands
+    if not bands:
+        raise ValueError('Missing officialHeadways; regenerate catalog with the TypeScript entry')
+    for band in bands:
+        if band['from'] is not None and clock_seconds(band['from']) <= seconds < clock_seconds(band['to']):
+            return band['name']
+    return next(band['name'] for band in bands if band['from'] is None)
 
 
 def confidence(*labels):
@@ -425,7 +423,7 @@ def pis_comparisons(tables):
     # Airport photos explicitly describe departure predictions, kept separate.
     for seconds, destination in [(20 * 3600 + 33 * 60 + 4, '淞虹路'), (20 * 3600 + 37 * 60 + 25, '蟠祥路·国家会计学院')]:
         predictions.append(dict(station='浦东1号2号航站楼', direction='UP', destination=destination, predicted=seconds,
-                                file='docs/field-2026-10-21-airport.md', confidence='高', kind='departure prediction'))
+                                file='docs/field/field-2026-10-21-airport.md', confidence='高', kind='departure prediction'))
     # A screen repeated each second is one forecast train, not 100 samples.
     groups = []
     for row in sorted(predictions, key=lambda p: (p['station'], p['direction'], p['destination'], p['predicted'])):
@@ -560,6 +558,8 @@ def main():
     if out == ROOT / 'work' or not out.is_relative_to(ROOT / 'work'):
         parser.error('All derivatives must stay under ignored work/')
     catalog = json.loads((out / 'catalog.json').read_text('utf-8'))
+    global HEADWAY_BANDS
+    HEADWAY_BANDS = catalog['officialHeadways']['weekday']
     if args.measure:
         measured = []
         for source in catalog['sources']:

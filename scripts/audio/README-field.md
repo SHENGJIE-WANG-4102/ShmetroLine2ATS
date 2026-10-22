@@ -32,4 +32,6 @@ python scripts/audio/test-field-calibration.py
 npx vitest run tests/field-calibration.test.ts
 ```
 
-三批55段的新口径结果、停站表和调速前后对照见 [2026年10月报告](../../docs/field-calibration-2026-10.md)。D124旧电机口径表已作废，快照在 `work/section-regulation/d124-original/`；低置信度行不进入主均值。
+本地已知原件统一放 `work/recordings/`。改名后可用 `npx tsx scripts/audio/field-calibration.ts --existing --prepare-only` 更新目录；只写目录，不重算旧事件。目录包含 `OFFICIAL_HEADWAYS`，旧目录须重新生成；分析按官方工作日晚高峰17:00–20:30分组，10/14未知钟点单列。旧事件缓存继续保留，新视频无识别缓存时走关门音／站序降级流程。
+
+三批55段的D126/D127停站表和调速对照见 [2026年10月报告](../../docs/field/field-calibration-2026-10.md)；新增视频后56个候选、60个方向区间覆盖、置信度复查及条件富余试算见 [自下而上的分析](../../docs/field/bottom-up-runtime-2026-10.md)。后者区分完整候选与纯门声主样本，并未修改模型。D124旧电机口径表已作废，历史快照在 `work/section-regulation/d124-original/`；低置信度行不进入主统计。

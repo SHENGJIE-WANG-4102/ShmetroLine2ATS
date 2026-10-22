@@ -23,8 +23,12 @@ class EvidenceTests(unittest.TestCase):
         self.assertAlmostEqual(result['se'], 60 / 3 ** .5)
 
     def test_period_boundary_is_half_open(self):
-        self.assertEqual(field.period(21 * 3600 + 40 * 60 - .1), '晚间20:00–21:40')
-        self.assertEqual(field.period(21 * 3600 + 40 * 60), '夜间21:40后')
+        bands = [dict(name='晚高峰', **{'from': '17:00', 'to': '20:30'}),
+                 dict(name='其他时段', **{'from': None, 'to': None})]
+        self.assertEqual(field.period(20 * 3600 + 30 * 60 - .1, bands), '晚高峰')
+        self.assertEqual(field.period(20 * 3600 + 30 * 60, bands), '其他时段')
+        self.assertEqual(field.period(17 * 3600 - .1, bands), '其他时段')
+        self.assertEqual(field.period(17 * 3600, bands), '晚高峰')
 
     def test_missing_or_weak_evidence_cannot_enter_primary_mean(self):
         self.assertEqual(field.confidence('high', None), 'low')

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { STATIONS, OPERATIONS } from '../../src/data/line2';
 import { DOOR_CLOSE_S } from '../../src/sim/calibration';
 import { DOOR_TAKES } from '../../src/data/doorbank';
-import { FIRST_LAST } from '../../src/data/firstlast';
+import { FIRST_LAST, OFFICIAL_HEADWAYS } from '../../src/data/firstlast';
 import { RIDE_LOG, RECORDING_SOURCES } from '../../src/data/ridelog';
 import { FIELD_1021_ORIGINALS } from '../../src/data/onboardfield1021';
 import { ahead } from '../../src/sim/topology';
@@ -26,15 +26,15 @@ mkdirSync(out, { recursive: true });
 const save = (name: string, data: unknown) => writeFileSync(join(out, name), JSON.stringify(data, null, 2), 'utf8');
 const existing = args.includes('--existing');
 const sources = RECORDING_SOURCES.filter(s => s.kind === 'ride').map(s => ({ ...s,
-  path: resolve(s.id.startsWith('ride-1016') ? 'work/recordings/10-16' : 'work/recordings', s.filename),
+  path: resolve('work/recordings', s.filename),
   events: RIDE_LOG.filter(r => r.recording === s.id), mode: 'adopted-events',
 }));
 for (const [id, clock, name, from] of [
-  ['ride-1021-east', '19:56', '10-21-2026 19.56.wav', '广兰路'],
-  ['ride-1021-west', '20:33', '10-21-2026 20.33.wav', '浦东1号2号航站楼'],
+  ['ride-1021-east', '19:56', '19.56广兰路~PVG.wav', '广兰路'],
+  ['ride-1021-west', '20:33', '20.33PVG~浦东南路.wav', '浦东1号2号航站楼'],
 ]) {
   const pa = FIELD_1021_ORIGINALS.filter(p => p.source === id);
-  (sources as unknown[]).push({ id, path: resolve('D:/Windows_Users/Downloads', name), filename: name,
+  (sources as unknown[]).push({ id, path: resolve('work/recordings', name), filename: name,
     clockStart: clock, clockStartPrecision: 'minute', from, directions: [pa[0].direction],
     durationS: id.endsWith('west') ? 3667.54 : 1859.30,
     offset: id.endsWith('west') ? 152 : 0, mode: 'pa-windows', announcements: pa });
@@ -47,7 +47,7 @@ if (!existing) {
   sources.length = 0;
   (sources as unknown[]).push(known && !args.includes('--automatic') ? { ...known, clockStart: clock } : { id: 'new-ride', path: resolve(path), from, directions: [direction], clockStart: clock, clockStartPrecision: 'approximate', mode: 'automatic', offset: Number(option('--offset') ?? 0), recognizer: option('--recognizer') });
 }
-save('catalog.json', { sources, doorTiming: { closeS: DOOR_CLOSE_S, openDelay: OPERATIONS.autoDoorOpenDelay, startDelay: OPERATIONS.autoStartDelay, referenceTakes: DOOR_TAKES }, stations: STATIONS.map((s, index) => ({ index, id: s.id, name: s.name })), official: FIRST_LAST,
+save('catalog.json', { sources, doorTiming: { closeS: DOOR_CLOSE_S, openDelay: OPERATIONS.autoDoorOpenDelay, startDelay: OPERATIONS.autoStartDelay, referenceTakes: DOOR_TAKES }, stations: STATIONS.map((s, index) => ({ index, id: s.id, name: s.name })), official: FIRST_LAST, officialHeadways: OFFICIAL_HEADWAYS,
   travelOrder: Object.fromEntries(['DN', 'UP'].map(dir => [dir, STATIONS.map((s, index) => ({ name: s.name, index })).sort((a, b) => ahead(dir as 'DN' | 'UP', a.index, b.index) ? -1 : a.index === b.index ? 0 : 1).map(s => s.name)])) });
 function python(...parameters: string[]) {
   const run = spawnSync(option('--python') ?? 'python', [resolve('scripts/audio/field-audio.py'), '--out', out, ...parameters], { stdio: 'inherit' });

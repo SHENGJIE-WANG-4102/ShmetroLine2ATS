@@ -616,7 +616,7 @@ export interface FixedRun {
  * the portal between 凌空路—远东大道 in pdf-peixian; user correction 2026-10-19.
  * 金科路—凌空路 is underground. The PDF is schematic, not a distance scale.
  * 【假设】first portals K32.7–33.2: about 500 m, consistent with the recorded
- * 25.50 s outside at 60–80 km/h (docs/recordings.md). Eastern portal K52.5;
+ * 25.50 s outside at 60–80 km/h (docs/field/recordings.md). Eastern portal K52.5;
  * exact portal chainages and the airport ground transition remain approximate.
  */
 export const EXPOSED: { from: number; to: number; kind: 'elevated' | 'ground'; name: string }[] = [
