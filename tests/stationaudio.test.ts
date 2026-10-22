@@ -237,23 +237,28 @@ describe('separate recorded door clocks', () => {
     expect(commands.map(c => c.clips[0].kind)).toEqual(['door-motion-open']);
     expect(commands[0].offsetS).toBe(0);
   });
-  it.each([1, 5])('aligns warning now and motion 2.7 simulation seconds later at rate %s', rate => {
+  it.each([1, 5])('layers the selected warning and mechanism for a full 6.25 s at rate %s', rate => {
     const p = new DoorSoundPlanner(); p.update(df(100, true, { rate }));
     const warning = plays(p.update(df(100.2, false, { rate })).commands);
     expect(warning.map(c => c.clips[0].kind)).toEqual(['door-warn-close']);
+    expect(warning[0].clips[0].id).toBe('door-warn-close-kjg');
+    expect(clipDuration(warning[0].clips[0])).toBeCloseTo(6.25, 10);
+    expect(warning[0].offsetS).toBe(0); expect(warning[0].rate).toBe(rate);
     expect(plays(p.update(df(102.8, false, { rate })).commands)).toEqual([]);
-    const movement = plays(p.update(df(102.9, false, { rate })).commands);
-    expect(movement.map(c => c.clips[0].kind)).toEqual(['door-motion-close']);
-    expect(movement[0].offsetS).toBeCloseTo(0); expect(movement[0].rate).toBe(rate);
+    const movement=plays(p.update(df(102.9, false, { rate })).commands);
+    expect(movement.map(c=>c.clips[0].id)).toEqual(['door-motion-close-kjg']);
+    expect(movement[0].offsetS).toBeCloseTo(0,10); expect(movement[0].rate).toBe(rate);
+    expect(clipDuration(movement[0].clips[0])+2.7).toBeCloseTo(6.25,10);
+    expect(movement[0].volume).toBe(warning[0].volume);
   });
-  it('cancels the pending close mechanism if the door reopens', () => {
+  it('cancels the closing warning if the door reopens', () => {
     const p = new DoorSoundPlanner(); p.update(df(100, true)); p.update(df(100.2, false));
     const reopening = p.update(df(101, true));
     expect(reopening.commands.some(c => c.kind === 'stop')).toBe(true);
     expect(plays(reopening.commands)[0].clips[0].kind).toBe('door-motion-open');
     expect(plays(p.update(df(103, true)).commands)).toEqual([]);
   });
-  it('warns while doors remain unlocked, keeps the pending motion, and never warns again at lock', () => {
+  it('starts while unlocked and plays the full 6.25 s through lock and departure without replaying', () => {
     const p = new DoorSoundPlanner();
     const f = (t: number, doors: boolean, doorClosing: boolean) => df(t, true, {
       trains: [tr({ v: 0, atStation: true, phase: 'dwell', doors, doorClosing })] });
@@ -262,10 +267,30 @@ describe('separate recorded door clocks', () => {
     expect(start.events.map(e=>e.kind)).toEqual(['close']);
     expect(plays(start.commands).map(c=>c.clips[0].kind)).toEqual(['door-warn-close']);
     expect(p.update(f(100.4, true, true)).commands.some(c=>c.kind==='stop')).toBe(false);
-    expect(plays(p.update(f(102.9, true, true)).commands).map(c=>c.clips[0].kind)).toEqual(['door-motion-close']);
-    for (let t=103;t<112;t++) p.update(f(t,true,true));
-    const locked=p.update(f(112.2,false,false));
-    expect(locked.events).toEqual([]);expect(plays(locked.commands)).toEqual([]);
+    const movement=plays(p.update(f(103, true, true)).commands);
+    expect(movement.map(c=>c.clips[0].kind)).toEqual(['door-motion-close']);
+    expect(movement[0].offsetS).toBeCloseTo(.1,10);
+    p.update(f(104.9,true,true));
+    const locked=p.update(f(105.9,false,false));
+    expect(locked.events).toEqual([]);expect(locked.commands).toEqual([]);
+    const moving=(t:number)=>df(t,false,{trains:[tr({v:1,atStation:false,phase:'run',doors:false,doorClosing:false})]});
+    expect(p.update(moving(106.1)).commands).toEqual([]);
+    expect(p.update(moving(106.44)).commands).toEqual([]);
+    const ended=p.update(moving(106.45));
+    expect(ended.commands).toEqual([plays(start.commands)[0],movement[0]].map(c=>({kind:'stop',key:c.key})));
+    expect(ended.events).toEqual([]);
+    expect(p.update(moving(106.6)).commands).toEqual([]);
+  });
+  it('cancels both tracks on reopening even when the mechanism started on a delayed frame', () => {
+    const p=new DoorSoundPlanner();p.update(df(100,true));
+    const warning=plays(p.update(df(100.2,false)).commands)[0];
+    p.update(df(102.8,false));
+    const movement=plays(p.update(df(103,false)).commands)[0];
+    expect(movement.clips[0].id).toBe('door-motion-close-kjg');
+    expect(movement.offsetS).toBeCloseTo(.1,10);
+    const reopening=p.update(df(103.2,true));
+    expect(reopening.commands.filter(c=>c.kind==='stop')).toEqual([warning,movement].map(c=>({kind:'stop',key:c.key})));
+    expect(plays(reopening.commands).map(c=>c.clips[0].kind)).toEqual(['door-motion-open']);
   });
   it.each([{ paused: true }, { muted: true }, { enabled: false }, { rate: 0 }, { rate: 10 }, { selectionKey: 'train|2' }])('cancels pending door clocks on %j', patch => {
     const p = new DoorSoundPlanner(); p.update(df(100, true)); p.update(df(100.2, false));
