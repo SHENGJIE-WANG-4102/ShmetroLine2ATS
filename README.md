@@ -523,11 +523,12 @@ standby then covers its own later duty). The train label shows 热备; the train
 
 ## Cab DMI
 
-The DMI in the side panel follows four reference photos in `reference/dmi/`. The files are
-`.png`, not the `.jpg` named in the brief.
+The DMI follows the clear Line 2 photo `reference/dmi/IMG_20261021_202812.HEIC`
+(2026-10-21). The older photos below remain secondary references.
 
 | File | Shows | Used as |
 |---|---|---|
+| `IMG_20261021_202812.HEIC` | clear Line 2 cab, DTO-CBTC | primary layout, labels and message wording |
 | `line2_blurry_1.png`, `line2_blurry_2.png` | the DMI in a Line 2 02A05 cab | authority for Line 2 content wherever legible |
 | `casco_am_clear.png` | a clear Casco DMI in AM (another Shanghai line) | authority for colours, typography, icon shapes, log style, proportions |
 | `casco_fam_clear.png` | a clear Casco DMI on another city's GoA4 line | layout cross-check only |
@@ -540,9 +541,16 @@ No vendor logo or bezel is drawn.
   green for normal / closed, yellow for open doors and warnings, red for the permitted
   speed and emergencies.
 * **Top bar.**
-  * Three blue label-over-value fields: 终点站, 下一站, 车次.
-  * `T` + 4 digits, then the service number.
-  * Two white buttons on the right.
+  * 下一站 on the left, 终点站 on the right, with white labels above names.
+  * HOLD while held, `T` + 4 digits, service number, grey C000, white 菜单.
+  * No separate trip-number field. Station spelling uses `StationData.dmiName`: only
+    浦东1_2航站楼 is confirmed; all other stations keep their full names.
+    折 appears in both fields only at the arrival platform before entering a
+    turnback track (用户决定，2026-10-22). Passenger running shows the real terminus.
+    On entering the turnback track the next station becomes the next working's
+    departure platform, and the terminus becomes that working's real destination.
+    Once stopped at the departure platform, 下一站 shows the following call.
+    Platform-only changes of ends show the next working immediately, without 折 (用户确认，2026-10-22).
   * `DEP hh:mm:ss` under the train ID.
 * **Speedometer.**
   * Range 0–120 km/h, labelled every 20, minor ticks every 2 km/h, long ticks every 10, as on the Line 2 photos.
@@ -550,13 +558,32 @@ No vendor logo or bezel is drawn.
   * Permitted speed shown as a red arc on the rim from the permitted speed up to 120, plus a red triangle marker.
 * **Right column.**
   * Large mode and level: `DTO CBTC` / `AM CBTC` / `AM TBTC` / `CM …` / `RM …`.
-  * Departure countdown bar and train-front icon.
-  * Platform screen door leaves.
-  * Door mode `AA` / `MM` with its white bar, and the train door bars.
-* **Row below the dial.** Wheel icon, highest available mode (`DTO-C`, `AM-C`, `AM-T`, `CM-C`, `CM-T`, `RM`),
-  train / door status icon, stopping-window hexagon.
+  * Outlined distance strip: distance to the platform stopping point in metres,
+    or --m without a valid target (用户选定并确认，2026-10-22); train-front icon.
+  * Train doors above `AA` / `MM`: two leaves, each with a square window, always
+    visible. Connected to train door opening, actual lock-confirmation time,
+    door faults and isolated doors; unrelated train faults do not turn them red.
+  * PSD to the right of `AA` / `MM`: two yellow framed bars with yellow cores
+    when open (leaves separated), meeting when closed (用户确认). Connected independently to the current platform's PSD state.
+    Visible from head entry into the platform track until the head leaves it;
+    hidden between stations (用户确认，2026-10-22).
+  * The photo shows open white train-door leaves and yellow PSD leaves;
+    both pairs meet when closed (用户确认).
+    Each symbol follows its own actual physical transition. A close command
+    does not immediately join the leaves: PSD close first, train doors follow.
+    Opening differs by at most 0.5 s (用户要求，2026-10-22); the chosen 0.3 s,
+    with train doors opening first, is【假设】. Closure uses the same 0.3 s lead
+    for PSD inside the existing cycle, without extending the departure deadline.
+    The close-up also reads PSD independently. A failed close never shows closed.
+    Remaining styles【假设】: closing doors are dim until
+    lock confirmation; a door fault is red with a cross; isolated train doors
+    and a PSD interlock bypass are orange with a slash. PSD faults and bypass
+    come from the platform state, not the train door state.
+  * Door mode `AA` / `MM` with its white bar.
+* **Row below the dial.** Circled B, current mode-level (`DTO-CBTC`, `AM-TBTC`, etc.),
+  stopping-window hexagon.
 * **Bottom.**
-  * Date (YYYY/MM/DD) and time on the left.
+  * Bottom line: date (YYYY/MM/DD), time, 版本：1.0.0.
   * Message log: `hh:mm text`, newest first. The selected row is highlighted in light cyan; up / down scroll buttons sit on the right.
   * Clicking a row selects it; the buttons scroll the log.
 
@@ -582,7 +609,8 @@ No vendor logo or bezel is drawn.
   * The door mode is `AA` in DTO / AM and `MM` in CM / RM.
 * **States covered.**
   * AM traction / coasting / braking, station approach, stopped and aligned.
-  * Doors open (yellow) / closed (green), departure countdown.
+  * Separate train/PSD doors, actual lock confirmation and faults.
+  * The departure countdown is on the platform close-up, never on the DMI.
   * CM, RM.
   * Communication loss with emergency brake.
   * Alarms in the log.
@@ -602,30 +630,27 @@ No vendor logo or bezel is drawn.
 
 | Element | What the photos show | What is drawn |
 |---|---|---|
-| Third top-bar field | blue label and value, unreadable | 车次 with the trip number |
 | Small number after the train ID ("25") | a 1–2 digit number | service (表号) number without leading zeros |
-| Two white buttons, top right | captions unreadable | blank buttons; no function |
-| Glyph inside the wheel icon | scalloped ring with a letter, looks like "B" | "B" inside the ring, on the Casco axle line |
-| Level wording in TBTC | only `CBTC` is ever visible | `TBTC` |
-| Grey bar under the mode | a grey rounded bar | departure countdown (fills during the dwell, seconds beside it) |
-| Train-front icon right of the bar | white train-front icon with a mark under it | traction (green ▲), braking (yellow ▼), emergency brake (red icon) |
-| Two square icons above AA | white / grey squares | platform screen doors: grey none, green closed, yellow open, red fault, orange bypass |
-| Bars right of AA | yellow bars in the Line 2 photo | train doors: green closed, yellow and apart when open |
+| C000 | grey field, 含义未知 | fixed C000, no model data |
+| 菜单 | white button | caption only, no inferred function |
+| Circled B | B inside a circular axle icon | circular B icon |
+| Level wording in TBTC | only CBTC visible | TBTC |
+| Distance strip | outlined strip and --m; platform stopping distance (用户确认) | 用户选定并确认（2026-10-22）：到站台停车点距离（m），无有效停车目标时 --m |
+| Train-front icon | outline with triangle | existing traction / brake indication retained as a model assumption |
+| Two square icons above AA | train door leaves, each with a square window (用户确认，2026-10-22) | actual train door state, always shown; unphotographed states as described above【假设】 |
+| Two yellow bars | PSD open shape, leaves separated (用户确认，2026-10-22) | actual PSD state while on the platform track; hidden between stations; unphotographed states【假设】 |
 | Hexagon colours | green / white vertical hexagon | green tips approaching a stop, green body when aligned, yellow tip short / over, white otherwise |
 | AA / MM mapping | `AA` on Line 2, `MM` on the clear photo | AA in AM, MM in CM / RM |
 
 ### Extrapolations (states the references do not show)
 
-* **Target / authority readout** (bottom right, same blue-label / white-value style):
-  * the target reason, distance and speed;
-  * the MA length;
-  * the stopping error when stopped off the mark.
-
-  It replaces an ETCS-style target distance bar, which none of the references has.
 * **Status line** under the door mode: 紧急制动 (red), 超速 / 前方限速 XX · NNN m / 前方停车 · NNN m / 扣车 (yellow), 非站台侧车门开启 (red), 停稳，待开门 / 人工驾驶 (white).
 * **Restriction pre-indication** (manual cab only, 【假设】 after the ETCS indication status): about 6 s before the permitted-speed curve towards a lower limit or the end of authority meets the present speed, the status line announces it, a yellow marker shows the target speed on the rim, and a two-tone chime sounds once. The platform stopping point is not announced. The permitted speed (red, overspeed warning) follows a 0.8 m/s² curve; the EB intervenes 5 km/h above the 0.95 m/s² guaranteed-EB curve.
 * **Overspeed** turns the hub digits yellow; an emergency brake turns them red.
-* **Log messages taken from the photos:** `DMI激活`, `连接丢失`, `ATO/ATP模式可用`, `CM/AM模式可用`.
+* **Log messages from the new photo:** `ATPM模式可用` on the existing supervised-mode
+  availability event; `定位已确认` at existing DMI initialisation with a valid model
+  track position (【假设】: the model has no separate localisation acquisition phase).
+  Older-photo wording retained where applicable: `DMI激活`, `连接丢失`.
 * **Log messages added in the same style:**
   * `连接恢复`, `CM模式可用`, `仅RM模式可用`
   * `紧急制动 <reason>`, `紧急制动缓解`, `超速报警`
@@ -847,8 +872,19 @@ Ordinary planned stops are 20–35 s and busy stops 25–50 s, growing with the 
 longer peak stops leave a late train room to make up time. ATS shortens late
 stops only to the actual passenger/door minimum (absolute 15 s assumption),
 adds at most 10 s for early arrival, and adjusts ATO performance on the next
-section within ATP limits. DMI and end-door countdowns include the complete door
-cycle; actual DEP records wheel start. Planning run-time margin is at most 5%
+section within ATP limits. The platform-end green dot-matrix sign beside the
+departure signal counts seconds down to zero, then counts positive overtime;
+a train or platform hold displays H. It goes dark five seconds after the
+simulator records the head leaving the platform (用户确认，2026-10-22). A stop
+without a planned departure has no numeric count; hold still shows H. Its position follows the
+topological signal, including middle-track platforms, with no station-specific
+branches. There is no countdown on the DMI. CM/RM may depart once actual train
+doors and PSD are closed/locked, without waiting for the plan; the existing door
+cycle and staff-confirmation delays remain. Train/platform holds, interval
+metering, equipment faults and turnback waits remain in force. An early wheel
+start records one “早发 N 秒” information event and negative delay; automatic
+DTO/AM still obey their departure time. Actual DEP records wheel start.
+Planning run-time margin is at most 5%
 of the fastest modeled ATO run. Sources and assumptions: design decisions D28–D43.
 
 Fault-free soak cases require at least 98% of final revenue arrivals within

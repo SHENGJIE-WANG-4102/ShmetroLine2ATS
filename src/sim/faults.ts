@@ -11,11 +11,13 @@ import { failTrain, recoverTrain, trainLabel, rescueBlockedByConsist } from './a
 import { callRescue, callPecu, callTrackPerson } from './radio';
 import { psdRepaired } from './psd';
 import { allowed, FAULT } from './fsm';
+import { recordTransition } from './invariants';
 import { reverseTrain } from './movement';
 import { dtoAllowed as dtoAllowedFor } from './onboard';
 
 function stage(sim: Sim, fault: Fault, next: Fault['stage']) {
   if (!allowed(sim, FAULT, fault.stage, next).ok) return;
+  recordTransition(sim, FAULT, fault.id, fault.stage, next);
   fault.stage = next;
   fault.stageAt = sim.t;
 }
@@ -203,6 +205,7 @@ export function injectFault(sim: Sim, kind: FaultKind, target: number, duration:
     }
   }
   sim.faults.push(f);
+  recordTransition(sim, FAULT, f.id, 'effect', 'effect');
   return { ok: true, msg: `已注入故障：${f.text}` };
 }
 

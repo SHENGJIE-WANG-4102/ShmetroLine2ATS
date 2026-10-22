@@ -22,7 +22,7 @@
  * car's front door) 【假设】.
  */
 import { h } from './dom';
-import type { TrainSnap } from '../sim/model';
+import type { TrainSnap, DmiData } from '../sim/model';
 import { STATIONS } from '../data/line2';
 import { FONT_CN } from './theme';
 
@@ -106,9 +106,34 @@ const PX_NEAR = (X_AHEAD - XE_FAR) / (FREEZE_REM + BEYOND);
  * BEYOND past the mark into the view; within it the scale is fixed and the
  * eye moves right, reaching the mark's fixed screen position at the stop.
  */
-export function stopViewScale(rem: number): { px: number; xe: number } {
-  if (rem >= FREEZE_REM) return { px: (X_AHEAD - XE_FAR) / (rem + BEYOND), xe: XE_FAR };
-  return { px: PX_NEAR, xe: XE_FAR + (FREEZE_REM - rem) * PX_NEAR };
+export function stopViewScale(rem: number, beyond = BEYOND): { px: number; xe: number } {
+  const near = (X_AHEAD - XE_FAR) / (FREEZE_REM + beyond);
+  if (rem >= FREEZE_REM) return { px: (X_AHEAD - XE_FAR) / (rem + beyond), xe: XE_FAR };
+  return { px: near, xe: XE_FAR + (FREEZE_REM - rem) * near };
+}
+
+/** 用户确认：count down through zero, then count positive overtime seconds. */
+export function departureSeconds(at: number, now: number): number | null {
+  return Number.isFinite(at) && at >= 0 ? at >= now ? Math.ceil(at - now) : Math.floor(now - at) : null;
+}
+
+export function departureText(board: DmiData['departureBoard'], now: number): string | null {
+  if (!board || board.headLeftAt !== undefined && now - board.headLeftAt >= 5) return null;
+  if (board.held) return 'H';
+  const seconds = departureSeconds(board.at, now);
+  return seconds === null ? null : String(seconds);
+}
+
+const DIGITS = ['111101101101111', '010110010010111', '111001111100111', '111001111001111', '101101111001001',
+  '111100111001111', '111100111101111', '111001001001001', '111101111101111', '111101111001111'];
+
+function dotNumber(c: CanvasRenderingContext2D, text: string, right: number, y: number) {
+  const pitch = 3, w = text.length * 12 + 6, x = right - w;
+  c.fillStyle = '#07110b'; c.fillRect(x, y - 11, w, 23);
+  c.fillStyle = '#31ef59';
+    [...text].forEach((n, i) => [...(n === 'H' ? '101101111101101' : DIGITS[Number(n)])].forEach((bit, p) => {
+    if (bit === '1') { c.beginPath(); c.arc(x + 5 + i * 12 + p % 3 * pitch, y - 6 + Math.floor(p / 3) * pitch, 1.1, 0, Math.PI * 2); c.fill(); }
+  }));
 }
 
 /** a step of `base` metres, coarsened so that marks stay at least `minPx` apart */
@@ -137,18 +162,21 @@ export class StopView {
     return t.stopErr;
   }
 
-  draw(t: TrainSnap) {
-    const rem = StopView.remaining(t);
-    const show = t.manual && !Number.isNaN(rem) && rem < STOPVIEW_RANGE;
+  draw(t: TrainSnap, d: DmiData | null = null, now = 0) {
+    const board = d?.departureBoard;
+    const platformDoorsOpen = d?.psd === 'open' || d?.psd === 'fault' ? true : d?.psd === 'closed' ? false : t.doors;
+    const side = board?.side || t.platSide;
+    const rem = board?.side && Number.isFinite(board.remaining) ? board.remaining : StopView.remaining(t);
+    const show = t.manual && !!side && Number.isFinite(rem) && rem < STOPVIEW_RANGE;
     this.el.style.display = show ? 'block' : 'none';
     if (!show) return;
     const c = this.ctx;
     c.setTransform(this.res, 0, 0, this.res, 0, 0);
     c.fillStyle = C.bg;
     c.fillRect(0, 0, W, H);
-    const { px: PX, xe: XE } = stopViewScale(rem);
+    const { px: PX, xe: XE } = stopViewScale(rem, Math.max(BEYOND, (board?.signalOffset ?? 0) + 5));
     // drawn for a platform on top (driver's left); mirrored otherwise
-    const top = t.platSide === 'L';
+    const top = side === 'L';
     // across the track: as drawn at the fixed near scale, thinner further out, not below K_MIN
     const k = Math.max(K_MIN, Math.min(1, PX / PX_NEAR));
     const Y = (y: number) => Y0 + (y - Y0) * k;
@@ -206,8 +234,8 @@ export class StopView {
           if (dc < pLeft - 2 || dc > pRight + 2) return;
           const x = sx(dc - DOOR_W / 2), w = DOOR_W * PX;
           // leaves slide apart behind the fixed panels when open
-          const shift = t.doors ? w / 2 : 0;
-          rect(x, 71, w, 8, t.doors ? C.gap : C.leaf);
+          const shift = platformDoorsOpen ? w / 2 : 0;
+          rect(x, 71, w, 8, platformDoorsOpen ? C.gap : C.leaf);
           rect(x - shift, 72, w / 2 - 1, 6, C.leaf);
           rect(x + w / 2 + 1 + shift, 72, w / 2 - 1, 6, C.leaf);
           rect(x - mw, 66, mw, 18, C.mullion);
@@ -241,6 +269,20 @@ export class StopView {
         c.textBaseline = 'alphabetic';
         c.fillText('8', sx(0), by + 20);
       }
+    }
+
+    // Platform-end sign beside the actual departure signal, on either side.
+    if (board) {
+      const x = sx(board.signalOffset), y = P(30);
+      c.strokeStyle = '#89949f'; c.lineWidth = 3;
+      c.beginPath(); c.moveTo(x, P(67)); c.lineTo(x, y); c.stroke();
+      c.fillStyle = '#10151c'; c.fillRect(x - 7, y - 11, 14, 22);
+      c.fillStyle = board.aspect === 'G' ? C.green : board.aspect === 'Y' || board.aspect === 'GUIDE' ? '#ffe153' : C.red;
+      c.beginPath(); c.arc(x, y, 4, 0, Math.PI * 2); c.fill();
+      const text = departureText(board, now);
+      if (text !== null) dotNumber(c, text, x - 13, y);
+      c.fillStyle = '#ffffff'; c.font = `10px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(board.signalName, x, P(55));
     }
 
     // ---- the train: the nose EYE ahead of the eye, cars behind it
@@ -298,7 +340,7 @@ export class StopView {
     c.font = `15px ${FONT}`;
     c.fillStyle = C.dim;
     const capY = top ? H - 6 : 16;
-    const st = STATIONS[t.nextStation]?.name ?? '';
+    const st = STATIONS[board?.station ?? t.nextStation]?.name ?? '';
     c.fillText(`${st}  站台在${top ? '左' : '右'}侧`, 10, capY);
     if (t.v < 0.05) {
       const e = Math.abs(rem);

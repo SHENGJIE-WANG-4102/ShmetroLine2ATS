@@ -12,11 +12,13 @@ import { yardCount } from '../src/sim/yard';
 import { LINE_INFO, FLEET, fleetEntry } from '../src/data/line2';
 import { nextLink } from '../src/sim/topology';
 import { scanAhead, goalBerth, refreshAuthority, MA_NEAR } from '../src/sim/movement';
-import { dmiTrainNo } from '../src/sim/dmi';
+import { dmiTrainNo, computeDmi } from '../src/sim/dmi';
 import { PERF } from '../src/sim/dynamics';
 import { platformBerth } from '../src/sim/timetable';
 import { platformSide } from '../src/sim/ats';
 import type { Train } from '../src/sim/model';
+import { closeDoors } from '../src/sim/psd';
+import { updateTrainTasks } from '../src/sim/ats';
 
 const H = 8 * 3600;
 const st = (sim: Sim, name: string) => sim.topo.stations.find((s) => s.name === name)!;
@@ -26,7 +28,7 @@ const platSideOf = (sim: Sim, tr: Train) => platformSide(sim, tr, sim.topo.berth
 /** a driver at a stop: opens the platform-side doors, closes them when the countdown runs out */
 const workDoors = (sim: Sim, tr: Train) => {
   if (tr.phase !== 'dwell' || tr.tasks[0]?.k !== 'stop') return;
-  if (tr.doorsAwait || (tr.doorsOpen && sim.t >= tr.dwellUntil - 2)) sim.command({ c: 'door', train: tr.id, side: platSideOf(sim, tr) });
+  if (!tr.doorMotion && (tr.doorsAwait || (tr.doorsOpen && sim.t >= tr.dwellUntil - 2))) sim.command({ c: 'door', train: tr.id, side: platSideOf(sim, tr) });
 };
 /** a simple driver: traction to ~55 km/h, brake on a 0.7 m/s² curve to the stopping point */
 const driveToNextStop = (sim: Sim, tr: Train, guardSteps = 6000) => {
@@ -134,6 +136,41 @@ describe('manual driving', () => {
 });
 
 describe('driver doors and the acceleration limit', () => {
+  it('CM departs 20 seconds early after actual lock confirmation and records one negative-delay departure', () => {
+    const sim=makeSim('weekday',H),tr=dwellingDN(sim);
+    const stop=tr.tasks[0];expect(stop.k).toBe('stop');if(stop.k!=='stop')return;
+    const p=sim.topo.berths[stop.berth].platform;
+    tr.tasks[0]={...stop,dep:sim.t+32};tr.dwellUntil=sim.t+32;
+    expect(closeDoors(sim,tr,p)).toBe(0);
+    expect(sim.command({c:'manual',train:tr.id,mode:'CM'}).ok).toBe(true);
+    sim.drive(tr.id,4);
+    runFor(sim,11);expect(tr.v).toBe(0);expect(tr.phase).toBe('dwell');
+    expect(computeDmi(sim,tr.id)?.trainDoor).toBe('closing');
+    runFor(sim,4);expect(tr.v).toBeGreaterThan(0);expect(tr.delay).toBeLessThan(-16);
+    expect(computeDmi(sim,tr.id)?.trainDoor).toBe('closed');
+    const early=()=>sim.events.filter(e=>e.code==='EARLY_DEPARTURE'&&e.train===tr.id);
+    expect(early()).toHaveLength(1);expect(early()[0].text).toMatch(/早发 (19|20) 秒/);
+    expect(sim.depLog.at(-1)?.delay).toBeLessThan(0);
+    expect(tr.departureDisplay).toBeDefined();
+    const deadline=sim.t+20;
+    while(sim.t<deadline&&tr.departureDisplay?.headLeftAt===undefined)runFor(sim,.1);
+    expect(tr.departureDisplay?.headLeftAt).toBeDefined();
+    const cp=capture(sim),remaining=tr.departureDisplay!.remaining;
+    runFor(sim,2);expect(early()).toHaveLength(1);
+    expect(cp.trains.find(t=>t.id===tr.id)?.departureDisplay?.remaining).toBe(remaining);
+    runFor(sim,5);expect(tr.departureDisplay).toBeUndefined();
+  });
+  it.each(['CM','RM','DTO','AM'] as const)('%s obeys physical locks and dispatch holds; only manual ignores planned time',mode=>{
+    const sim=makeSim('weekday',H),tr=dwellingDN(sim),st=tr.tasks[0];if(st.k!=='stop')throw Error('fixture');
+    const ps=sim.plat[sim.topo.berths[st.berth].platform];
+    tr.mode=mode;tr.manual=mode==='CM'||mode==='RM';tr.doorsOpen=false;tr.doorSide='';tr.doorsAwait=false;
+    ps.psd='closed';tr.dwellUntil=sim.t+100;tr.doorLockedAt=sim.t+12;
+    updateTrainTasks(sim,tr);expect(tr.phase).toBe('dwell');
+    tr.doorLockedAt=sim.t-1;tr.hold=true;updateTrainTasks(sim,tr);expect(tr.phase).toBe('dwell');
+    tr.hold=false;ps.hold=true;updateTrainTasks(sim,tr);expect(tr.phase).toBe('dwell');
+    ps.hold=false;ps.psd='closeFail';updateTrainTasks(sim,tr);expect(tr.phase).toBe('dwell');
+    ps.psd='closed';updateTrainTasks(sim,tr);expect(tr.phase).toBe(tr.manual?'run':'dwell');
+  });
   const dwellingDN = (sim: Sim) => {
     const find = () => sim.trainList.find((t) => t.phase === 'dwell' && t.inService && t.doorsOpen && dirOf(sim, t) === 'DN' && sim.trainChain(t) > 9000 && sim.trainChain(t) < 20000);
     let tr = find();
@@ -168,6 +205,7 @@ describe('driver doors and the acceleration limit', () => {
     expect(sim.command({ c: 'door', train: tr.id, side }).ok).toBe(true);
     expect(tr.doorsOpen).toBe(true);
     const p = sim.topo.berths[(tr.tasks[0] as { berth: number }).berth].platform;
+    runFor(sim,.4,check);
     expect(sim.plat[p].psd).toBe('open');
     tr.notch = 4;
     runFor(sim, 30, check);
@@ -175,10 +213,11 @@ describe('driver doors and the acceleration limit', () => {
     expect(tr.phase).toBe('dwell');
     tr.notch = 0;
     expect(sim.command({ c: 'door', train: tr.id, side }).ok).toBe(true);
-    expect(tr.doorsOpen).toBe(false);
-    expect(sim.plat[p].psd).toBe('closed');
+    expect(tr.doorsOpen).toBe(true);
+    expect(tr.doorMotion?.kind).toBe('closing');
     // the closing sequence takes DOOR_CYCLE - 3 (12 s, D73) before the start
     runFor(sim, 15, check);
+    expect(tr.doorsOpen).toBe(false);expect(sim.plat[p].psd).toBe('closed');
     expect(tr.phase).toBe('run');
     expect(sim.command({ c: 'manual', train: tr.id, mode: 'AUTO' }).ok).toBe(true);
     expect(sim.speedCap()).toBe(Infinity);
@@ -218,9 +257,11 @@ describe('driver doors and the acceleration limit', () => {
     expect(sim.command({ c: 'door', train: tr.id, side }).ok).toBe(false);
     expect(sim.command({ c: 'manual', train: tr.id, mode: 'AUTO' }).ok).toBe(false);
     expect(sim.command({ c: 'door', train: tr.id, side: other }).ok).toBe(true);
+    expect(tr.doorSide).toBe(other);runFor(sim,12.1,check);
     expect(tr.doorSide).toBe('');
     expect(sim.command({ c: 'door', train: tr.id, side }).ok).toBe(true);
     const p = sim.topo.berths[(tr.tasks[0] as { berth: number }).berth].platform;
+    runFor(sim,.4,check);
     expect(sim.plat[p].psd).toBe('pslOpen');
     // handing back to automatic driving: the signalling closes the doors and the train leaves
     const stops = tr.stopsMade;
@@ -508,7 +549,8 @@ describe('DMI logic: movement authority, permitted speed, fleet, message log', (
     const msgs = tr.dmiLog.map((m) => m.m);
     expect(msgs).toContain('连接丢失');
     expect(msgs.some((m) => m.startsWith('紧急制动'))).toBe(true);
-    expect(msgs).toContain('TBTC ATO/ATP模式可用');
+    expect(msgs).toContain('ATPM模式可用');
+    expect(msgs).toContain('定位已确认');
     sim.dmiTrain = tr.id;
     const d = sim.snapshot().dmi!;
     expect(d.trainNo).toMatch(/^T\d{4}$/);

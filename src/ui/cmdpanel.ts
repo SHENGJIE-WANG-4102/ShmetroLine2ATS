@@ -371,7 +371,7 @@ export class CommandPanel {
       if (!t) return;
       const snap = this.store.snap!;
       this.dmi.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
-      if (t.manual) this.stopView.draw(t);
+      if (t.manual) this.stopView.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
       if (t.drv) {
         clear(scores);
         const st = t.drv.stops.slice(-8);

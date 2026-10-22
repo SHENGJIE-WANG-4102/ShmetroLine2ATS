@@ -8,13 +8,13 @@ import { doorCloseHold, departureHold, DOOR_CUT_DWELL } from './vehicle';
 import type { Sim } from './engine';
 import { cancelTrip, STANDBY_CALL, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import type { Dir, Topology } from './topology';
-import { nextLink, travelDirection } from './topology';
-import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach } from './interlocking';
+import { nextLink, travelDirection, ahead } from './topology';
+import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, type CmdResult } from './interlocking';
 import { computeBody, reverseTrain, goalBerth, stopError, moveBack, rescueRouteReady } from './movement';
 import { takeVehicle, putVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, distToNextSignal } from './onboard';
-import { openDoors, closeDoors } from './psd';
+import { openDoors, closeDoors, psdSafe } from './psd';
 import { blockTasks, tripTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/line2';
 import { boardAndAlight, boardWhileOpen } from './passengers';
@@ -24,6 +24,15 @@ import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, type ArsWait, type HaltCode } from './halt';
 import { standsAt } from './operatingDay';
 import { standbyTakeover, predictedLateness } from './standby';
+import { recordTransition } from './invariants';
+import { TURNBACK } from './fsm';
+import { canStopBeforeSignal } from './protection';
+
+/** Every actual turnback stage is observed at the event, including atomic platform turns. */
+function setTurnbackStage(sim: Sim, tr: Train, next: Train['tbStage']) {
+  recordTransition(sim, TURNBACK, tr.id, tr.tbStage, next, tr);
+  tr.tbStage = next;
+}
 
 // ---------------------------------------------------------------- route table
 
@@ -131,9 +140,9 @@ export function signalAheadFrom(sim: Sim, link: number, off: number, dir: Dir, m
 }
 
 /** berth occupied or reserved by another train? */
-function berthBusy(sim: Sim, berth: number, self: number, ignoreReservation = false): boolean {
+export function berthHolder(sim: Sim, berth: number, self: number, ignoreReservation = false): number {
   const res = sim.berthRes.get(berth);
-  if (!ignoreReservation && res !== undefined && res !== self && sim.trains.has(res)) return true;
+  if (!ignoreReservation && res !== undefined && res !== self && sim.trains.has(res)) return res;
   const b = sim.topo.berths[berth];
   // the same platform faced the other way, reserved by a train already on its
   // wrong-direction way in (depot exit changing ends, station-front turnback)
@@ -143,19 +152,23 @@ function berthBusy(sim: Sim, berth: number, self: number, ignoreReservation = fa
     // (its next few tasks: it may still be standing at the station before,
     // its wrong-direction way in already secured, 人民广场 D73 review)
     const next = r !== undefined && r !== self ? sim.trains.get(r)?.tasks.slice(0, 3) ?? [] : [];
-    if (next.some((t) => (t.k === 'stop' && t.berth === o.id) || (t.k === 'reverse' && t.chosen === o.id))) return true;
+    if (next.some((t) => (t.k === 'stop' && t.berth === o.id) || (t.k === 'reverse' && t.chosen === o.id))) return r!;
   }
   const sec = sim.topo.links[b.link].section;
   for (const lid of sim.topo.sections[sec].links) {
     const segs = sim.linkBodies.get(lid);
-    if (segs && segs.some((s) => s.train !== self)) return true;
+    const holder = segs?.find(s => s.train !== self);
+    if (holder) return holder.train;
   }
   // a turnback berth on a depot lead: a train on the lead's transfer track
   // (coming out, or going in) needs the stub
   if (b.kind === 'siding') {
     for (const d of sim.topo.depots) for (const path of d.transferPaths) {
       if (path.stub !== b.link) continue;
-      for (const lid of path.links) if ((sim.linkBodies.get(lid) ?? []).some((s) => s.train !== self)) return true;
+      for (const lid of path.links) {
+        const holder = sim.linkBodies.get(lid)?.find(s => s.train !== self);
+        if (holder) return holder.train;
+      }
     }
   }
   // a tail berth: a train anywhere else on that tail short of the berth (e.g.
@@ -167,23 +180,16 @@ function berthBusy(sim: Sim, berth: number, self: number, ignoreReservation = fa
       if (l.track !== bl.track || sim.topo.sections[l.section].kind !== 'tail' || Math.abs(l.chainA - bl.chainA) > 800) continue;
       if (l.id !== bl.id && Math.sign(l.chainA - bl.chainA) === b.dir) continue;
       const segs = sim.linkBodies.get(l.id);
-      if (segs && segs.some((s) => s.train !== self)) return true;
+      const holder = segs?.find(s => s.train !== self);
+      if (holder) return holder.train;
     }
   }
-  return false;
+  return -1;
 }
 
-/** train holding a berth (reservation or body on its section), -1 none */
-function berthHolder(sim: Sim, berth: number, self: number, ignoreReservation = false): number {
-  const res = sim.berthRes.get(berth);
-  if (!ignoreReservation && res !== undefined && res !== self && sim.trains.has(res)) return res;
-  const b = sim.topo.berths[berth];
-  const sec = sim.topo.links[b.link].section;
-  for (const lid of sim.topo.sections[sec].links) {
-    const seg = sim.linkBodies.get(lid)?.find((x) => x.train !== self);
-    if (seg) return seg.train;
-  }
-  return -1;
+/** Boolean and wait-for edge must describe the same occupied/reserved scope. */
+export function berthBusy(sim: Sim, berth: number, self: number, ignoreReservation = false): boolean {
+  return berthHolder(sim, berth, self, ignoreReservation) >= 0;
 }
 
 /** train that owns (or is about to use) an active route, -1 none */
@@ -192,17 +198,20 @@ function routeUser(sim: Sim, rid: number): number {
   if (!ar) return -1;
   if (ar.owner >= 0 && sim.trains.has(ar.owner)) return ar.owner;
   if (ar.arsTrain !== undefined && sim.trains.has(ar.arsTrain)) return ar.arsTrain;
-  const start = sim.topo.routes[rid].start;
-  let best = -1;
-  let bd = Infinity;
-  for (const t of sim.trainList) if (t.nextSignal === start && t.nextSignalDist < bd) { bd = t.nextSignalDist; best = t.id; }
-  if (best >= 0) return best;
-  for (const s of sim.topo.routes[rid].sections) {
+  if (ar.committed >= 0 && sim.trains.has(ar.committed)) return ar.committed;
+  for (const [i, s] of sim.topo.routes[rid].sections.entries()) {
+    if (ar.released[i]) continue;
     for (const lid of sim.topo.sections[s].links) {
       const seg = sim.linkBodies.get(lid)?.[0];
       if (seg) return seg.train;
     }
   }
+  const start = sim.topo.routes[rid].start;
+  let best = -1;
+  let bd = Infinity;
+  for (const t of sim.trainList) if (t.nextSignal === start && t.nextSignalDist < bd) { bd = t.nextSignalDist; best = t.id; }
+  if (best >= 0) return best;
+
   return -1;
 }
 
@@ -257,6 +266,7 @@ export function routeFaultCode(sim: Sim, rid: number): HaltCode | null {
     if (st.blocked) return 'BLOCKED';
     if (st.preset) return 'AXLE_PRESET';
     if (st.disturbed) return 'AXLE_FAULT';
+    if (st.envTsr < 0) return 'WEATHER';
   }
   return null;
 }
@@ -268,14 +278,16 @@ function setArsWait(sim: Sim, tr: Train, code: HaltCode, train: number, signal: 
 
 /** ARS may release its own claim, or an unclaimed idle automatic route.
  * Yielding changes only this train: another train's claim/issued MA stays intact. */
-export function cancelArsRoute(sim: Sim, tr: Train, signal: number) {
+export function cancelArsRoute(sim: Sim, tr: Train, signal: number): CmdResult & { blocker?: number } {
   const ar = sim.routes.get(sim.sig[signal].route);
   if (!ar) return { ok: false, msg: '无已建立进路' };
+  // ARS must not force emergency braking by withdrawing its own route.
+  const authorised = sim.trainList.find(t => t.maSigs.includes(signal) && !canStopBeforeSignal(sim,t,signal,'supervision'));
+  if (authorised) return { ok: false, blocker: authorised.id, msg: `${sim.topo.signals[signal].name} 的已发授权收缩后，列车 ${trainLabel(authorised)} 将超出允许速度曲线` };
   const claims = [ar.arsTrain ?? -1, ar.owner, ar.committed];
   const other = claims.find(id => id >= 0 && id !== tr.id && sim.trains.has(id));
-  const refuse = (train: number, detail: string) => {
-    setArsWait(sim, tr, 'ROUTE_CONFLICT', train, signal, detail);
-    return { ok: false, msg: detail };
+  const refuse = (blocker: number, detail: string) => {
+    return { ok: false, blocker, msg: detail };
   };
   if (other !== undefined) {
     const t = sim.trains.get(other)!;
@@ -677,9 +689,9 @@ export function setTripFromTasks(sim: Sim, tr: Train) {
  * A departure already granted this tick also reserves one place before motion. */
 export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train['intervalWait'] {
   const next = tr.tasks[1];
-  if (tr.manual || !['DTO', 'AM'].includes(tr.mode) || tr.rescuing >= 0 || tr.coupledLen > 0
+  if ((!tr.manual && !['DTO', 'AM'].includes(tr.mode)) || tr.rescuing >= 0 || tr.coupledLen > 0
     || tr.intervalRelease === st.station || next?.k !== 'stop' || next.station === st.station) return;
-  const dir = next.station > st.station ? 'DN' : 'UP';
+  const dir = ahead('DN', st.station, next.station) ? 'DN' : 'UP';
   const adjacent = st.station + (dir === 'DN' ? 1 : -1);
   const west = Math.min(st.station, adjacent), east = Math.max(st.station, adjacent);
   const rule = OPERATIONS.intervalTrainLimits.find(r => r.from === sim.topo.stations[west]?.id && r.to === sim.topo.stations[east]?.id);
@@ -725,12 +737,12 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
 export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
   const { topo } = sim;
   const task = tr.tasks[0];
-  if (tr.tbStage === 'manual' && tr.level === 'CBTC') { tr.tbStage = 'depart'; tr.tbExitSig = -1; }
+  if (tr.tbStage === 'manual' && tr.level === 'CBTC') { setTurnbackStage(sim, tr, 'depart'); tr.tbExitSig = -1; }
   if (tr.failed) return;
   if (tr.depotStage === 'out' && topo.links[tr.link].track !== 'DEP') tr.depotStage = 'none';
   if (tr.depotStage === 'none' && task?.k === 'depot' && topo.links[tr.link].track === 'DEP') tr.depotStage = 'in';
-  if (tr.tbStage === 'none' && task?.k === 'reverse') tr.tbStage = 'arrive';
-  if (tr.tbStage === 'arrive' && task?.k !== 'reverse') tr.tbStage = 'none';
+  if (tr.tbStage === 'none' && task?.k === 'reverse') setTurnbackStage(sim, tr, 'arrive');
+  if (tr.tbStage === 'arrive' && task?.k !== 'reverse') setTurnbackStage(sim, tr, 'none');
 
   if (tr.phase === 'run') {
     if (!task) {
@@ -753,11 +765,11 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     const goal = taskGoal(sim, cur);
     if (tr.manual) {
       if (goal >= 0 && tr.v < 0.05) manualArrival(sim, tr, cur);
-    } else if (goal >= 0 && tr.v < 0.05 && tr.stopDist < 0.8) {
-      arriveAtBerth(sim, tr, cur);
-    } else if (cur.k === 'stop' && tr.v < 0.05 && !tr.overrun) {
-      const err = stopError(sim, tr);
-      if (err < -0.8) atoOverrun(sim, tr, cur, err);
+    } else if (goal >= 0 && tr.v < 0.05) {
+      const err = cur.k === 'stop' ? stopError(sim, tr) : 0;
+      if (cur.k === 'stop' && err < -0.8) {
+        if (!tr.overrun) atoOverrun(sim, tr, cur, err);
+      } else if (tr.stopDist < 0.8) arriveAtBerth(sim, tr, cur);
     }
     if (cur.k === 'depot') {
       const b = topo.berths[depotBerth(topo, cur)];
@@ -777,7 +789,8 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     if (tr.doorsAwait && !tr.manual) startDoorCycle(sim, tr, st, p, tr.mode === 'RM');
     if (!tr.manual && tr.doorsOpen) tr.doorSide = '';
     // doors open (closeDoors clears doorsOpen once closing starts): late arrivals keep boarding
-    if (tr.doorsOpen && !tr.doorsAwait) boardWhileOpen(sim, tr, p, st, dt);
+    const closing = tr.doorMotion?.kind === 'closing';
+    if (tr.doorsOpen && !tr.doorsAwait && !closing) boardWhileOpen(sim, tr, p, st, dt);
     // 站台折返: alighting done, the train changes ends with its doors open
     if (tr.doorsOpen && !tr.doorsAwait && platformTurn(tr, st) && sim.t >= tr.dwellUntil - (DOOR_CYCLE - 3)) { turnOnPlatform(sim, tr, st); return; }
     // the driver works the doors (driverDoor) and leaves once they are closed and locked
@@ -787,8 +800,9 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     // Closing and lock confirmation are part of the displayed stop. Normal
     // doors close five seconds before zero; faults may extend that countdown.
     const closeExtra = ps.psd === 'bypass' ? BYPASS_EXTRA : ps.psdLinkFault || ps.psd === 'pslOpen' ? PSL_EXTRA : 0;
-    tr.intervalWait = sim.t >= tr.dwellUntil - (DOOR_CYCLE - 3) - closeExtra ? intervalDepartureHold(sim, tr, st) : undefined;
+    tr.intervalWait = tr.manual || sim.t >= tr.dwellUntil - (DOOR_CYCLE - 3) - closeExtra ? intervalDepartureHold(sim, tr, st) : undefined;
     if (tr.intervalWait) return;
+    if (closing) return;
     if (tr.doorsOpen && !tr.manual && sim.t >= tr.dwellUntil - (DOOR_CYCLE - 3) - closeExtra) {
       // a car door that does not close (vehicle.ts)
       if (st.doors && doorCloseHold(sim, tr)) return;
@@ -796,16 +810,23 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
       if (extra < 0) return;
       tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + (DOOR_CYCLE - 3) + extra);
     }
-    if (tr.doorsOpen || sim.t < tr.dwellUntil) return;
+    if (tr.doorsOpen || !psdSafe(ps) || sim.t < (tr.manual ? tr.doorLockedAt ?? 0 : tr.dwellUntil)) return;
     // turning back beyond the platform: wait here while every tail is taken —
     // following a train into an occupied tail locks both in (CBTC would allow it)
     const nx = tr.tasks[1];
-    if (nx?.k === 'reverse' && nx.berths.every((b) => berthBusy(sim, b, tr.id))) return;
+    if (nx?.k === 'reverse' && nx.berths.every((b) => berthBusy(sim, b, tr.id))) {
+      const berth = nx.berths[0];
+      setArsWait(sim, tr, 'BERTH_WAIT', berthHolder(sim, berth, tr.id), tr.nextSignal,
+        `折返泊位均被占用/预约：${nx.berths.map(b => topo.berths[b].name).join('、')}`);
+      return;
+    }
     // a brake that does not release, a door being dealt with (vehicle.ts)
     if (departureHold(sim, tr)) return;
     // depart
     tr.intervalWait = undefined;
     tr.intervalRelease = undefined;
+    const remaining = stopError(sim, tr);
+    tr.departureDisplay = { stop: st, remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p) };
     tr.tasks.shift();
     ps.lastDep = sim.t;
     tr.phase = 'run';
@@ -823,7 +844,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     const t = tr.tasks.shift();
     if (t && t.k === 'reverse' && sim.berthRes.get(t.chosen) === tr.id) sim.berthRes.delete(t.chosen);
     reverseTrain(sim, tr);
-    tr.tbStage = tr.level === 'TBTC' ? 'manual' : 'depart';
+    setTurnbackStage(sim, tr, tr.level === 'TBTC' ? 'manual' : 'depart');
     tr.tbExitSig = tr.tbStage === 'manual' ? signalAheadFrom(sim, tr.link, tr.off, tr.dir, 500)?.sig ?? -1 : -1;
     tr.tbCallAt = 0;
     dmiNote(sim, tr, 'DMI激活'); // cab change: the DMI at the new leading end activates
@@ -842,10 +863,11 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
   const { topo } = sim;
   tr.v = 0;
   if (task.k === 'stop') {
+    tr.departureDisplay = undefined;
     const duty = sim.plan.blocks[tr.block];
     if (duty?.start.kind === 'stable' && duty.start.berth === task.berth && duty.trips[0] === task.trip
       && task.dep !== null && sim.t < task.dep - 60) return;
-    if (tr.tbStage === 'depart') tr.tbStage = 'none';
+    if (tr.tbStage === 'depart') setTurnbackStage(sim, tr, 'none');
     const p = topo.berths[task.berth].platform;
     const ps = sim.plat[p];
     tr.phase = 'dwell';
@@ -886,7 +908,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     return;
   }
   if (task.k === 'reverse') {
-    tr.tbStage = 'reverse';
+    setTurnbackStage(sim, tr, 'reverse');
     tr.phase = 'reversing';
     tr.phaseSince = sim.t;
     // DTO reverses unattended; with a driver (ATO / TBTC backup) the driver changes ends
@@ -937,10 +959,12 @@ function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
     const berth = departureBerthAfterReverse(sim.topo, rev.chosen, next.berth);
     if (berth !== next.berth) cowTask(tr, next).berth = berth;
   }
+  setTurnbackStage(sim, tr, 'arrive');
+  setTurnbackStage(sim, tr, 'reverse');
   reverseTrain(sim, tr);
   // the open side, as seen from the new leading cab
   if (tr.doorSide) tr.doorSide = tr.doorSide === 'L' ? 'R' : 'L';
-  tr.tbStage = tr.level === 'TBTC' ? 'manual' : 'depart';
+  setTurnbackStage(sim, tr, tr.level === 'TBTC' ? 'manual' : 'depart');
   tr.tbExitSig = tr.tbStage === 'manual' ? signalAheadFrom(sim, tr.link, tr.off, tr.dir, 500)?.sig ?? -1 : -1;
   tr.tbCallAt = 0;
   dmiNote(sim, tr, 'DMI激活');
@@ -1018,6 +1042,7 @@ export function platformSide(sim: Sim, tr: Train, p: number): 'L' | 'R' {
 export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean; msg: string } {
   if (!tr.manual) return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
   if (tr.v > 0.05) return { ok: false, msg: '列车未停稳，不能操作车门' };
+  if (tr.doorMotion?.kind === 'closing') return { ok: false, msg: '车门正在关闭并等待锁闭确认' };
   const word = (x: 'L' | 'R') => (x === 'L' ? '左侧' : '右侧');
   const st = tr.phase === 'dwell' && tr.tasks[0]?.k === 'stop' ? tr.tasks[0] : undefined;
   const p = st ? sim.topo.berths[st.berth].platform : -1;
@@ -1025,11 +1050,12 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
   // doors the signalling opened before the driver took over
   if (tr.doorsOpen && !tr.doorSide && plat) tr.doorSide = plat;
   if (tr.doorSide === side) {
-    if (side !== plat || !tr.doorsOpen) { tr.doorSide = ''; return { ok: true, msg: `${word(side)}车门关闭` }; }
+    if (side !== plat || !tr.doorsOpen) { closeDoors(sim, tr, -1); return { ok: true, msg: `${word(side)}车门开始关闭` }; }
+    if (st?.doors && doorCloseHold(sim, tr)) return { ok: false, msg: '列车车门无法关闭，等待处置' };
     const extra = closeDoors(sim, tr, p);
     if (extra < 0) return { ok: false, msg: '站台门无法关闭锁紧，等待车站处理（互锁解除）' };
     tr.dwellUntil = sim.t + (DOOR_CYCLE - 3) + extra;
-    return { ok: true, msg: `${word(side)}车门关闭${extra ? '，站台门由站务人员确认关闭' : ''}` };
+    return { ok: true, msg: `${word(side)}车门开始关闭${extra ? '，站台门由站务人员确认关闭' : ''}` };
   }
   if (tr.doorSide) return { ok: false, msg: `${word(tr.doorSide)}车门未关闭` };
   const rm = tr.mode === 'RM';
@@ -1069,14 +1095,14 @@ export function stopScore(err: number): number {
 /** beyond this an overrun ATO train passes the station instead of backing up (m) 【假设】 */
 const OVERRUN_BACK_MAX = 15;
 
-/** an ATO train slid past its stopping point on wet rail (adhesion.ts): it stands until the dispatcher decides */
+/** An ATO train stopped beyond its mark; wait for the existing dispatch procedure. */
 function atoOverrun(sim: Sim, tr: Train, task: StopTask, err: number) {
   tr.overrun = -err;
   tr.stopUntil = sim.t + 86400;
   tr.stopReason = '过标停车';
   const st = STATIONS[task.station].name;
   const m = (-err).toFixed(1);
-  sim.log('B', '列车', `列车 ${trainLabel(tr)} ${st} 轨面湿滑制动滑行，过标 ${m} m`, { key: `overrun-${tr.id}`, train: tr.id });
+  sim.log('B', '列车', `列车 ${trainLabel(tr)} ${st} 制动停车过标 ${m} m`, { key: `overrun-${tr.id}`, train: tr.id });
   const far = -err > OVERRUN_BACK_MAX;
   const end = task.dep === null;
   openCall(sim, {
@@ -1304,7 +1330,7 @@ export function runARS(sim: Sim) {
       if (ar.manual) { setArsWait(sim, d.train, 'ROUTE_CONFLICT', -1, d.signal, `${topo.signals[d.signal].name} 已排人工进路`); continue; }
       const res = cancelArsRoute(sim, d.train, d.signal);
       if (!res.ok || sg.route >= 0) {
-        const owner = routeUser(sim, sg.route);
+        const owner = res.blocker ?? routeUser(sim, sg.route);
         setArsWait(sim, d.train, owner < 0 ? routeFaultCode(sim, sg.route) ?? 'ROUTE_CONFLICT' : 'ROUTE_CONFLICT',
           owner, d.signal, res.msg);
         continue;
@@ -1437,8 +1463,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
       const exit=depot>=0 && goingIn(sim,tr,depot) ? exitOnLead(sim,tr,depot) : undefined;
       if (exit) {
         const active=sg.route>=0?sim.routes.get(sg.route):undefined;
-        if (active && !active.entered && !active.manual && !cancelArsRoute(sim,tr,sig).ok && tr.arsWait?.train !== exit.id)
-          return {train:tr,signal:sig,route:rid,prio:plannedTime(goalTask,sim.t),eta,ready:false,dist,via};
+        if (active && !active.entered && !active.manual) cancelArsRoute(sim,tr,sig);
         setArsWait(sim,tr,'REGULATION',exit.id,sig,'回段车让出段换端车先出');
         return {train:tr,signal:sig,route:rid,prio:plannedTime(goalTask,sim.t),eta,ready:false,dist,via};
       }
@@ -1584,15 +1609,17 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
       // started until they are gone, or that train runs into the platform
       // the wrong-direction move is heading for (人民广场, D73 review).
       let held: number | undefined;
+      let refusal: (CmdResult & { blocker?: number }) | undefined;
       if (free && ok) for (const sec of chainSecs) {
         const lr = sim.sec[sec].lockRoute;
         const ar = lr >= 0 && !chain.includes(lr) ? sim.routes.get(lr) : undefined;
-        if (ar && ar.fleeting && !ar.manual && sim.sig[topo.routes[lr].start].ars) cancelArsRoute(sim,tr,topo.routes[lr].start);
-        if (ar && sim.routes.has(lr)) held = lr;
+        const result = ar && ar.fleeting && !ar.manual && sim.sig[topo.routes[lr].start].ars
+          ? cancelArsRoute(sim,tr,topo.routes[lr].start) : undefined;
+        if (ar && sim.routes.has(lr)) { held = lr; refusal = result; }
       }
       if (held !== undefined) {
         const b = routeBlocker(sim, held, tr.id);
-        setArsWait(sim, tr, 'ROUTE_CONFLICT', b.train, sig, `反向折返进路 ${b.detail}`);
+        setArsWait(sim, tr, 'ROUTE_CONFLICT', refusal?.blocker ?? b.train, sig, `反向折返进路 ${refusal?.msg || b.detail}`);
         return { train: tr, signal: sig, route: rid, prio, eta, ready: false, berthWait: false, chainSecs, dist, via };
       }
       if (!free) {
@@ -2495,7 +2522,7 @@ export function cmdRescue(sim: Sim, failed: Train, rescuer: Train) {
       cancelInterlockedRoute(sim, topo.routes[rid].start,{source:'recovery',train:failed.id});
     reverseTrain(sim, failed);
     failed.rescueReverse = true;
-    failed.tbStage = 'arrive'; failed.tbExitSig = -1;
+    setTurnbackStage(sim, failed, 'arrive'); failed.tbExitSig = -1;
   }
   const d = dirOf(rescuer, topo);
   const tasks: Task[] = [];
@@ -2667,7 +2694,7 @@ function completeCoupling(sim: Sim, tr: Train) {
       const back = d === 'DN' ? 'UP' : 'DN';
       tasks.push({ k: 'stop', berth: platformBerth(topo, tailStation, back), station: tailStation, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 120, note: '故障车清客' });
       depotTasks(topo, fittingDepot(sim, tailStation, back, tr.len), back, tasks);
-      tr.tasks = tasks; tr.tbStage = 'arrive';
+      tr.tasks = tasks; setTurnbackStage(sim, tr, 'arrive');
       sim.log('B', '列车', '终点折返股道救援连挂完成，换端后清客回段');
       return;
     }

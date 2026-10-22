@@ -42,7 +42,7 @@ import { drawDailyRidership } from './calibration';
 import { passengersTick } from './passengers';
 import { injectFault, repairFault, requestTrainMaintenance, faultsTick, FAULT_LABELS, faultProcedure, updateFaultLifecycle } from './faults';
 import { updateOnboard, setManual, cmdTrainLevel, cmdTrainDto, cmdLineAto, authoriseEBRelease, turnbackSignalPassed } from './onboard';
-import { psdTick, psdOpen, setBypass } from './psd';
+import { psdTick, psdOpen, setBypass, doorMotionTick } from './psd';
 import { updateHalts, HALT } from './halt';
 import { newIntegrity, checkSafety, checkLiveness, type IntegrityState } from './invariants';
 import { LINE_INFO, STATIONS } from '../data/line2';
@@ -360,9 +360,17 @@ export class Sim {
   step(dt = FIXED_DT) {
     if (this.config.scenario && !this.scenario && this.t >= this.config.startTime - 1e-6) startScenario(this, this.config.scenario);
     this.t += dt;
+    doorMotionTick(this);
     indexBodies(this);
     for (const tr of this.trainList) {
       updateTrainMotion(this, tr, dt);
+      const display = tr.departureDisplay;
+      if (display) {
+        if (display.remaining !== undefined) display.remaining -= tr.lastDs;
+        const platform = this.topo.berths[display.stop.berth].platform;
+        if (display.headLeftAt === undefined && this.topo.links[tr.link].platform !== platform) display.headLeftAt = this.t;
+        if (display.headLeftAt !== undefined && this.t - display.headLeftAt >= 5) tr.departureDisplay = undefined;
+      }
       if (tr.lastDs > 0) {
         const km = tr.lastDs / 1000, record = this.vehicles.get(tr.vehicle);
         if (record) record.km += km;
@@ -373,6 +381,8 @@ export class Sim {
       if (departure && tr.v > 0) {
         tr.pendingDeparture = undefined;
         if (departure.dep !== null) tr.delay = this.t - departure.dep;
+        if (tr.manual && departure.dep !== null && this.t < departure.dep)
+          this.log('I', '运营', `列车 ${trainLabel(tr)} 早发 ${Math.ceil(departure.dep - this.t)} 秒`, { code: 'EARLY_DEPARTURE', train: tr.id });
         this.noteDeparture(departure);
         connectionDeparture(this, tr, departure);
         if (departure.dep !== null && departure.trip >= 0 && departure.revenue) {

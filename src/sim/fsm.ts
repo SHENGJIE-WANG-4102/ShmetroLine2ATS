@@ -31,10 +31,11 @@ export interface Machine<S extends string> {
 
 // ---------------------------------------------------------------- guards
 
-type GuardName = 'standstill' | 'cbtcAvailable' | 'dtoAvailable' | 'ebAuthorised' | 'stopped';
+type GuardName = 'standstill' | 'cbtcAvailable' | 'dtoAvailable' | 'ebAuthorised' | 'stopped' | 'rescueReorientation';
 
 /** guard context: the train (mode / EB machines) */
 export const GUARDS: Record<GuardName, { label: string; check: (sim: Sim, tr: Train) => boolean }> = {
+  rescueReorientation: { label: '故障列车停稳，按已核准救援路径重新换端', check: (_s, tr) => tr.v <= 0.01 && tr.failed && !!tr.rescueReverse },
   standstill: { label: '列车停稳（v < 0.1 m/s）', check: (_s, tr) => tr.v < 0.1 },
   stopped: { label: '列车速度为零', check: (_s, tr) => tr.v <= 0.01 },
   cbtcAvailable: {
@@ -180,13 +181,15 @@ export const TURNBACK: Machine<TurnbackState> = {
   initial: ['none', 'arrive'],
   table: [
     { from: 'none', to: 'arrive', on: '下一作业为折返：驶向折返股道' },
-    { from: 'arrive', to: 'reverse', on: '在折返股道停稳，换端' },
+    { from: 'arrive', to: 'reverse', on: '在折返股道停稳，换端', guard: 'stopped' },
     { from: 'reverse', to: 'depart', on: '换端完成；出发站台空闲时排列牵出进路' },
     { from: 'reverse', to: 'manual', on: 'TBTC正向折返换端完成，待司机人工牵出（P3 §2.4.1）' },
     { from: 'manual', to: 'depart', on: '司机越过牵出信号内方，重新获得TBTC授权；或恢复CBTC' },
     { from: 'depart', to: 'none', on: '到达出发站台' },
     { from: 'arrive', to: 'none', on: '折返计划取消' },
     { from: 'depart', to: 'arrive', on: '牵出后再次折返（调度调整）' },
+    { from: 'manual', to: 'arrive', on: '故障车为救援接近重新换端', guard: 'rescueReorientation' },
+    { from: 'reverse', to: 'arrive', on: '故障中止原换端，改为救援接近', guard: 'rescueReorientation' },
   ],
 };
 

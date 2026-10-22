@@ -115,7 +115,10 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
     if (ps && ps.psd === 'closeFail') return r('PSD_FAULT', -1, sim.topo.platforms[p].name);
     const planned = tr.dwellUntil;
     if (sim.t < tr.dwellUntil) return r(st && st.arr === null && st.dep !== null && sim.t < st.dep - 30 ? 'LAYOVER' : 'DWELL', -1, '', planned);
-    return r('DWELL', -1, '', planned);
+    const wait = tr.arsWait;
+    if (wait && sim.t - wait.t <= 2.5) return r(wait.code, wait.train, wait.detail, planned);
+    if (tr.doorsAwait || tr.manual) return r('MANUAL', -1, '等待司机关门发车', planned);
+    return r('ROUTE_WAIT', tr.maTrain, tr.maReason || '停站已结束，等待发车条件', planned);
   }
   if (tr.phase === 'reversing') return r('TURNBACK', -1, '', tr.dwellUntil);
   if (tr.phase !== 'run') return r('NONE');
@@ -203,7 +206,7 @@ export function updateHalts(sim: Sim) {
   // one event per unplanned stop episode (standing > 20 s at an obstacle)
   for (const tr of sim.trainList) {
     const h = tr.halt;
-    if (h.logged || h.code === 'NONE' || tr.phase !== 'run' && h.code !== 'INTERVAL_LIMIT' || sim.t - h.since < 20) continue;
+    if (h.logged || h.code === 'NONE' || tr.phase !== 'run' && h.code !== 'INTERVAL_LIMIT' && HALT[h.code].exempt || sim.t - h.since < 20) continue;
     if (h.code === 'STOP_POINT' || h.code === 'MODE_CHANGE') continue;
     h.logged = true;
     const blocker = h.train >= 0 ? sim.trains.get(h.train) : undefined;

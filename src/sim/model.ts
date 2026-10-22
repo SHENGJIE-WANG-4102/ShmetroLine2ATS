@@ -250,6 +250,12 @@ export interface Train {
   phaseSince: number;
   dwellUntil: number;
   doorsOpen: boolean;
+  /** Actual close/lock confirmation time, independent of the planned departure.
+   * Optional for saved worlds written before this clock was introduced. */
+  doorLockedAt?: number;
+  /** Physical door sequence. PSD leads train-door closure; opening is offset.
+   * Train-owned clocks carry across midnight with the real vehicle. */
+  doorMotion?: { kind: 'opening' | 'closing'; platform: number; psdAt: number; trainAt: number; psl?: boolean; psdDone?: boolean };
   /** manual driving: side whose doors the driver has opened ('' all closed) */
   doorSide: '' | 'L' | 'R';
   /** manual driving: stopped at the mark, waiting for the driver to open the doors */
@@ -258,6 +264,9 @@ export interface Train {
   depReadyAt: number;
   /** Door cycle complete; DEP is recorded only when wheels start. */
   pendingDeparture?: StopTask;
+  /** Last platform retained until five seconds after the head leaves it.
+   * Physical distance is integrated by the simulator, never by UI frames. */
+  departureDisplay?: { stop: StopTask; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number };
   load: number;
   delay: number;
   hold: boolean;
@@ -348,6 +357,10 @@ export interface DmiData {
   /** highest mode the equipment could offer now */
   avail: { mode: Mode; level: Level };
   psd: 'none' | 'closed' | 'open' | 'fault' | 'bypass';
+  trainDoor: 'closed' | 'closing' | 'open' | 'fault' | 'isolated';
+  /** Platform sign, located from the departure signal; never a DMI countdown. */
+  departureBoard?: { at: number; signalName: string; signalOffset: number; aspect: Aspect;
+    held: boolean; headLeftAt?: number; remaining: number; side: '' | 'L' | 'R'; station: number };
   /** stopping window indicator (hexagon) */
   stopWin: 'none' | 'ahead' | 'aligned' | 'short' | 'over';
   vEbi: number;

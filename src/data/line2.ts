@@ -107,6 +107,8 @@ export interface StationData {
   id: string;
   /** current official Chinese name */
   name: string;
+  /** Cab display spelling confirmed by a Line 2 photo; otherwise use name. */
+  dmiName?: string;
   /** former name(s), for the info panel */
   formerName?: string;
   /** distance from the previous station in metres (source: wiki-zh), null for the first */
@@ -163,7 +165,7 @@ export const STATIONS: StationData[] = [
   { id: 'LKL', name: '凌空路', interM: 2595, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
   { id: 'YDD', name: '远东大道', interM: 3070, transfers: [], dwell: 20, demand: 0.3 },
   { id: 'HTS', name: '海天三路', interM: 5918, transfers: [], dwell: 20, demand: 0.3 },
-  { id: 'PDA', name: '浦东1号2号航站楼', formerName: '浦东国际机场', interM: 2287, transfers: ['磁浮', '机场联络线'], dwell: 20, demand: 0.9, sidePlatform: ['DN', 'UP'] },
+  { id: 'PDA', name: '浦东1号2号航站楼', dmiName: '浦东1_2航站楼', formerName: '浦东国际机场', interM: 2287, transfers: ['磁浮', '机场联络线'], dwell: 20, demand: 0.9, sidePlatform: ['DN', 'UP'] },
 ];
 
 /** English station names as on the platform screens (Shanghai Metro sign style, approximation) */

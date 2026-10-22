@@ -156,7 +156,8 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     block: duty?.block ?? -1, tripId: trip(tr.tripId),
     ebSince: back(tr.ebSince), ebCallAt: back(tr.ebCallAt), modeSince: back(tr.modeSince), tbCallAt: back(tr.tbCallAt),
     pendingModeAt: back(tr.pendingModeAt), phaseSince: back(tr.phaseSince), dwellUntil: back(tr.dwellUntil),
-    arrivedAt: back(tr.arrivedAt), depReadyAt: back(tr.depReadyAt), failRecoverAt: back(tr.failRecoverAt),
+    arrivedAt: back(tr.arrivedAt), depReadyAt: back(tr.depReadyAt), doorLockedAt: back(tr.doorLockedAt ?? 0), failRecoverAt: back(tr.failRecoverAt),
+    doorMotion: tr.doorMotion && { ...tr.doorMotion, trainAt: back(tr.doorMotion.trainAt), psdAt: back(tr.doorMotion.psdAt) },
     lastTraceT: back(tr.lastTraceT), stopUntil: back(tr.stopUntil), waitSince: back(tr.waitSince),
     halt: { ...tr.halt, since: back(tr.halt.since), plannedUntil: back(tr.halt.plannedUntil), unplannedSince: back(tr.halt.unplannedSince) },
     arsWait: tr.arsWait && { ...tr.arsWait, t: back(tr.arsWait.t) },
@@ -164,6 +165,8 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     vfault: tr.vfault && { ...tr.vfault, until: back(tr.vfault.until) },
     tasks: tr.tasks.map(task),
     ...(tr.pendingDeparture ? { pendingDeparture: task(tr.pendingDeparture) as StopTask } : {}),
+    departureDisplay: tr.departureDisplay && { ...tr.departureDisplay, stop: task(tr.departureDisplay.stop),
+      headLeftAt: tr.departureDisplay.headLeftAt === undefined ? undefined : back(tr.departureDisplay.headLeftAt) },
     hist: tr.hist.slice(), body: tr.body.map(b => ({ ...b })), skipStations: new Set(tr.skipStations),
     trace: [], dmiLog: [], dmiPrev: null,
   };

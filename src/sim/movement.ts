@@ -18,6 +18,7 @@ import { applyEB } from './onboard';
 import { psdSafe } from './psd';
 import type { EbCause } from './model';
 import { OPERATIONS } from '../data/line2';
+import { SIGNAL_MARGIN, canAcceptRestriction } from './protection';
 
 /** speed limits / platform stops further than this do not influence the braking curves */
 const LOOKAHEAD = 1400;
@@ -39,7 +40,6 @@ export const MA_NEAR = LOOKAHEAD;
 export const MA_CAP_REASON = '授权扫描上限';
 const CBTC_SAFETY = 20; // m behind a preceding communicating train's tail
 const SIGHT_MARGIN = 10; // m, RM on-sight stopping margin
-const SIGNAL_MARGIN = 6; // m before a signal at danger
 
 export interface ScanResult {
   maDist: number;
@@ -187,8 +187,11 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
   // goal on current link
   if (berth && berth.link === link && berth.dir === dir) {
     const dist = dir === 1 ? berth.offset - tr.off : tr.off - berth.offset;
-    if (dist > -3) res.stopDist = Math.max(0, dist);
+    res.stopDist = Math.max(0, dist);
   }
+  // A still-pending task does not cease to be a stopping target when the
+  // moving head overruns it, including across the following short links.
+  if (berth && gb === goalBerth(tr) && stopError(sim, tr) < 0) res.stopDist = 0;
   // other trains on current link ahead
   checkTrainsOnLink(sim, tr, link, dir, -(dir === 1 ? tr.off : l0.len - tr.off), rescueTarget, cbtc, atp, res);
 
@@ -344,12 +347,12 @@ export function stopError(sim: Sim, tr: Train): number {
   const { topo } = sim;
   const b = topo.berths[goal];
   if (b.link === tr.link && b.dir === tr.dir) return (b.offset - tr.off) * tr.dir;
-  const prev = tr.hist[tr.hist.length - 2];
-  if (prev && prev.link === b.link && prev.dir === b.dir) {
-    const bl = topo.links[b.link];
-    const beyond = b.dir === 1 ? bl.len - b.offset : b.offset;
-    const into = tr.dir === 1 ? tr.off : topo.links[tr.link].len - tr.off;
-    return -(beyond + into);
+  let beyond = tr.dir === 1 ? tr.off : topo.links[tr.link].len - tr.off;
+  for (let i = tr.hist.length - 2; i >= 0; i--) {
+    const prev = tr.hist[i], link = topo.links[prev.link];
+    if (prev.link === b.link && prev.dir === b.dir)
+      return -(beyond + (b.dir === 1 ? link.len - b.offset : b.offset));
+    beyond += link.len;
   }
   if (Number.isFinite(tr.stopDist) && tr.stopDist < 400) return tr.stopDist;
   return NaN;
@@ -739,7 +742,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   // Distinguish the new restrictive braking target from the authority already
   // issued. Do not replace an issued EOA with an unreachable one under a train.
   const prevEoa = tr.lastMa - tr.lastDs;
-  if (!rm && tr.v > .01 && !tr.maCut && Number.isFinite(prevEoa) && scan.maDist < prevEoa - 0.5 && scan.maDist < (v0 * v0) / (2 * PERF.bEbGuaranteed)) {
+  if (!rm && tr.v > .01 && !tr.maCut && Number.isFinite(prevEoa) && scan.maDist < prevEoa - 0.5 && !canAcceptRestriction(v0, scan.maDist)) {
     tr.maCut = true;
     if (!tr.eb) triggerEB(sim, tr, `移动授权回撤(${scan.maReason})`, 'atp');
     sim.log('B', '信号', `列车 ${tr.svc}-${tr.tripNo} 移动授权被回撤（${scan.maReason}），紧急制动`, { key: `macut-${tr.id}`, code: scan.maCode, train: tr.id });

@@ -110,6 +110,8 @@ function cloneTrain(tr: Train): Train {
     vfault: tr.vfault ? { ...tr.vfault } : null,
     body: tr.body.map((b) => ({ ...b })),
     tasks: tr.tasks.slice(),
+    departureDisplay: tr.departureDisplay && { ...tr.departureDisplay },
+    doorMotion: tr.doorMotion && { ...tr.doorMotion },
     skipStations: new Set(tr.skipStations),
     trace: [],
     drv: { ...tr.drv, stops: tr.drv.stops.slice() },

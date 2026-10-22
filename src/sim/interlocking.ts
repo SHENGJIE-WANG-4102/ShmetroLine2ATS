@@ -1,11 +1,10 @@
+import { canStopBeforeSignal } from './protection';
 /**
  * Computer interlocking (计算机联锁): switches, routes, signals, axle counters.
  */
 import type { Sim } from './engine';
 import type { ActiveRoute, Train } from './model';
 import { withdrawAuthority, rescueRouteReady } from './movement';
-import { PERF } from './dynamics';
-import { nextLink } from './topology';
 import { checkArsCancellation } from './invariants';
 
 export const SWITCH_TIME = 5; // s, point machine throw time (approx)
@@ -203,23 +202,11 @@ export function approachLocked(sim: Sim, sig: number): boolean {
   return false;
 }
 
-/** an approaching train that cannot stop before the signal with the service brake (-1 none) */
+/** an approaching train that cannot stop before the signal stopping target with the guaranteed emergency brake (-1 none) */
 export function committedTrain(sim: Sim, sig: number): number {
   for (const tr of sim.trainList) {
-    if (tr.v < 0.5 || tr.mode === 'RM' || !tr.maSigs.includes(sig) && !(tr.maCut && tr.eb)) continue;
-    const need = (tr.v * tr.v) / (2 * PERF.bService) + 2;
-    let link = tr.link, dir = tr.dir;
-    let distance = dir === 1 ? sim.topo.links[link].len - tr.off : tr.off;
-    for (let i = 0; i < 120 && distance <= need + 6; i++) {
-      const nx = nextLink(sim.topo, link, dir, sw => swPos(sim, sw));
-      if (!nx) break;
-      const at = sim.topo.signalByEntry.get(nx.node * 65536 + nx.link);
-      // Several closely spaced signals may be inside the stopping distance;
-      // protecting only nextSignal releases an authority already issued over
-      // the second signal.
-      if (at === sig && tr.maDist >= distance - 0.5) return tr.id;
-      link = nx.link; dir = nx.dir; distance += sim.topo.links[link].len;
-    }
+    if (tr.v <= 0.01 || tr.mode === 'RM' || !tr.maSigs.includes(sig) && !(tr.maCut && tr.eb)) continue;
+    if (!canStopBeforeSignal(sim,tr,sig,'emergency')) return tr.id;
   }
   return -1;
 }
@@ -235,10 +222,10 @@ export function cancelRoute(sim: Sim, sig: number, opts: { force?: boolean; manu
     const occ = r.sections.some((s, i) => !ar.released[i] && sim.sec[s].trainOcc);
     if (occ) return { ok: false, msg: `进路 ${r.name} 内有车占用，不能取消` };
   }
-  if (opts.source === 'ars' && opts.train !== undefined) checkArsCancellation(sim, sig, opts.train);
+  if (opts.source === 'ars') checkArsCancellation(sim, sig, opts.train ?? -1);
   if (approachLocked(sim, sig) && !opts.force) {
     // the signal closes at once; the route is released after the approach-locking delay.
-    // A train that can no longer stop before the signal with the service brake keeps
+    // A train that can no longer stop before the signal stopping target with the guaranteed emergency brake keeps
     // its movement authority over the route (it is "committed") and releases it normally.
     ar.cancelAt = sim.t + APPROACH_RELEASE;
     ar.fleeting = false;

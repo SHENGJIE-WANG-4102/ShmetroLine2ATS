@@ -4,10 +4,12 @@
  * the regular train snapshot.
  */
 import type { Sim } from './engine';
-import type { DmiData, DmiMsg, Level, Mode, Train } from './model';
+import type { DmiData, DmiMsg, Level, Mode, Train, StopTask } from './model';
 import { STATIONS, fleetEntry } from '../data/line2';
 import { stopError } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
+import { serviceEnd } from './timetable';
+import { signalAheadFrom, platformSide } from './ats';
 
 const LOG_MAX = 40;
 
@@ -29,8 +31,9 @@ export function dmiNote(sim: Sim, tr: Train, m: string, k: DmiMsg['k'] = 'info')
   if (tr.dmiLog.length > LOG_MAX) tr.dmiLog.splice(0, tr.dmiLog.length - LOG_MAX);
 }
 
+// The photographed ATPM wording describes the existing supervised-mode offer.
 const availMsg = (a: { mode: Mode; level: Level }) =>
-  a.mode === 'DTO' ? 'DTO/ATP模式可用' : a.mode === 'AM' ? `${a.level === 'CBTC' ? 'CBTC' : 'TBTC'} ATO/ATP模式可用` : a.mode === 'CM' ? 'CM模式可用' : '仅RM模式可用';
+  a.mode === 'RM' ? '仅RM模式可用' : 'ATPM模式可用';
 
 /** once a second: turn state changes into DMI messages */
 export function dmiTick(sim: Sim) {
@@ -44,15 +47,15 @@ export function dmiTick(sim: Sim) {
     tr.dmiPrev = cur;
     if (!p) {
       dmiNote(sim, tr, 'DMI激活');
+      // Activation already has a known track position; no new localisation event.
+      if (sim.topo.links[tr.link] && Number.isFinite(tr.off)) dmiNote(sim, tr, '定位已确认');
       dmiNote(sim, tr, availMsg(av));
       continue;
     }
     if (p.comm && !cur.comm) dmiNote(sim, tr, '连接丢失', 'warn');
     if (!p.comm && cur.comm) dmiNote(sim, tr, '连接恢复');
     if (p.avail !== cur.avail) {
-      // supervision regained after a period with only RM available: FAM-photo wording
-      const regained = p.avail.startsWith('RM') && av.mode !== 'RM';
-      dmiNote(sim, tr, regained ? 'CM/AM模式可用' : availMsg(av), av.mode === 'RM' ? 'warn' : 'info');
+      dmiNote(sim, tr, availMsg(av), av.mode === 'RM' ? 'warn' : 'info');
     }
     if (p.mode !== cur.mode) dmiNote(sim, tr, `${modeWord(tr.mode)} ${tr.level}模式`, tr.mode === 'RM' ? 'warn' : 'info');
     if (!p.eb && cur.eb) dmiNote(sim, tr, `紧急制动 ${tr.ebReason}`, 'alarm');
@@ -75,11 +78,9 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
   const tr = sim.trains.get(id);
   if (!tr) return null;
   const { topo } = sim;
-  let next = -1;
   let dep = -1;
   for (const t of tr.tasks) {
     if (t.k !== 'stop' || !t.doors) continue;
-    next = t.station;
     dep = t.dep ?? -1;
     break;
   }
@@ -88,9 +89,9 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
   // platform screen doors where the head stands
   let psd: DmiData['psd'] = 'none';
   const pi = topo.links[tr.link].platform;
-  if (pi >= 0 && (dwelling || tr.v < 0.05)) {
+  if (pi >= 0) {
     const ps = sim.plat[pi];
-    psd = ps.psd === 'bypass' ? 'bypass' : ps.psd === 'closeFail' || (ps.psdFault && !tr.doorsOpen && dwelling) ? 'fault' : ps.psd === 'closed' ? 'closed' : 'open';
+    psd = ps.psd === 'bypass' ? 'bypass' : ps.psd === 'closeFail' || ps.psdFault ? 'fault' : ps.psd === 'closed' ? 'closed' : 'open';
   }
   // stopping window indicator
   const err = stopError(sim, tr);
@@ -98,23 +99,61 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
   if (dwelling) win = 'aligned';
   else if (Number.isFinite(err) && tr.v < 0.05 && Math.abs(err) < 5) win = Math.abs(err) <= 0.5 ? 'aligned' : err > 0 ? 'short' : 'over';
   else if (Number.isFinite(tr.stopDist) && tr.stopDist < 600) win = 'ahead';
-  const dest = tr.destStation >= 0 ? STATIONS[tr.destStation].name : tr.destText || '—';
+  const names = workingNames(sim, tr);
+  const current = tr.departureDisplay?.stop ?? tr.tasks[0];
+  let departureBoard: DmiData['departureBoard'];
+  if (current?.k === 'stop') {
+    const b = topo.berths[current.berth];
+    const found = b.platform < 0 ? null : signalAheadFrom(sim, b.link, b.offset, b.dir);
+    if (found) departureBoard = { at: current.dep ?? -1, signalName: topo.signals[found.sig].name,
+      signalOffset: found.dist, aspect: sim.sig[found.sig].aspect,
+      held: tr.hold || sim.plat[b.platform].hold, headLeftAt: tr.departureDisplay?.headLeftAt,
+      remaining: tr.departureDisplay?.remaining ?? err, side: tr.departureDisplay?.side ?? platformSide(sim, tr, b.platform), station: current.station };
+  }
+  const doorFault = tr.vfault?.kind === 'door' && tr.vfault.stage !== 'armed';
   return {
     train: id,
     trainNo: dmiTrainNo(tr.vehicle),
     vehicleType: fleetEntry(tr.vehicle)?.type ?? '',
-    dest,
-    next: next >= 0 ? STATIONS[next].name : '—',
+    dest: names.dest,
+    next: names.next,
     log: tr.dmiLog.slice().reverse(),
     dep,
     dwellTotal: dwelling ? Math.max(1, tr.dwellUntil - tr.phaseSince) : 0,
     avail: availableMode(sim, tr),
     psd,
+    trainDoor: doorFault ? 'fault' : tr.doorMotion?.kind === 'closing' ? 'closing' : tr.doorsOpen || tr.doorSide ? 'open' : sim.t < (tr.doorLockedAt ?? 0) ? 'closing' : tr.doorsCut > 0 ? 'isolated' : 'closed',
+    departureBoard,
     stopWin: win,
     vEbi: tr.vEbi,
     maDist: Number.isFinite(tr.maDist) ? tr.maDist : -1,
     date: calendarDate(sim.config.date, sim.t),
   };
+}
+
+/** Display the working actually being performed, without changing train tasks/MA. */
+function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
+  const name = (st: number) => STATIONS[st]?.dmiName ?? STATIONS[st]?.name ?? '—';
+  const first = tr.tasks[0];
+  const reverse = first?.k === 'reverse' ? first : tr.phase === 'dwell' && first?.k === 'stop' && tr.tasks[1]?.k === 'reverse' ? tr.tasks[1] : undefined;
+  const after = reverse ? tr.tasks.slice(tr.tasks.indexOf(reverse) + 1).filter((t): t is StopTask => t.k === 'stop' && t.doors) : [];
+  const offPlatform = reverse?.berths.some(b => sim.topo.berths[b].platform < 0);
+  const link = sim.topo.links[tr.link];
+  const inTail = link.platform < 0 && ['tail', 'siding'].includes(sim.topo.sections[link.section].kind);
+  if (reverse && offPlatform && !inTail && tr.phase !== 'reversing') {
+    const folded = name(reverse.station) + '折';
+    return { next: folded, dest: folded };
+  }
+  const stops = tr.tasks.filter((t): t is StopTask => t.k === 'stop' && t.doors);
+  const nextWorking = reverse && (inTail || tr.phase === 'reversing') ? after[0] : undefined;
+  const trip = nextWorking ? sim.plan.trips[nextWorking.trip] : undefined;
+  let dest = trip ? name(serviceEnd(sim.plan, trip)) : tr.destStation >= 0 ? name(tr.destStation) : tr.destText || '—';
+  if (nextWorking && !trip) dest = name(after.at(-1)?.station ?? tr.destStation);
+  // At a departure platform, show its next call. Platform-only reversals use
+  // that same convention while changing ends (用户确认); entering a tail does not.
+  const next = nextWorking ? (!offPlatform ? after[1] : nextWorking)
+    : tr.phase === 'dwell' && first?.k === 'stop' && first.dep !== null ? stops[1] : stops[0];
+  return { next: next ? name(next.station) : '—', dest };
 }
 
 function calendarDate(iso: string | undefined, t: number): string {

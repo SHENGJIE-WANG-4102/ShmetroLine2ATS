@@ -3,9 +3,12 @@
 //   usage: npx tsx scripts/firstlast.ts
 import { Sim } from '../src/sim/engine';
 import { FIRST_LAST } from '../src/data/firstlast';
+import { readFileSync } from 'node:fs';
+import type { Plan } from '../src/sim/model';
 
 const sim = new Sim({ dayType: 'weekday', dateLabel: 'firstlast', startTime: 4 * 3600, seed: 1 });
-const p = sim.plan, topo = sim.topo;
+const baselineAt = process.argv.indexOf('--baseline');
+const p: Plan = baselineAt > 0 ? JSON.parse(readFileSync(process.argv[baselineAt + 1], 'utf8')) : sim.plan, topo = sim.topo;
 const tm = (s: string) => { const [h, m] = s.split(':').map(Number); return h * 3600 + m * 60; };
 const hm = (t: number) => { const minute = Math.floor((t + .001) / 60); return `${String(Math.floor(minute / 60) % 24).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`; };
 const idx = (n: string) => { const i = topo.stations.findIndex((s) => s.name === n); if (i < 0) throw new Error(n); return i; };

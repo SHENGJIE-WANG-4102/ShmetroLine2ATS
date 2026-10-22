@@ -18,16 +18,18 @@ import { nextLink } from './topology';
 import { swPos } from './interlocking';
 import {
   MODE, EB, PSD, ROUTE, CALL, FAULT, TURNBACK, DEPOT, GUARDS, modeState, ebState, routeState,
-  type Machine,
+  allowed, type Machine,
 } from './fsm';
 import { HALT, rootCause } from './halt';
+import { canStopBeforeSignal } from './protection';
 
 export type ViolationKind =
   | 'OVERLAP' | 'BEYOND_MA' | 'MA_NO_ROUTE' | 'SWITCH_UNDER_LOAD' | 'EB_ACCEL' | 'OVERSPEED' | 'FSM'
-  | 'LIVENESS' | 'DEADLOCK' | 'NEGATIVE_COUNT' | 'ARS_FOREIGN_CANCEL';
+  | 'LIVENESS' | 'DEADLOCK' | 'NEGATIVE_COUNT' | 'ARS_FOREIGN_CANCEL' | 'ARS_AUTHORITY_CANCEL';
 
 export const VIOLATION_LABEL: Record<ViolationKind, string> = {
   ARS_FOREIGN_CANCEL: 'ARS取消了其他列车的进路',
+  ARS_AUTHORITY_CANCEL: 'ARS取消了常用制动无法接受收缩的授权',
   OVERLAP: '两列车占用同一段线路',
   BEYOND_MA: '列车越过移动授权终点',
   MA_NO_ROUTE: '移动授权越过未锁闭进路的信号机',
@@ -142,8 +144,10 @@ export function checkArsCancellation(sim: Sim, signal: number, requester: number
   if (!ar) return;
   const assigned = ar.arsTrain ?? -1; // old unassigned automatic routes remain unclaimed
   const other = [assigned, ar.owner, ar.committed].find(id => id >= 0 && id !== requester && sim.trains.has(id));
-  if (other === undefined) return;
   const label = (id: number) => { const t = sim.trains.get(id); return t ? `${t.svc}-${t.tripNo}（ID ${id}）` : `ID ${id}`; };
+  for (const tr of sim.trainList) if (tr.maSigs.includes(signal) && !canStopBeforeSignal(sim,tr,signal,'supervision'))
+    violate(sim, 'ARS_AUTHORITY_CANCEL', [...new Set([requester, tr.id])], `${label(requester)} 在 ${sim.topo.signals[signal].name} 取消已向 ${label(tr.id)} 发出移动授权的进路 ${sim.topo.routes[ar.route].name}`, `signal-${signal}`);
+  if (other === undefined) return;
   violate(sim, 'ARS_FOREIGN_CANCEL', [requester, other], `${label(requester)} 在 ${sim.topo.signals[signal].name} 取消为 ${label(other)} 排列的进路 ${sim.topo.routes[ar.route].name}`, `signal-${signal}`);
 }
 
@@ -332,6 +336,16 @@ function observe<S extends string>(sim: Sim, m: Machine<S>, id: number, state: S
   if (x?.guard === 'ebAuthorised' && tr && !GUARDS.ebAuthorised.check(sim, tr)) {
     violate(sim, 'FSM', [tr.id], `${m.label}[${id}]：${prev}→${state} 未经授权`, key);
   }
+}
+
+/** Record real event transitions before another event in the same tick can hide them.
+ * The ordinary observer remains independent and catches unrecorded state writes. */
+export function recordTransition<S extends string>(sim: Sim, machine: Machine<S>, id: number, from: S, to: S, tr?: Train) {
+  const seen = observationIndex(sim.integrity);
+  observe(sim, machine, id, from, seen, tr);
+  const result = allowed(sim, machine, from, to, tr);
+  if (!result.ok) violate(sim, 'FSM', tr ? [tr.id] : [], `${machine.label}[${id}]：${result.why}`, `${machine.name}:${id}`);
+  observe(sim, machine, id, to, seen, tr);
 }
 
 function observeMachines(sim: Sim) {

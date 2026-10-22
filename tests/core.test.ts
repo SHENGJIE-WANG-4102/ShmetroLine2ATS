@@ -18,6 +18,7 @@ import { platformBerth, tripTasks, addTurnback, blockTasks, turnbackAt, validate
 import { predictedLateness, RELIEF_DELAY } from '../src/sim/standby';
 import { OPERATIONS } from '../src/data/line2';
 import { MIN_DWELL } from '../src/sim/calibration';
+import { doorMotionTick } from '../src/sim/psd';
 import { makeSim } from './helpers';
 
 const make = () => new Sim({ dayType: 'weekday', dateLabel: 'core', startTime: 14400, seed: 7, noPossessions: true });
@@ -66,18 +67,21 @@ describe('ATO interval departure metering', () => {
     front.body = [{ link: p.id, from: 0, to: 100 }, { link: link.id, from: off, to: off + 1 }];
     updateTrainTasks(sim, rear); expect(rear.phase).toBe('dwell');
     front.body = [{ link: p.id, from: 0, to: p.len }];
-    updateTrainTasks(sim, rear); expect(rear.doorsOpen).toBe(false);
-    sim.t = rear.dwellUntil + 1; updateTrainTasks(sim, rear);
+    updateTrainTasks(sim, rear); expect(rear.doorsOpen).toBe(true); expect(rear.doorMotion?.kind).toBe('closing');
+    sim.t = rear.dwellUntil + 1; doorMotionTick(sim); updateTrainTasks(sim, rear);
     expect(rear.phase).toBe('run'); expect(rear.intervalWait).toBeUndefined();
     expect(JSON.stringify([sim.plan.trips, sim.plan.blocks])).toBe(plan);
   });
-  it('allows one dispatcher release, CM/RM and rescue without changing protection', () => {
+  it('keeps CM/RM subject to metering and allows an explicit dispatcher release or rescue', () => {
     const { sim, rear, stop } = fixture();
     expect(intervalDepartureHold(sim, rear, stop)).toBeDefined();
     for (const mode of ['CM', 'RM'] as const) {
-      rear.mode = mode; expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();
+      rear.mode = mode; rear.manual = true;
+      expect(intervalDepartureHold(sim, rear, stop)).toBeDefined();
+      rear.doorsOpen=false;rear.doorLockedAt=sim.t-1;rear.dwellUntil=sim.t+300;
+      updateTrainTasks(sim,rear);expect(rear.phase).toBe('dwell');expect(rear.intervalWait).toBeDefined();
     }
-    rear.mode = 'DTO'; rear.rescuing = 99; expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();
+    rear.manual=false;rear.dwellUntil=sim.t;rear.mode = 'DTO'; rear.rescuing = 99; expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();
     rear.rescuing = -1;
     expect(sim.command({ c: 'trainHold', train: rear.id, on: false }).ok).toBe(true);
     expect(intervalDepartureHold(sim, rear, stop)).toBeUndefined();

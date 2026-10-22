@@ -19,11 +19,15 @@ import type { Train } from './model';
 import { PSD, inTable, type PsdState } from './fsm';
 import { trainLabel } from './ats';
 import { callPsd } from './radio';
+import { DOOR_CYCLE } from './calibration';
+import { doorCloseHold } from './vehicle';
 
 /** PSL operation by station staff per open / close (s) 【假设】 */
 export const PSL_EXTRA = 15;
 /** manual confirmation of the doors before a departure under bypass (s) */
 export const BYPASS_EXTRA = 25;
+/** 用户要求：开门偏差≤0.5秒，关门PSD先；具体0.3秒为【假设】。 */
+export const DOOR_STAGGER_S = 0.3;
 
 function go(sim: Sim, p: number, to: PsdState) {
   const ps = sim.plat[p];
@@ -51,10 +55,24 @@ export function openDoors(sim: Sim, tr: Train, p: number, noLink = false): numbe
   const ps = sim.plat[p];
   ps.psdTrain = tr.id;
   tr.doorsOpen = true;
-  if (ps.psd === 'bypass') return ps.psdLinkFault || noLink ? PSL_EXTRA : 0;
-  if (ps.psdLinkFault || noLink) { go(sim, p, 'pslOpen'); return PSL_EXTRA; }
-  go(sim, p, 'open');
-  return 0;
+  tr.doorLockedAt = 0;
+  const psl = ps.psdLinkFault || noLink;
+  tr.doorMotion = ps.psd === 'bypass' ? undefined : { kind: 'opening', platform: p,
+    trainAt: sim.t, psdAt: sim.t + DOOR_STAGGER_S, psl };
+  return psl ? PSL_EXTRA : 0;
+}
+
+function closeFailed(sim: Sim, tr: Train, p: number): boolean {
+  const ps = sim.plat[p];
+  if (ps.psd === 'closeFail') return true;
+  // A rapid close can cancel the offset opening before the PSD ever moves.
+  // Already closed/locked doors cannot fail a closing motion they did not do.
+  if (ps.psd === 'closed') return false;
+  if (!ps.psdFault || ps.psd === 'bypass') return false;
+  go(sim, p, 'closeFail');
+  sim.log('A', '车站', `${sim.topo.platforms[p].name} 站台门无法关闭锁紧，列车 ${trainLabel(tr)} 无法发车`, { key: `psd-${p}`, code: 'PSD_FAULT', train: tr.id });
+  callPsd(sim, p);
+  return true;
 }
 
 /**
@@ -62,27 +80,49 @@ export function openDoors(sim: Sim, tr: Train, p: number, noLink = false): numbe
  * departure (s), or -1 when the PSD cannot be closed and locked (train stays).
  */
 export function closeDoors(sim: Sim, tr: Train, p: number): number {
+  if (p < 0) {
+    tr.doorLockedAt = sim.t + (DOOR_CYCLE - 3);
+    tr.doorMotion = { kind: 'closing', platform: -1, trainAt: tr.doorLockedAt, psdAt: sim.t, psdDone: true };
+    return 0;
+  }
   const ps = sim.plat[p];
   const { topo } = sim;
-  if (ps.psd === 'closeFail') return -1;
-  if (ps.psdFault && ps.psd !== 'bypass') {
-    go(sim, p, 'closeFail');
-    sim.log('A', '车站', `${topo.platforms[p].name} 站台门无法关闭锁紧，列车 ${trainLabel(tr)} 无法发车`, { key: `psd-${p}`, code: 'PSD_FAULT', train: tr.id });
-    callPsd(sim, p);
-    return -1;
-  }
-  tr.doorsOpen = false;
-  tr.doorSide = '';
-  ps.psdTrain = -1;
+  if (closeFailed(sim, tr, p)) return -1;
   let extra = 0;
   if (ps.psd === 'bypass') {
     extra = BYPASS_EXTRA;
     sim.log('I', '车站', `${topo.platforms[p].name} 站台门互锁解除，人工确认后发车`);
   } else {
-    if (ps.psd === 'pslOpen') extra = PSL_EXTRA;
-    go(sim, p, 'closed');
+    if (ps.psd === 'pslOpen' || tr.doorMotion?.psl) extra = PSL_EXTRA;
   }
+  tr.doorLockedAt = sim.t + (DOOR_CYCLE - 3) + extra;
+  tr.doorMotion = { kind: 'closing', platform: p, trainAt: tr.doorLockedAt,
+    psdAt: tr.doorLockedAt - DOOR_STAGGER_S };
   return extra;
+}
+
+/** Physical transitions at 10 Hz, independent of snapshots and the 1 Hz PSD
+ * housekeeping. Closing warnings/confirmation retain their existing duration. */
+export function doorMotionTick(sim: Sim) {
+  for (const tr of sim.trainList) {
+    const m = tr.doorMotion;
+    if (!m) continue;
+    const ps = sim.plat[m.platform];
+    if (!m.psdDone && sim.t + 1e-6 >= m.psdAt) {
+      if (m.kind === 'closing' && closeFailed(sim, tr, m.platform)) {
+        tr.doorMotion = undefined; tr.doorLockedAt = 0; continue;
+      }
+      if (ps.psd !== 'bypass' && ps.psd !== 'closeFail') go(sim, m.platform, m.kind === 'closing' ? 'closed' : m.psl ? 'pslOpen' : 'open');
+      m.psdDone = true;
+    }
+    if (m.kind === 'opening' && m.psdDone) tr.doorMotion = undefined;
+    else if (m.kind === 'closing' && m.psdDone && sim.t + 1e-6 >= m.trainAt) {
+      if (!doorCloseHold(sim, tr)) {
+        tr.doorsOpen = false; tr.doorSide = ''; if (ps) ps.psdTrain = -1;
+      } else tr.doorLockedAt = 0;
+      tr.doorMotion = undefined;
+    }
+  }
 }
 
 /** dispatcher approves / cancels the interlock bypass (互锁解除) */
@@ -127,9 +167,9 @@ export function psdRepaired(sim: Sim, p: number) {
   if (ps.psd === 'closeFail') {
     // staff close the repaired doors: the waiting train gets its departure authority
     const tr = sim.trains.get(ps.psdTrain);
-    if (tr) { tr.doorsOpen = false; tr.doorSide = ''; }
-    ps.psdTrain = -1;
     go(sim, p, 'closed');
+    if (tr) { tr.doorMotion = undefined; closeDoors(sim, tr, p); }
+    else ps.psdTrain = -1;
   }
   sim.clearAlarm(`psd-${p}`);
 }

@@ -1,7 +1,7 @@
 /**
  * Cab driver display (DMI) of a followed train, drawn after the Casco DMI
- * fitted to Shanghai Line 2 (02A05) cabs: navy screen, terminus / next
- * station / train number across the top, 0–120 km/h dial with the permitted
+ * fitted to Shanghai Line 2 (02A05) cabs: navy screen, next station / terminus
+ * and train number across the top, 0–120 km/h dial with the permitted
  * speed in red on the rim, mode-level and door mode on the right, the
  * available-mode row and stopping-window hexagon under the dial, date / time
  * and the message log at the bottom. Elements that could not be read from the
@@ -68,15 +68,14 @@ export const NOTCHES: { v: number; label: string; cls: string }[] = [
 
 /** on-screen wording */
 const modeWord = (m: string) => m;
-const availWord = (a: DmiData['avail']) => (a.mode === 'RM' ? 'RM' : `${modeWord(a.mode)}-${a.level === 'CBTC' ? 'C' : 'T'}`);
 
 // dial geometry
 const CX = 205;
 const CY = 268;
 const R = 165;
-const LOG = { x: 150, y: 500, w: 350, row: 26, rows: 5 };
-const BTN_UP = { x: 506, y: 500, w: 56, h: 62 };
-const BTN_DN = { x: 506, y: 570, w: 56, h: 62 };
+const LOG = { x: 16, y: 500, w: 480, row: 28, rows: 3 };
+const BTN_UP = { x: 504, y: 500, w: 48, h: 38 };
+const BTN_DN = { x: 504, y: 546, w: 48, h: 38 };
 
 export class Dmi {
   el: HTMLElement;
@@ -166,9 +165,9 @@ export class Dmi {
 
     this.topBar(c, t, d, now);
     this.dial(c, v, vp, eb, over, t);
-    this.rightColumn(c, t, d, now, eb);
+    this.rightColumn(c, t, d, eb);
     this.statusRow(c, t, d);
-    this.bottom(c, t, d, now);
+    this.bottom(c, d, now);
 
     this.curNotch = t.notch;
     this.notchEls.forEach((e, i) => e.classList.toggle('on', t.manual && NOTCHES[i].v === t.notch));
@@ -178,31 +177,34 @@ export class Dmi {
 
   private topBar(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, now: number) {
     const field = (x: number, label: string, value: string, maxW: number) => {
-      c.textAlign = 'left';
-      c.fillStyle = C.blue;
+      c.textAlign = 'center';
+      c.fillStyle = C.white;
+      c.font = `18px ${FONT}`;
+      c.fillText(label, x + maxW / 2, 26);
       c.font = `20px ${FONT}`;
-      c.fillText(label, x, 28);
-      c.font = `bold 22px ${FONT}`;
-      c.fillText(value, x, 56, maxW);
+      c.fillText(value, x + maxW / 2, 53, maxW);
     };
-    field(16, '终点站', d?.dest ?? t.dest ?? '—', 170);
-    field(196, '下一站', d?.next ?? '—', 112);
-    field(318, '车次', t.trip, 72);
+    field(12, '下一站', d?.next ?? '—', 200);
+    field(220, '终点站', d?.dest ?? t.dest ?? '—', 200);
+    c.textAlign = 'center';
     c.fillStyle = C.white;
-    c.font = `bold 24px ${FONT}`;
-    c.fillText(d?.trainNo ?? '', 418, 36);
+    c.font = `bold 23px ${FONT}`;
+    c.fillText(t.hold ? 'HOLD' : '', 463, 36);
+    c.fillText(d?.trainNo ?? '', 553, 36);
     c.font = `22px ${FONT}`;
-    c.fillText(t.svc.replace(/^0+(?=\d)/, ''), 520, 36);
-    // the white buttons at the top right (their captions are not legible on the photos)
-    button(c, 676, 12, 70, 34);
-    button(c, 576, 60, 170, 46);
-    // departure time
+    c.fillText(t.svc.replace(/^0+(?=\d)/, ''), 637, 36);
+    c.fillStyle = '#b7bdc7';
+    c.fillRect(676, 10, 70, 44);
+    c.fillStyle = C.hlText;
+    c.fillText('C000', 711, 39);
+    button(c, 632, 64, 114, 44);
+    c.fillStyle = C.hlText;
+    c.fillText('菜单', 689, 93);
     c.fillStyle = C.white;
-    c.font = `18px ${FONT}`;
-    c.textAlign = 'left';
-    c.fillText('DEP', 418, 76);
+    c.font = `20px ${FONT}`;
+    c.fillText('DEP', 553, 76);
     c.font = `bold 22px ${FONT}`;
-    c.fillText(d && d.dep >= 0 ? fmtTime(d.dep) : '--:--:--', 418, 102);
+    c.fillText(d && d.dep >= 0 ? fmtTime(d.dep) : '--:--:--', 553, 103);
     void now;
   }
 
@@ -278,54 +280,65 @@ export class Dmi {
 
   // ------------------------------------------------------------ right column
 
-  private rightColumn(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, now: number, eb: boolean) {
+  private rightColumn(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, eb: boolean) {
     // mode and level
     c.fillStyle = C.white;
     c.font = `bold 44px ${FONT}`;
     c.textAlign = 'left';
     c.fillText(modeWord(t.mode), 418, 172);
     c.fillText(t.level, 576, 172);
-    // departure countdown bar (grey track, white remaining) + train status icon
-    const bx = 418;
-    const by = 204;
-    c.fillStyle = '#7d869f';
-    roundRect(c, bx, by, 128, 14, 7); c.fill();
-    if (d && d.dwellTotal > 0 && d.dep >= 0) {
-      const left = Math.max(0, d.dep - now);
-      const f = Math.min(1, left / d.dwellTotal);
-      c.fillStyle = C.white;
-      roundRect(c, bx, by, Math.max(14, 128 * f), 14, 7); c.fill();
-      c.font = `bold 20px ${FONT}`;
-      c.fillText(`${Math.ceil(left)}s`, bx + 136, by + 15);
-    }
+    // 用户决定（2026-10-22）：显示距模型停车点的距离；非实机含义断言。
+    c.strokeStyle = C.white;
+    c.lineWidth = 2;
+    c.strokeRect(418, 204, 128, 14);
+    c.font = `20px ${FONT}`;
+    c.fillText(Number.isFinite(t.stopDist) && t.stopDist >= 0 ? `${Math.round(t.stopDist)}m` : '--m', 440, 244, 112);
     const state = eb ? 'eb' : t.a > 0.05 ? 'traction' : t.a < -0.12 && t.v > 0.05 ? 'brake' : 'coast';
     trainFront(c, 600, 188, state);
-    // platform screen doors (pair of door leaves)
+    // Two distinct symbols: train doors always above AA; PSD only on a platform.
+    // 用户确认：photograph shows OPEN leaves; closed leaves meet.
+    // Train doors are white, PSD yellow in the reference.
+    // Fault, isolation and lock-confirmation colours remain【假设】.
+    const td = d?.trainDoor ?? (t.doors || t.doorSide ? 'open' : 'closed');
+    const tc = td === 'fault' ? C.red : td === 'closing' ? C.dim : td === 'isolated' ? '#ff9a2a' : C.white;
+    // closeDoors clears the open bit when closing STARTS. The symbol must
+    // remain separated until the physical close/lock confirmation completes.
+    const doorOpen = td === 'open' || td === 'closing' || t.doors || !!t.doorSide;
+    for (const x of doorOpen ? [418, 460] : [423, 455]) doorLeaf(c, x, 252, 32, 48, tc, false);
+    if (td === 'fault' || td === 'isolated') {
+      c.strokeStyle = tc; c.lineWidth = 3;
+      c.beginPath(); c.moveTo(416, 302); c.lineTo(494, 250);
+      if (td === 'fault') { c.moveTo(416, 250); c.lineTo(494, 302); }
+      c.stroke();
+    }
     const psd = d?.psd ?? 'none';
-    const pc = psd === 'closed' ? C.green : psd === 'open' ? C.yellow : psd === 'fault' ? C.red : psd === 'bypass' ? '#ff9a2a' : C.dim;
-    for (const x of [418, 460]) doorLeaf(c, x, 252, 32, 48, pc, psd === 'open');
-    if (psd === 'bypass') { c.strokeStyle = '#ff9a2a'; c.lineWidth = 3; c.beginPath(); c.moveTo(414, 304); c.lineTo(496, 248); c.stroke(); }
     // door mode: bar + AA / MM, and the train door icon
     c.fillStyle = C.white;
     roundRect(c, 418, 330, 9, 40, 2); c.fill();
     c.font = `bold 40px ${FONT}`;
     c.fillText(t.mode === 'DTO' || t.mode === 'AM' ? 'AA' : 'MM', 434, 368);
-    const open = t.doors || !!t.doorSide;
-    const dc = t.doorSide && !t.doors ? C.red : open ? C.yellow : C.green;
-    for (const x of [598, 624]) {
-      c.fillStyle = dc;
-      roundRect(c, x + (open ? (x === 598 ? -4 : 4) : 0), 330, 20, 40, 3); c.fill();
-      c.fillStyle = 'rgba(0,0,0,0.35)';
-      c.fillRect(x + (open ? (x === 598 ? -4 : 4) : 0) + 7, 336, 6, 28);
+    const pc = psd === 'fault' ? C.red : psd === 'bypass' ? '#ff9a2a' : C.yellow;
+    for (const x of psd === 'none' ? [] : psd === 'open' ? [598, 632] : [604, 626]) {
+      c.strokeStyle = pc;
+      c.lineWidth = 3;
+      c.strokeRect(x, 330, 22, 46);
+      c.fillStyle = pc;
+      c.fillRect(x + 6, 336, 10, 34);
+    }
+    if (psd === 'fault' || psd === 'bypass') {
+      c.strokeStyle = pc; c.lineWidth = 3; c.beginPath();
+      c.moveTo(594, 378); c.lineTo(658, 328);
+      if (psd === 'fault') { c.moveTo(594, 328); c.lineTo(658, 378); }
+      c.stroke();
     }
     // door enable (CM: the ATP enables the platform side of a train stopped at
     // its mark; RM has none) — a green arrow on that side of the door icon
     if (t.manual && t.mode === 'CM' && t.platSide && (t.doorsAwait || t.doors)) {
       const left = t.platSide === 'L';
-      const ax = left ? 584 : 660;
+      const ax = left ? 404 : 506;
       c.fillStyle = C.green;
       c.beginPath();
-      c.moveTo(ax + (left ? -12 : 12), 350); c.lineTo(ax, 336); c.lineTo(ax, 364); c.closePath(); c.fill();
+      c.moveTo(ax + (left ? -12 : 12), 276); c.lineTo(ax, 262); c.lineTo(ax, 290); c.closePath(); c.fill();
     }
     // supervision status line (extrapolated: the photos show no such state)
     let msg = '';
@@ -353,20 +366,21 @@ export class Dmi {
     c.fillStyle = C.white;
     c.font = `bold 32px ${FONT}`;
     c.textAlign = 'left';
-    c.fillText(d ? availWord(d.avail) : '', 72, y + 12);
+    c.fillText(`${modeWord(t.mode)}-${t.level}`, 72, y + 12);
     // train / door status: green = doors closed and locked, yellow = open, red = train fault
-    trainIcon(c, 226, y, t.failed ? C.red : t.doors ? C.yellow : C.green);
-    hexagon(c, 322, y, d?.stopWin ?? 'none');
+    hexagon(c, 480, y, d?.stopWin ?? 'none');
   }
 
   // ------------------------------------------------------------ bottom: date / time, message log, target
 
-  private bottom(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, now: number) {
+  private bottom(c: CanvasRenderingContext2D, d: DmiData | null, now: number) {
     c.fillStyle = C.white;
     c.textAlign = 'left';
     c.font = `bold 22px ${FONT}`;
-    c.fillText(d?.date ?? '', 12, 546, 132);
-    c.fillText(fmtTime(now), 24, 612);
+    c.fillText(d?.date ?? '', 96, 624);
+    c.fillText(fmtTime(now), 330, 624);
+    c.font = `20px ${FONT}`;
+    c.fillText('版本：1.0.0', 596, 624);
     // log
     const log = d?.log ?? [];
     const key = log.length ? `${log[0].t}|${log[0].m}` : '';
@@ -392,42 +406,7 @@ export class Dmi {
     }
     scrollButton(c, BTN_UP, true, this.sel > 0);
     scrollButton(c, BTN_DN, false, this.sel < log.length - 1);
-    // target / authority readout (extrapolated, same visual language: blue label, white value)
-    const x = 578;
-    c.textAlign = 'left';
-    if (t.phase === 'run' && t.tgtD >= 0 && t.tgtD < 5000) {
-      c.fillStyle = C.blue;
-      c.font = `20px ${FONT}`;
-      c.fillText(`目标 ${t.tgtReason || ''}`, x, 518, W - x - 8);
-      c.fillStyle = C.white;
-      c.font = `bold 26px ${FONT}`;
-      c.fillText(`${Math.round(t.tgtD)} m`, x, 548);
-      c.font = `bold 22px ${FONT}`;
-      c.fillText(`→ ${Math.round(t.tgtV * 3.6)} km/h`, x, 576);
-    }
-    if (d && d.maDist >= 0 && t.phase === 'run') {
-      c.fillStyle = C.blue;
-      c.font = `20px ${FONT}`;
-      c.fillText('授权', x, 610);
-      c.fillStyle = C.white;
-      c.font = `bold 22px ${FONT}`;
-      c.fillText(d.maDist >= 10000 ? `${(d.maDist / 1000).toFixed(1)} km` : `${Math.round(d.maDist)} m`, x + 46, 610);
-    }
-    if (t.phase === 'run' && t.v >= 0.05) {
-      // the grade under the head (gradient.ts, synthesized profile)
-      c.fillStyle = C.blue;
-      c.font = `20px ${FONT}`;
-      c.fillText('坡度', x, 632);
-      c.fillStyle = C.white;
-      c.font = `bold 22px ${FONT}`;
-      c.fillText(Math.abs(t.grade) < 1 ? '平坡' : `${t.grade > 0 ? '↗' : '↘'} ${Math.abs(t.grade)}‰`, x + 46, 632);
-    }
-    if (!Number.isNaN(t.stopErr) && Math.abs(t.stopErr) < 5 && t.v < 0.05 && t.phase === 'run') {
-      const e = t.stopErr;
-      c.fillStyle = Math.abs(e) <= 0.5 ? C.green : C.yellow;
-      c.font = `bold 22px ${FONT}`;
-      c.fillText(`对标 ${e >= 0 ? '欠' : '过'}${Math.abs(e).toFixed(2)} m`, x, 632);
-    }
+
   }
 }
 
@@ -475,38 +454,15 @@ function wheel(c: CanvasRenderingContext2D, x: number, y: number) {
   c.fillStyle = C.white;
   c.lineWidth = 3;
   c.beginPath(); c.moveTo(x - 30, y); c.lineTo(x - 17, y); c.moveTo(x + 17, y); c.lineTo(x + 30, y); c.stroke();
-  c.beginPath();
-  const n = 10;
-  for (let i = 0; i <= n * 2; i++) {
-    const a = (i / (n * 2)) * Math.PI * 2;
-    const r = i % 2 === 0 ? 17 : 14.5;
-    const px = x + Math.cos(a) * r;
-    const py = y + Math.sin(a) * r;
-    if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
-  }
-  c.closePath();
-  c.stroke();
-  c.beginPath(); c.arc(x, y, 10.5, 0, Math.PI * 2); c.lineWidth = 2; c.stroke();
+  c.beginPath(); c.arc(x, y, 20, 0, Math.PI * 2); c.stroke();
+  c.beginPath(); c.arc(x, y, 15, 0, Math.PI * 2); c.lineWidth = 2; c.stroke();
   // the glyph inside reads as "B" on both Line 2 photos (blurry: see README)
-  c.font = `bold 14px ${LATIN}`;
+  c.font = `bold 24px ${LATIN}`;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
   c.fillText('B', x, y + 1);
   c.textAlign = 'left';
   c.textBaseline = 'alphabetic';
-}
-
-/** green train icon of the status row */
-function trainIcon(c: CanvasRenderingContext2D, x: number, y: number, col: string) {
-  c.fillStyle = col;
-  roundRect(c, x - 26, y - 15, 52, 26, 6);
-  c.fill();
-  c.fillStyle = C.bg;
-  c.fillRect(x - 19, y - 9, 13, 9);
-  c.fillRect(x + 6, y - 9, 13, 9);
-  c.fillStyle = col;
-  c.fillRect(x - 22, y + 11, 8, 5);
-  c.fillRect(x + 14, y + 11, 8, 5);
 }
 
 /** cab front in profile with the traction / brake arrow (right column) */
