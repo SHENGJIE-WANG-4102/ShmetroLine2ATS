@@ -38,7 +38,7 @@ console.log(`Verified ${SOUND_BANK.length + VOICE_PARTS.filter(p => p.file).leng
 console.log(`Complete PA means: departure +${ONBOARD_NEXT_DELAY_S.toFixed(2)} s; arrival -${ONBOARD_ARRIVAL_ADVANCE_S.toFixed(2)} s.`);
 console.log('\n| 站 | 方向 | 蟠祥路 | 广兰路 | 机场 |');
 console.log('|---|---|---|---|---|');
-const first = 0, last = STATIONS.findIndex(s => s.id === 'GLL');
+const first = 0, last = STATIONS.length - 1;
 for (let st = first; st <= last; st++) for (const dir of ['DN', 'UP'] as const) {
   const statuses = ONBOARD_DESTINATIONS.map(dest => {
     const row = ONBOARD_ANNOUNCEMENTS.find(a => a.station === STATIONS[st].name && a.direction === dir && a.destination === dest);

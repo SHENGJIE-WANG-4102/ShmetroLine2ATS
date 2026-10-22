@@ -20,7 +20,7 @@ export type AnnouncementDoorSide = 'L' | 'R' | 'B';
 export interface SoundClip {
   id: string; file: string; kind: SoundKind; station: string; direction: SoundDirection;
   side: 'east' | 'west' | 'both' | 'shared';
-  source: RecordingId | 'door-reference' | 'cabin-reference' | 'hold-reference';
+  source: RecordingId | 'door-reference' | 'cabin-reference' | 'hold-reference' | 'ride-1021-east' | 'ride-1021-west';
   /** Original range; for composed clips this is only the first library part.
    * All constituent source clocks/ranges are resolved through composition;
    * composed duration is durationS, never the first part's range length. */

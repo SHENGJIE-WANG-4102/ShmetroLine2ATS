@@ -1,7 +1,7 @@
 /** D71: physical door sounds use independent warning / mechanism clocks.
- * 【假设】 doors=false is the closing sequence onset. The worker publishes no
- * intermediate moving/locked state, so split its existing DOOR_CYCLE on the UI
- * side using the recorded 2.7 s warning lead; do not alter train simulation.
+ * The worker publishes the close sequence independently of lock confirmation.
+ * Use its onset for the warning and the recorded 2.7 s lead for mechanism
+ * audio; do not alter the simulation's door deadlines.
  */
 import { SOUND_BANK, clipDuration, type SoundClip, type SoundKind } from '../data/soundbank';
 import { DOOR_REFERENCE_TIMING, DOOR_TAKES } from '../data/doorbank';
@@ -51,21 +51,24 @@ export class DoorSoundPlanner {
     };
     for (const [key, sound] of this.active) {
       const tr = current.get(sound.train);
-      if (!tr || !tr.atStation || tr.v > .05 || tr.doors === sound.closing || f.t >= sound.until) {
+      if (!tr || !tr.atStation || tr.v > .05 || (sound.closing ? !tr.doorClosing : tr.doorClosing || !tr.doors) || f.t >= sound.until) {
         commands.push({ kind: 'stop', key }); this.active.delete(key);
       }
     }
     for (const [key, pending] of this.pending) {
       const tr = current.get(key);
-      if (!tr || tr.doors || !tr.atStation || tr.v > .05) this.pending.delete(key);
+      if (!tr || !tr.doorClosing || !tr.atStation || tr.v > .05) this.pending.delete(key);
       else if (f.t >= pending.at) {
         this.pending.delete(key); play(pending.key, pending.clip, f.t - pending.at, tr, true);
       }
     }
     for (const [key, tr] of current) {
       const prev = this.previous.get(key);
-      if (!prev || !prev.atStation || !tr.atStation || tr.v > .05 || tr.doors === prev.doors) continue;
-      const closing = !tr.doors, kind = closing ? 'close' : 'open';
+      if (!prev || !prev.atStation || !tr.atStation || tr.v > .05) continue;
+      const closing = tr.doorClosing && !prev.doorClosing;
+      const opening = tr.doors && !tr.doorClosing && (!prev.doors || prev.doorClosing);
+      if (!closing && !opening) continue;
+      const kind = closing ? 'close' : 'open';
       events.push({ kind, key, at: f.t });
       const primary = DOOR_TAKES.find(t => t.primary)!.id;
       const find = (soundKind: SoundKind) => this.bank.find(c => c.kind === soundKind && c.confidence !== 'low' &&

@@ -82,6 +82,7 @@ const C = {
   ac: '#9aa2ab',
   window: '#2c4352',
   carDoor: '#8b949e',
+  closingDoor: '#d6a44a',
   doorLine: '#4a525b',
   gangway: '#3a3f46',
   windscreen: '#1c2a36',
@@ -91,6 +92,11 @@ const C = {
   dim: '#8a95a3',
   sign: '#ffffff',
 };
+
+export function stopViewDoorState(t: Pick<TrainSnap, 'doors' | 'doorSide' | 'doorClosing'>, near: boolean) {
+  const open = near ? t.doors : !!t.doorSide && !t.doors;
+  return open ? t.doorClosing ? 'closing' : 'open' : 'closed';
+}
 
 /** door centres of a car, measured from its front end (m, negative = back) */
 const doorsOf = (front: number) => Array.from({ length: DOORS }, (_, k) => front - FIRST_DOOR - k * DOOR_PITCH);
@@ -287,7 +293,6 @@ export class StopView {
 
     // ---- the train: the nose EYE ahead of the eye, cars behind it
     const xNose = XE + EYE * PX;
-    const open = (near: boolean) => (near ? t.doors : !!t.doorSide && !t.doors);
     const xOf = (m: number) => xNose + m * PX; // m from the nose, negative = back
     for (let car = 0; car < CARS; car++) {
       const front = -car * CAR, back = front - CAR;
@@ -311,9 +316,9 @@ export class StopView {
         }
         rect(a, side ? 166 : 90, b - a, 2, LINE);
         for (const d of doorX) {
-          const o = open(side === 0);
-          rect(xOf(d - DOOR_W / 2), yDoor, DOOR_W * PX, 9, o ? (side === 0 ? C.gap : C.red) : C.carDoor);
-          if (!o && PX >= 6) rect(xOf(d) - 0.5, yDoor, 1, 9, C.doorLine);
+          const state = stopViewDoorState(t, side === 0);
+          rect(xOf(d - DOOR_W / 2), yDoor, DOOR_W * PX, 9, state === 'closing' ? C.closingDoor : state === 'open' ? (side === 0 ? C.gap : C.red) : C.carDoor);
+          if (state !== 'open' && PX >= 6) rect(xOf(d) - 0.5, yDoor, 1, 9, C.doorLine);
         }
         if (head) rect(xOf(-CAB_DOOR - CAB_DOOR_W / 2), yDoor, CAB_DOOR_W * PX, 9, C.carDoor);
       }

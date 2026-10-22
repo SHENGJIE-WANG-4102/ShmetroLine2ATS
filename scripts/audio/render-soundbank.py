@@ -171,7 +171,9 @@ def main():
         a = decode(p['source'], p['range'], snap=True, effects=p.get('effects'))
         a, before = normalise(a, -16)
         library[p['id']] = a
-        if p.get('file'):
+        # Decoding a needed part for a changed composition must not rewrite
+        # its independently delivered file unless that part was selected.
+        if p.get('file') and (not selected or p['id'] in selected_parts or not (out / p['file']).exists()):
             # Fade first, then meter the standalone word. Fading a very short
             # normalised name afterwards can otherwise lower it by >1 LU.
             standalone = a.copy()

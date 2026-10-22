@@ -17,7 +17,7 @@ export interface StationTrain {
   id: number; trip: string; direction: Direction; mode: TrainSnap['mode'];
   manual: boolean; rm: boolean; failed: boolean; eb: boolean; inService: boolean;
   phase: TrainSnap['phase']; v: number; a: number; distance: number;
-  nextStation: number; atStation: boolean; doors: boolean; dwellLeft: number;
+  nextStation: number; atStation: boolean; doors: boolean; doorClosing: boolean; dwellLeft: number;
 }
 export interface StationAudioFrame {
   station: number | null; name: string; t: number; rate: number; paused: boolean;
@@ -43,7 +43,7 @@ export function audioTrain(tr: TrainSnap, station: number | null, topo: Topology
   return { id: tr.id, trip: tr.trip, direction, mode: tr.mode, manual: tr.manual, rm: tr.rm, failed: tr.failed,
     eb: tr.eb, inService: tr.inService, phase: tr.phase, v: tr.v, a: tr.a, distance: tr.stopDist,
     nextStation: tr.nextStation, atStation: station !== null && platform?.station === station,
-    doors: tr.doors, dwellLeft: tr.dwellLeft };
+    doors: tr.doors, doorClosing: tr.doorClosing, dwellLeft: tr.dwellLeft };
 }
 export function stationSoundEnabled(frame: StationAudioFrame): boolean {
   return frame.station !== null && isUndergroundStation(frame.station) && frame.enabled && !frame.muted && !frame.paused && frame.rate > 0 && frame.rate <= VVVF_MAX_RATE;
@@ -205,13 +205,13 @@ export class StationSoundPlanner {
       if (!automatic(tr) || (tr.phase !== 'run' && tr.phase !== 'dwell')) this.waitingDepartures.delete(visit(tr));
       const prev = this.previous.get(tr.id);
       if (!prev || prev.trip !== tr.trip || prev.direction !== tr.direction || !automatic(tr) || !automatic(prev) || !prev.atStation) continue;
-      if (prev.doors && !tr.doors && tr.atStation) {
+      if (!prev.doorClosing && tr.doorClosing && tr.atStation) {
         const key = `close|${visit(tr)}|${frame.t}`, clip = this.bank.find(c => usable(c, 'close', tr.direction));
         if (clip) emit(key, [clip], 0);
       }
       // The phase may change to run several frames before the first positive
       // speed under jerk limiting. Keep the observed dwell armed until then.
-      if (this.waitingDepartures.has(visit(tr)) && tr.v > .001 && !tr.doors && tr.phase === 'run') {
+      if (this.waitingDepartures.has(visit(tr)) && tr.v > .001 && !tr.doors && !tr.doorClosing && tr.phase === 'run') {
         this.waitingDepartures.delete(visit(tr));
         const key = `depart|${visit(tr)}`;
         if (this.done.has(key)) continue;

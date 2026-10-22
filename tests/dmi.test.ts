@@ -20,11 +20,13 @@ describe('Line 2 photographed cab content',()=>{
   const close=s.t;expect(closeDoors(s,t,b.platform)).toBe(0);
   const deadline=t.doorLockedAt!;expect(deadline-close).toBe(12);
   expect(t.doorsOpen).toBe(true);expect(ps.psd).toBe('open');
+  expect(s.snapshot().trains.find(x=>x.id===t.id)).toMatchObject({doors:true,doorClosing:true});
   const cp=capture(s);s.t=deadline-DOOR_STAGGER_S;doorMotionTick(s);
   expect(ps.psd).toBe('closed');expect(t.doorsOpen).toBe(true);
   expect(computeDmi(s,t.id)).toMatchObject({trainDoor:'closing',psd:'closed'});
   expect(cp.trains.find(x=>x.id===t.id)?.doorMotion?.psdDone).toBeUndefined();
   s.t=deadline;doorMotionTick(s);expect(t.doorsOpen).toBe(false);expect(t.doorMotion).toBeUndefined();
+  expect(s.snapshot().trains.find(x=>x.id===t.id)).toMatchObject({doors:false,doorClosing:false});
   expect(computeDmi(s,t.id)?.trainDoor).toBe('closed');
   openDoors(s,t,b.platform);s.t+=.3;doorMotionTick(s);ps.psdFault=true;
   expect(closeDoors(s,t,b.platform)).toBe(-1);expect(t.doorsOpen).toBe(true);expect(ps.psd).toBe('closeFail');

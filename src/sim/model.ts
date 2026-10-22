@@ -651,6 +651,8 @@ export interface TrainSnap {
   hold: boolean;
   failed: boolean;
   doors: boolean;
+  /** Close sequence is active; doors stays open/unlocked until confirmation. */
+  doorClosing: boolean;
   doorSide: '' | 'L' | 'R';
   doorsAwait: boolean;
   /** side of the platform at the stop the train stands at or approaches ('' none) */

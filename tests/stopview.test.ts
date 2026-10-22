@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { stopViewScale, FREEZE_REM, departureSeconds, departureText } from '../src/ui/stopview';
+import { stopViewScale, FREEZE_REM, departureSeconds, departureText, stopViewDoorState } from '../src/ui/stopview';
 
 describe('stopping close-up scale', () => {
+  it('distinguishes closing from open and locked, including a manually opened far-side door', () => {
+    expect(stopViewDoorState({doors:true,doorSide:'',doorClosing:true},true)).toBe('closing');
+    expect(stopViewDoorState({doors:true,doorSide:'',doorClosing:true},false)).toBe('closed');
+    expect(stopViewDoorState({doors:false,doorSide:'R',doorClosing:true},false)).toBe('closing');
+    expect(stopViewDoorState({doors:false,doorSide:'',doorClosing:false},true)).toBe('closed');
+  });
   it('counts down through zero, then counts overtime; hold is H, off five seconds after head exit', () => {
     expect(departureSeconds(100, 72)).toBe(28);
     expect(departureSeconds(100, 79)).toBe(21);

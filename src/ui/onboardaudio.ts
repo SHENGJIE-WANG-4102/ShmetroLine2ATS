@@ -113,7 +113,7 @@ export class OnboardSoundPlanner {
     }
     if (!announces(tr)) { this.pending = null; this.departing = null; this.armed = false; }
     if (announces(tr) && tr.phase === 'dwell' && tr.v <= .05) { this.armed = true; this.origin = tr.nextStation; }
-    if (this.armed && announces(tr) && tr.phase === 'run' && tr.v > .001 && !tr.doors) {
+    if (this.armed && announces(tr) && tr.phase === 'run' && tr.v > .001 && !tr.doors && !tr.doorClosing) {
       this.armed = false;
       // The worker retains the departing stop until its first movement has
       // cleared it. Capture the real onset, then wait for the new nextStation.
