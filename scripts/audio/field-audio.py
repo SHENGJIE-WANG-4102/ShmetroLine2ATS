@@ -35,6 +35,7 @@ def module(name):
 
 
 stops, tones, starts = module('measure-stops'), module('measure-door-tones'), module('refine-starts')
+motion = module('measure-motion-cues')
 
 
 def save(path, value):
@@ -280,13 +281,75 @@ def automatic_events(audio, source, folder, duration):
     return events
 
 
-def measure_source(source, out):
+def infer_door_events(events, timing):
+    """Door-derived proxies. Motor timestamps remain independent cross-checks."""
+    opening_delay = statistics.mean(timing['openDelay'])
+    starting_delay = statistics.mean(timing['startDelay'])
+    open_half = (max(timing['openDelay']) - min(timing['openDelay'])) / 2
+    start_half = (max(timing['startDelay']) - min(timing['startDelay'])) / 2
+    for event in events:
+        event['motor'] = {key: event.get(key) for key in ['stop', 'start']}
+        opened, warning, locked = event.get('open'), event.get('close'), event.get('locked')
+        event['stop'] = None if not opened else dict(at=round(opened['at'] - opening_delay, 3), confidence=opened['confidence'],
+                                                     method='door-opening-minus-delay', uncertaintyS=open_half, acoustic=opened)
+        departure = None
+        if locked:
+            departure = dict(at=round(locked['at'] + starting_delay, 3), confidence=locked['confidence'], method='door-lock-plus-start-delay', uncertaintyS=start_half, acoustic=locked)
+        elif warning:
+            departure = dict(at=round(warning['at'] + timing['closeS'] + starting_delay, 3), confidence=warning['confidence'], method='door-warning-plus-close-and-start-delay', uncertaintyS=start_half, acoustic=warning)
+        event['doorStart'] = departure
+        event['start'] = departure
+        event['discrepancies'] = []
+        for key in ['stop', 'start']:
+            motor = event['motor'][key]
+            derived = event[key]
+            if motor and derived and abs(motor['at'] - derived['at']) > 10:
+                event['discrepancies'].append(dict(event=key, motorS=motor['at'], doorS=derived['at'], motorMinusDoorS=round(motor['at'] - derived['at'], 3), reason='possible held departure or acoustic interference; not averaged'))
+                if key == 'start':
+                    event['start'] = {**motor, 'method': 'motor-start-retained-after-door-disagreement', 'uncertaintyS': None,
+                                      'doorProxyS': derived['at'], 'possibleHold': motor['at'] > derived['at']}
+        if event['stop'] and event['start'] and event['stop']['at'] >= event['start']['at']:
+            event['stop'] = {**event['stop'], 'confidence': 'low', 'invalidOrder': True}
+    return events
+
+
+def measure_doors(audio, source, events, timing):
+    candidates = tones.detect_tones(audio)
+    duration = len(audio) / 8000
+    for event in events:
+        old_stop, old_start = event.get('stop'), event.get('start')
+        reference = next((take for take in timing['referenceTakes'] if source['id'] == 'ride-east' and take['station'] == event['station']), None)
+        if reference:
+            event['open'] = dict(at=reference['open'][0], confidence=reference['confidence'], method='reviewed-door-motion')
+            event['locked'] = dict(at=reference['lockedAt'], confidence=reference['confidence'], method='reviewed-door-lock-impact')
+        if not event.get('close') and old_start:
+            lower = old_stop['at'] + 5 if old_stop else source.get('offset', 0)
+            possible = [tone for tone in candidates if lower <= tone['start'] <= old_start['at'] + 5]
+            if possible:
+                chosen = min(possible, key=lambda tone: abs(tone['start'] + timing['closeS'] + statistics.mean(timing['startDelay']) - old_start['at']))
+                event['close'] = dict(at=chosen['start'], confidence='medium' if len(possible) == 1 and not chosen['leftCensored'] else 'low', method='closing-warning-candidate', alternatives=possible)
+        if not event.get('open') and old_stop:
+            low = max(source.get('offset', 0), old_stop['at'] - 10)
+            high = min(duration - .8, old_stop['at'] + 35, event['close']['at'] - 4 if event.get('close') else duration)
+            if high > low + 2:
+                left = max(0, low - 2)
+                clip = audio[round(left * 8000):round(min(duration, high + 2) * 8000)]
+                data = motion.features(clip)
+                opened = motion.opening_cue(data, [low - left, high - left])
+                if opened:
+                    event['open'] = {**opened, 'at': round(opened['at'] + left, 3), 'searchWindowS': [low, high]}
+    return infer_door_events(events, timing)
+
+
+def measure_source(source, out, timing):
     folder = out / source['id']
     folder.mkdir(exist_ok=True)
     path = Path(source['path'])
     info = dict(path=str(path), bytes=path.stat().st_size, mtimeNs=path.stat().st_mtime_ns)
     fingerprint = hashlib.sha256(json.dumps(source, sort_keys=True, ensure_ascii=False).encode())
-    for file in [Path(__file__), Path(__file__).with_name('refine-starts.py'), Path(__file__).with_name('measure-stops.py')]:
+    fingerprint.update(json.dumps(timing, sort_keys=True, ensure_ascii=False).encode())
+    for file in [Path(__file__), *[Path(__file__).with_name(name + '.py') for name in
+                                 ['refine-starts', 'measure-stops', 'measure-door-tones', 'measure-motion-cues']]]:
         fingerprint.update(file.read_bytes())
     fingerprint.update(json.dumps(info, sort_keys=True).encode())
     cache_path = folder / 'measurement-cache.json'
@@ -306,7 +369,7 @@ def measure_source(source, out):
     if source['mode'] == 'adopted-events':
         events = []
         for row in source['events']:
-            events.append(dict(station=row['station'], **{key: None if row[key] is None else {**row['evidence'].get(key, dict(confidence='low')), 'at': row[key]} for key in ['stop', 'start', 'close']}, provenance='reviewed src/data/ridelog.ts'))
+            events.append(dict(station=row['station'], **{key: None if row[key] is None else {**row['evidence'].get(key, dict(confidence='low')), 'at': row[key]} for key in ['stop', 'start', 'close', 'open']}, provenance='reviewed src/data/ridelog.ts'))
     elif source['mode'] == 'pa-windows':
         events = events_from_announcements(audio, source, source['announcements'], duration)
     else:
@@ -319,6 +382,7 @@ def measure_source(source, out):
         for event in events:
             if event['station'] in windows[source['id']]:
                 event['start'] = starts.refine_start(audio, windows[source['id']][event['station']])
+    events = measure_doors(audio, source, events, timing)
     save(folder / 'events.json', events)
     intervals = []
     for a, b in zip(events, events[1:]):
@@ -331,6 +395,8 @@ def measure_source(source, out):
         intervals.append(dict(recording=source['id'], fromStation=a['station'], toStation=b['station'], direction=source['directions'][0],
                               **{'from': a['station'], 'to': b['station']}, start=start, stop=stop, dwell=dwell, run=run,
                               confidence=confidence(a['start'].get('confidence') if a['start'] else None, b['stop'].get('confidence') if b['stop'] else None),
+                              runUncertaintyS=(a['start'].get('uncertaintyS', 0) or 0) + (b['stop'].get('uncertaintyS', 0) or 0) if a['start'] and b['stop'] and a['start'].get('uncertaintyS') is not None else None,
+                              dwellUncertaintyS=(b['start'].get('uncertaintyS', 0) or 0) + (b['stop'].get('uncertaintyS', 0) or 0) if b['start'] and b['stop'] and b['start'].get('uncertaintyS') is not None else None,
                               dwellConfidence=confidence(b['start'].get('confidence') if b['start'] else None, b['stop'].get('confidence') if b['stop'] else None),
                               period=period(clock) if source.get('clockStart') else '钟点未知；22:00情景', modelClock=round(clock),
                               clockReliable=False, clockBasis='filename minute only' if source.get('clockStart') else '【假设】22:00 model scenario; original wall clock unknown', acoustic=acoustic))
@@ -473,7 +539,7 @@ def summarize(catalog, out, include_model=True):
     save(out / 'comparison.json', measurements)
     def fmt(v):
         return '—' if v is None else f'{v:.1f}'
-    lines = ['# 录音逐区间对照', '', '运行=起动→停稳；高德=到→到候选，不能与运行秒直接相减。巡航取距停车点>500m且速度>18km/h时，同一sectionCruise函数1Hz只读采样的中位数。最终ATO目标、巡航P10/P90和调速比例另存JSON。', '',
+    lines = ['# 录音逐区间对照（门声推算）', '', '停稳=开门开始−自动开门延迟均值；起动=锁闭/关门警示＋模型门序列及起步延迟均值。电机起动相差>10s时保留电机值并逐条标记。±值只含延迟区间半宽，不含声学检测误差；null表示不能给这个误差界。高德仅参考车数，不作时分验收。', '',
              '|录音|区间/方向|时段|起动/停稳 s|现场运行 s/置信度|下一站停站 s/置信度|高德到→到 s/n/SE|图定运行 s|实跑 s|巡航/峰值 km/h|实跑−现场 s|',
              '|---|---|---|---|---|---|---|---|---|---|---|']
     for r in measurements['intervals']:
@@ -499,7 +565,7 @@ def main():
         for source in catalog['sources']:
             order = catalog['travelOrder'][source['directions'][0]]
             source['stationOrder'] = order[order.index(source['from']):]
-            result = measure_source(source, out)
+            result = measure_source(source, out, catalog['doorTiming'])
             measured.append(result)
             print(f"audio {source['id']}: {len(result['events'])} events, {len(result['intervals'])} intervals", flush=True)
         save(out / 'measurements.json', dict(sources=measured, intervals=[r for s in measured for r in s['intervals']]))

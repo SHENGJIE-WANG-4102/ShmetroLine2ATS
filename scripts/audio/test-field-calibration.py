@@ -47,6 +47,27 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             field.clock_seconds('20:99')
 
+    def test_door_delay_ranges_are_read_as_inputs_and_half_widths_add(self):
+        events = [dict(station='test', open=dict(at=12, confidence='medium'), close=dict(at=30, confidence='high'), stop=None, start=None)]
+        row = field.infer_door_events(events, dict(openDelay=[1,3], startDelay=[2,6], closeS=4))[0]
+        self.assertEqual(row['stop']['at'], 10)
+        self.assertEqual(row['start']['at'], 38)
+        self.assertEqual(row['stop']['uncertaintyS'] + row['start']['uncertaintyS'], 3)
+
+    def test_lock_sound_takes_precedence_over_warning(self):
+        row = dict(station='test', open=None, close=dict(at=30, confidence='high'), locked=dict(at=37, confidence='medium'), stop=None, start=None)
+        field.infer_door_events([row], dict(openDelay=[1,3], startDelay=[2,6], closeS=4))
+        self.assertEqual(row['start']['at'], 41)
+        self.assertEqual(row['start']['method'], 'door-lock-plus-start-delay')
+
+    def test_departure_disagreement_retains_motor_cue_and_reports_it(self):
+        row = dict(station='test', open=None, close=dict(at=30, confidence='high'), stop=None, start=dict(at=60, confidence='medium'))
+        field.infer_door_events([row], dict(openDelay=[1,3], startDelay=[2,6], closeS=4))
+        self.assertEqual(row['start']['at'], 60)
+        self.assertEqual(row['doorStart']['at'], 38)
+        self.assertEqual(row['discrepancies'][0]['motorMinusDoorS'], 22)
+        self.assertIsNone(row['start']['uncertaintyS'])
+
     def test_clipped_origin_does_not_shift_the_first_warning_back_one_station(self):
         source = dict(id='synthetic', stationOrder=['中山公园', '娄山关路', '威宁路'], fromStation='中山公园',
                       **{'from': '中山公园'}, directions=['UP'], offset=0)

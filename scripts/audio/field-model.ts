@@ -7,9 +7,11 @@ import { buildStops, tripTasks, platformBerth, dwellFactorAt } from '../../src/s
 import { releaseRoute } from '../../src/sim/interlocking';
 import { computeBody, indexBodies, scanAhead, goalBerth, MA_NEAR } from '../../src/sim/movement';
 import { sectionCruise, PERF } from '../../src/sim/dynamics';
+import { sectionEta } from '../../src/sim/dynamics';
+import * as movement from '../../src/sim/movement';
 import { ahead } from '../../src/sim/topology';
 import { trainLevel } from '../../src/sim/energy';
-import type { TrackDir } from '../../src/sim/model';
+import type { TrackDir, Train } from '../../src/sim/model';
 
 const quantile = (values: number[], q: number) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -39,6 +41,11 @@ export function probeSection(sim: Sim, from: number, to: number, dir: TrackDir, 
   const actual: number[] = [], targets: number[] = [], permits: number[] = [], levels = new Set<number>();
   const cruises: number[] = [], ceilings: number[] = [];
   let missingStopSamples = 0;
+  let travelled = 0;
+  const trajectory: { metres: number; t: number; v: number; target: number }[] = [];
+  const low40: { t: number; cruiseKmh: number; distanceM: number; budgetS: number; spareS: number; level: number }[] = [];
+  const budgetDistance = (movement as unknown as { regulationDistance?: (s: Sim, t: Train) => number }).regulationDistance;
+  const budgetProfile = (movement as unknown as { regulationProfile?: typeof movement.regulationProfile }).regulationProfile;
   let lastCruiseSample = -Infinity;
   let arrival: number | null = null, opening: number | null = null, locked: number | null = null;
   const initialViolations = sim.integrity.violations.length;
@@ -46,17 +53,24 @@ export function probeSection(sim: Sim, from: number, to: number, dir: TrackDir, 
     sim.step();
     if (tr.phase === 'run' && tr.tasks[0]?.k === 'stop' && tr.tasks[0].station === to) {
       actual.push(tr.v * 3.6);
+      travelled += tr.lastDs;
+      trajectory.push({ metres: travelled, t: sim.t, v: tr.v * 3.6, target: tr.vTarget * 3.6 });
       // Report the actual selected target away from the station braking zone.
       if (tr.stopDist > 500 && tr.v > 5) { targets.push(tr.vTarget * 3.6); permits.push(tr.vPermit * 3.6); }
       if (tr.stopDist > 500 && tr.v > 5 && sim.t - lastCruiseSample >= 1) {
         const task = tr.tasks[0], scan = scanAhead(sim, tr, goalBerth(tr), MA_NEAR);
         const margin = tr.delay > 2 ? PERF.atoFastMargin : PERF.atoMargin;
-        const ceiling = Math.max(.1, scan.vBody - margin);
+        const profile = budgetProfile?.(sim, tr);
+        const ceiling = profile ? PERF.vMax - margin : Math.max(.1, scan.vBody - margin);
+        const distance = profile?.distance ?? (budgetDistance ? budgetDistance(sim, tr) : scan.stopDist);
         // Read-only sample of the same public section controller, at most one
         // 0.1s physics step after the stored vTarget above. It sets no state.
         if (task.arr !== null) {
-          cruises.push(sectionCruise(scan.stopDist, tr.v, task.arr - sim.t, ceiling) * 3.6); ceilings.push(ceiling * 3.6);
-          if (!Number.isFinite(scan.stopDist)) missingStopSamples++;
+          const cruise = sectionCruise(distance, tr.v, task.arr - sim.t, ceiling, profile?.limits, margin) * 3.6;
+          cruises.push(cruise); ceilings.push(ceiling * 3.6);
+          if (!Number.isFinite(distance)) missingStopSamples++;
+          if (cruise < 40) low40.push({ t: sim.t, cruiseKmh: cruise, distanceM: distance, budgetS: task.arr - sim.t,
+            spareS: task.arr - sim.t - sectionEta(distance, tr.v, ceiling, profile?.limits, margin), level: trainLevel(sim, tr) });
         }
         lastCruiseSample = sim.t;
       }
@@ -81,6 +95,14 @@ export function probeSection(sim: Sim, from: number, to: number, dir: TrackDir, 
     cruiseMedianKmh: quantile(cruises, .5), cruiseP10Kmh: quantile(cruises, .1), cruiseP90Kmh: quantile(cruises, .9),
     cruiseReducedFraction: cruises.length ? cruises.filter((v, i) => v < ceilings[i] - 1).length / cruises.length : null,
     cruiseSamples: cruises.length, stopDistanceUnavailableFraction: cruises.length ? missingStopSamples / cruises.length : null,
+    cruiseMinimumKmh: cruises.length ? Math.min(...cruises) : null, low40,
+    progressThirds: [0, 1, 2].map(third => {
+      const points = trajectory.filter(p => p.metres / travelled >= third / 3 && p.metres / travelled < (third + 1) / 3);
+      return { third, speedMedianKmh: quantile(points.map(p => p.v), .5), targetMedianKmh: quantile(points.map(p => p.target), .5) };
+    }),
+    arrivalDeltaS: arrival === null ? null : arrival - destination.arr,
+    earlyArrivalS: arrival === null ? null : Math.max(0, destination.arr - arrival),
+    dwellAbovePlannedS: arrival === null || nextDeparture === null ? null : nextDeparture - arrival - (destination.dep - destination.arr),
     actualP90Kmh: quantile(actual, .9), levels: [...levels], samples: actual.length, targetSamples: targets.length,
     completed: arrival !== null && departure !== null, halt: tr.halt,
     violations: sim.integrity.violations.slice(initialViolations) };

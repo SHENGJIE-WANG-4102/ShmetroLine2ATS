@@ -3,7 +3,9 @@ import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { resolve, relative, isAbsolute, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { STATIONS } from '../../src/data/line2';
+import { STATIONS, OPERATIONS } from '../../src/data/line2';
+import { DOOR_CLOSE_S } from '../../src/sim/calibration';
+import { DOOR_TAKES } from '../../src/data/doorbank';
 import { FIRST_LAST } from '../../src/data/firstlast';
 import { RIDE_LOG, RECORDING_SOURCES } from '../../src/data/ridelog';
 import { FIELD_1021_ORIGINALS } from '../../src/data/onboardfield1021';
@@ -45,7 +47,7 @@ if (!existing) {
   sources.length = 0;
   (sources as unknown[]).push(known && !args.includes('--automatic') ? { ...known, clockStart: clock } : { id: 'new-ride', path: resolve(path), from, directions: [direction], clockStart: clock, clockStartPrecision: 'approximate', mode: 'automatic', offset: Number(option('--offset') ?? 0), recognizer: option('--recognizer') });
 }
-save('catalog.json', { sources, stations: STATIONS.map((s, index) => ({ index, id: s.id, name: s.name })), official: FIRST_LAST,
+save('catalog.json', { sources, doorTiming: { closeS: DOOR_CLOSE_S, openDelay: OPERATIONS.autoDoorOpenDelay, startDelay: OPERATIONS.autoStartDelay, referenceTakes: DOOR_TAKES }, stations: STATIONS.map((s, index) => ({ index, id: s.id, name: s.name })), official: FIRST_LAST,
   travelOrder: Object.fromEntries(['DN', 'UP'].map(dir => [dir, STATIONS.map((s, index) => ({ name: s.name, index })).sort((a, b) => ahead(dir as 'DN' | 'UP', a.index, b.index) ? -1 : a.index === b.index ? 0 : 1).map(s => s.name)])) });
 function python(...parameters: string[]) {
   const run = spawnSync(option('--python') ?? 'python', [resolve('scripts/audio/field-audio.py'), '--out', out, ...parameters], { stdio: 'inherit' });

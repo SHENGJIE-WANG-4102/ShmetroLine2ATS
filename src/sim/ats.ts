@@ -76,7 +76,8 @@ export function buildRouteTable(topo: Topology): RouteTable {
 }
 
 /** Physical distance, separate from the weighted route-choice cost. */
-export function distanceToBerth(sim: Sim, sig: number, goal: number): number {
+export type TaskPathVisitor = (link: number, from: number, to: number) => void;
+export function distanceToBerth(sim: Sim, sig: number, goal: number, visit?: TaskPathVisitor): number {
   const berth = sim.topo.berths[goal];
   const table = sim.routeTable.next.get(goal);
   const seen = new Set<number>();
@@ -88,8 +89,12 @@ export function distanceToBerth(sim: Sim, sig: number, goal: number): number {
     const route = sim.topo.routes[rid];
     for (const step of route.steps) {
       const link = sim.topo.links[step.link];
-      if (step.link === berth.link && step.dir === berth.dir)
+      const entry = step.dir === 1 ? 0 : link.len;
+      if (step.link === berth.link && step.dir === berth.dir) {
+        visit?.(step.link, entry, berth.offset);
         return distance + (step.dir === 1 ? berth.offset : link.len - berth.offset);
+      }
+      visit?.(step.link, entry, step.dir === 1 ? link.len : 0);
       distance += link.len;
     }
     sig = route.end;
@@ -123,9 +128,29 @@ function curStop(tr: Train): StopTask | null {
 
 /** first signal ahead of an arbitrary point (following switch positions) */
 export function signalAheadFrom(sim: Sim, link: number, off: number, dir: Dir, maxDist = 600): { sig: number; dist: number } | null {
+  return pathBoundaryAhead(sim, link, off, dir, maxDist);
+}
+
+/** Physical task distance from the head, including a berth before the next
+ * signal. Beyond that signal use the same planned path as ARS, irrespective
+ * of whether its route has been set yet. */
+export function distanceToBerthFrom(sim: Sim, link: number, off: number, dir: Dir, goal: number, visit?: TaskPathVisitor): number {
+  const boundary = pathBoundaryAhead(sim, link, off, dir, Infinity, goal, visit);
+  return boundary ? boundary.dist + (boundary.sig < 0 ? 0 : distanceToBerth(sim, boundary.sig, goal, visit)) : Infinity;
+}
+
+/** Walk the unsignalled part once for both ARS and arrival regulation. A
+ * negative signal identifies the requested berth reached before a signal. */
+function pathBoundaryAhead(sim: Sim, link: number, off: number, dir: Dir, maxDist: number, goal = -1, visit?: TaskPathVisitor): { sig: number; dist: number } | null {
   const { topo } = sim;
+  const berth = goal >= 0 ? topo.berths[goal] : null;
   let l = link;
   let d0 = dir;
+  if (berth?.link === l && berth.dir === d0) {
+    visit?.(l, off, dir === 1 ? Math.max(off, berth.offset) : Math.min(off, berth.offset));
+    return { sig: -1, dist: Math.max(0, (berth.offset - off) * d0) };
+  }
+  visit?.(l, off, d0 === 1 ? topo.links[l].len : 0);
   let dist = d0 === 1 ? topo.links[l].len - off : off;
   for (let i = 0; i < 30 && dist < maxDist; i++) {
     const nx = nextLink(topo, l, d0, (sw) => swPos(sim, sw));
@@ -134,6 +159,12 @@ export function signalAheadFrom(sim: Sim, link: number, off: number, dir: Dir, m
     if (sid !== undefined) return { sig: sid, dist };
     l = nx.link;
     d0 = nx.dir;
+    const entry = d0 === 1 ? 0 : topo.links[l].len;
+    if (berth?.link === l && berth.dir === d0) {
+      visit?.(l, entry, berth.offset);
+      return { sig: -1, dist: dist + (d0 === 1 ? berth.offset : topo.links[l].len - berth.offset) };
+    }
+    visit?.(l, entry, d0 === 1 ? topo.links[l].len : 0);
     dist += topo.links[l].len;
   }
   return null;

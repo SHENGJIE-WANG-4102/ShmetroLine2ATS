@@ -132,10 +132,22 @@ export interface RunTimes {
 
 interface LimitSeg { from: number; to: number; v: number }
 
+/** Static limit source shared by diagram profiles and task-path regulation. */
+export function staticLinkLimit(topo: Topology, link: number, platformKmh = Infinity): number {
+  const l = topo.links[link];
+  return Math.min(l.limit, l.platform >= 0 ? platformKmh : Infinity) / 3.6;
+}
+
+/** A stopping/origin platform keeps its stop limit; other platforms are passed. */
+export function taskPlatformLimit(topo: Topology, platform: number, originStation: number, goalPlatform: number): number {
+  return platform < 0 ? Infinity : platform !== goalPlatform && topo.platforms[platform].station !== originStation
+    ? OPERATIONS.platformPassKmh / 3.6 : OPERATIONS.platformStopKmh / 3.6;
+}
+
 function trackProfile(topo: Topology, track: 'DN' | 'UP', platformKmh = Infinity): LimitSeg[] {
   return topo.links
     .filter((l) => l.track === track)
-    .map((l) => ({ from: Math.min(l.chainA, l.chainB), to: Math.max(l.chainA, l.chainB), v: Math.min(l.limit, l.platform >= 0 ? platformKmh : Infinity) / 3.6 }))
+    .map((l) => ({ from: Math.min(l.chainA, l.chainB), to: Math.max(l.chainA, l.chainB), v: staticLinkLimit(topo, l.id, platformKmh) }))
     .sort((a, b) => a.from - b.from);
 }
 
@@ -248,7 +260,10 @@ export function computeRunTimes(topo: Topology, trainLen: number, stopPlatformKm
 
 /** Unhindered section ETA, including acceleration/braking rather than a fixed reserve.
  * 【假设】80% nominal acceleration/braking retains the existing ATS estimate. */
-export function sectionEta(dist: number, v: number, cruise: number): number {
+export interface SectionLimit { length: number; limit: number }
+
+export function sectionEta(dist: number, v: number, cruise: number, limits?: readonly SectionLimit[], margin = 0): number {
+  if (limits?.length) return profileEta(dist, v, cruise, limits, margin);
   const a = PERF.aMax * .8, b = PERF.bService * .8;
   if (dist <= 0) return 0;
   // A lower target needs deceleration first. Using max(cruise,v) here would
@@ -261,18 +276,50 @@ export function sectionEta(dist: number, v: number, cruise: number): number {
   return (vp - v) / a + vp / b;
 }
 
+/** Trapezoidal integration with the same 80% acceleration/service braking as
+ * sectionEta. The backward pass anticipates future lower limits and the final
+ * stop; the forward pass carries speed across boundaries without extra stops.
+ * Limits already include the distance until the whole body clears each link. */
+function profileEta(dist: number, v: number, cruise: number, limits: readonly SectionLimit[], margin: number): number {
+  if (dist <= 0) return 0;
+  const caps = limits.map(s => Math.min(cruise, Math.max(.1, s.limit - margin)));
+  if (caps.every(c => c === caps[0])) return sectionEta(dist, v, caps[0]);
+  const a = PERF.aMax * .8, b = PERF.bService * .8;
+  const boundary = new Float64Array(limits.length + 1);
+  for (let i = limits.length - 1; i >= 0; i--)
+    boundary[i] = Math.min(caps[i], i ? caps[i - 1] : Infinity,
+      Math.sqrt(boundary[i + 1] ** 2 + 2 * b * limits[i].length));
+  let elapsed = 0;
+  for (let i = 0; i < limits.length; i++) {
+    const d = limits[i].length, cap = caps[i];
+    const end = Math.max(Math.sqrt(Math.max(0, v * v - 2 * b * d)),
+      Math.min(boundary[i + 1], Math.sqrt(v * v + 2 * a * d)));
+    if (v > cap) {
+      elapsed += (v - end) / b + Math.max(0, d - (v * v - end * end) / (2 * b)) / cap;
+    } else {
+      const peak = Math.min(cap, Math.sqrt((2 * a * b * d + b * v * v + a * end * end) / (a + b)));
+      const accelerating = Math.max(0, (peak * peak - v * v) / (2 * a));
+      const braking = Math.max(0, (peak * peak - end * end) / (2 * b));
+      elapsed += Math.max(0, peak - v) / a + Math.max(0, peak - end) / b
+        + Math.max(0, d - accelerating - braking) / Math.max(.1, peak);
+    }
+    v = end;
+  }
+  return elapsed + v / b;
+}
+
 /** ATS consumes the actual diagram section budget. No added station dwell.
  * Bisection finds the cruise speed whose ETA matches time left; ATP, route,
  * weather, running level and braking curves can still require a lower speed. */
-export function sectionCruise(dist: number, v: number, budget: number, ceiling: number): number {
-  if (!Number.isFinite(dist) || budget <= 0 || sectionEta(dist, v, ceiling) >= budget) return ceiling;
+export function sectionCruise(dist: number, v: number, budget: number, ceiling: number, limits?: readonly SectionLimit[], margin = 0): number {
+  if (!Number.isFinite(dist) || budget <= 0 || sectionEta(dist, v, ceiling, limits, margin) >= budget) return ceiling;
   // Near the stopping point the precision controller must keep its own curve.
   const brakeDistance = v * v / (2 * PERF.bPlan);
   if (dist <= brakeDistance + 1) return ceiling;
   let lo = Math.min(ceiling, OPERATIONS.sectionCruiseMinKmh / 3.6), hi = ceiling;
   for (let i = 0; i < 12; i++) {
     const mid = (lo + hi) / 2;
-    if (sectionEta(dist, v, mid) > budget) lo = mid; else hi = mid;
+    if (sectionEta(dist, v, mid, limits, margin) > budget) lo = mid; else hi = mid;
   }
   return hi;
 }

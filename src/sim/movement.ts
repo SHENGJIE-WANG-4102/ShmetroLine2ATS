@@ -11,8 +11,8 @@ import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
 import { levelAccel, trainLevel } from './energy';
 import { swPos } from './interlocking';
 import { TRACTION_UNITS } from './vehicle';
-import { PERF, brakingSpeed, jerkLimited, tractionAccel, sectionEta, sectionCruise } from './dynamics';
-import { routeLeadsTo } from './ats';
+import { PERF, brakingSpeed, jerkLimited, tractionAccel, sectionEta, sectionCruise, staticLinkLimit, taskPlatformLimit, type SectionLimit } from './dynamics';
+import { routeLeadsTo, distanceToBerthFrom, type TaskPathVisitor } from './ats';
 import type { HaltCode } from './halt';
 import { applyEB } from './onboard';
 import { psdSafe } from './psd';
@@ -80,6 +80,58 @@ export function goalBerth(tr: Train): number {
   return -1;
 }
 
+/** Remaining task-path distance for the arrival budget, independent of MA.
+ * Reuse ARS's physical route-table distance rather than extending the 10Hz
+ * safety scan. Signals/obstacles still constrain the near scan separately.
+ * No cached train state: task/berth/route changes and day rollover take effect
+ * immediately. stopDist retains its existing near-scan meaning for consumers.
+ */
+export function regulationDistance(sim: Sim, tr: Train, visit?: TaskPathVisitor): number {
+  const goal = goalBerth(tr);
+  if (goal < 0) return Infinity;
+  if (stopError(sim, tr) < 0) return 0;
+  return distanceToBerthFrom(sim, tr.link, tr.off, tr.dir, goal, visit);
+}
+
+/** Static head-path limits, extended until the tail clears. No traffic, TSR,
+ * weather or MA is extrapolated into this unhindered arrival-budget profile.
+ * Pure derived data: task/route/body changes and day carry need no cache state. */
+export function regulationProfile(sim: Sim, tr: Train): { distance: number; limits: SectionLimit[] } {
+  const berth = sim.topo.berths[goalBerth(tr)];
+  const goalPlatform = berth?.kind === 'platform' ? berth.platform : -1;
+  const restrictions: { from: number; to: number; limit: number }[] = [];
+  const add = (link: number, from: number, to: number) => {
+    const platformKmh = taskPlatformLimit(sim.topo, sim.topo.links[link].platform, tr.lastStation, goalPlatform) * 3.6;
+    const limit = staticLinkLimit(sim.topo, link, platformKmh);
+    if (limit < PERF.vMax && to + tr.len > 0 && to > from)
+      restrictions.push({ from: Math.max(0, from), to: to + tr.len, limit });
+  };
+  let pathDistance = 0;
+  const distance = regulationDistance(sim, tr, (link, from, to) => {
+    const length = Math.abs(to - from);
+    add(link, pathDistance, pathDistance + length);
+    pathDistance += length;
+  });
+  if (!Number.isFinite(distance) || distance <= 0) return { distance, limits: [] };
+  let behind = 0;
+  for (const body of tr.body) {
+    const length = body.to - body.from;
+    add(body.link, -behind - length, -behind);
+    behind += length;
+  }
+  const cuts = [...new Set([0, distance, ...restrictions.flatMap(s => [s.from, s.to]).filter(d => d > 0 && d < distance)])].sort((a, b) => a - b);
+  const limits: SectionLimit[] = [];
+  for (let i = 1; i < cuts.length; i++) {
+    const start = cuts[i - 1];
+    let limit = PERF.vMax;
+    for (const r of restrictions) if (r.from <= start && r.to > start) limit = Math.min(limit, r.limit);
+    const last = limits.at(-1), length = cuts[i] - start;
+    if (last?.limit === limit) last.length += length;
+    else limits.push({ length, limit });
+  }
+  return { distance, limits };
+}
+
 function obstacle(res: ScanResult, d: number, reason: string, code: HaltCode, hard = false, train = -1) {
   if (d < res.maDist) { res.maDist = Math.max(0, d); res.maReason = reason; res.maCode = code; res.maTrain = train; }
   if (hard && d < res.hardDist) { res.hardDist = Math.max(0, d); res.hardCode = code; }
@@ -145,10 +197,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
   // it enters the platform it is bound for and leaves the one it has just
   // left at the platform stop limit
   const goalPlatform = berth?.kind === 'platform' ? berth.platform : -1;
-  const passing = (pl: number) => pl >= 0 && pl !== goalPlatform && topo.platforms[pl].station !== tr.lastStation;
-  const vPass = OPERATIONS.platformPassKmh / 3.6;
-  const vStop = OPERATIONS.platformStopKmh / 3.6;
-  const platformLimit = (pl: number) => (pl < 0 ? Infinity : passing(pl) ? vPass : vStop);
+  const platformLimit = (pl: number) => taskPlatformLimit(topo, pl, tr.lastStation, goalPlatform);
 
   // body limits & ESP on body
   for (const b of tr.body) {
@@ -679,8 +728,10 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   // Running delay against the arrival plan: the arrival this train makes
   // from here at the current speed limit, compared with the planned arrival.
   const nextStop = tr.tasks[0];
-  if (regulated && tr.phase === 'run' && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(scan.stopDist))
-    tr.delay = sim.t + etaToStop(scan.stopDist, tr.v, Math.max(1, scan.vBody - PERF.atoMargin)) - nextStop.arr;
+  const budgetProfile = regulated && nextStop?.k === 'stop' && nextStop.arr !== null ? regulationProfile(sim, tr) : null;
+  const budgetDistance = budgetProfile?.distance ?? Infinity;
+  if (regulated && tr.phase === 'run' && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance))
+    tr.delay = sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, budgetProfile?.limits, PERF.atoMargin) - nextStop.arr;
   const atoMargin = regulated && tr.delay > 2 ? PERF.atoFastMargin : PERF.atoMargin;
   const stopAt = Math.min(scan.stopDist, scan.maDist);
   // the profile (gradient.ts): gravity on the train, and the height of a point
@@ -727,7 +778,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   consider(tr.maDist, 0, tr.maReason || 'MA终点');
   if (scan.stopDist !== Infinity && scan.stopDist <= scan.maDist) consider(scan.stopDist, 0, '停车点');
   if (regulated && nextStop?.k === 'stop' && nextStop.arr !== null) {
-    vT = Math.min(vT, sectionCruise(scan.stopDist, tr.v, nextStop.arr - sim.t, Math.max(.1, scan.vBody - atoMargin)));
+    vT = Math.min(vT, sectionCruise(budgetDistance, tr.v, nextStop.arr - sim.t, PERF.vMax - atoMargin, budgetProfile?.limits, atoMargin));
   }
   vT = Math.min(vT, vPerm, tr.vCap);
   // standing a few metres short of a signal at stop: ATO does not start into
