@@ -55,8 +55,11 @@
 
 ## 运行图的依据
 
-- 时刻以高德时刻表为准，只认 `scripts/gaode-compare.ts` 里的可信检查列。实拍和录音只用来交叉核对。
-- 淞虹路、蟠祥路不在可信列里，西段晚间以实拍 PIS 为准（`docs/field-2026-10-16-pis.md`）。
+依据按下面的优先级，冲突时上面的赢（用户决定，2026-10-22，D125）：
+
+1. **官方首末班**（`src/data/firstlast.ts`）：必须对上。
+2. **用户实地录音和 PIS 实拍**（`docs/recordings.md`、`docs/field-2026-10-16-pis.md`、`docs/field-calibration-2026-10.md`）：区间时分、停站、运行速度以它为准。
+3. **高德**（`reference/timetable-gaode/`）：只参考各时段开几列车（每 15 分钟车数，`scripts/gaode-compare.ts` 比的就是这个）。高德分钟本身有约 ±30 s 偏差，不拿它定区间时分、停站或运行等级。
 - 没有任务明确要求时，不改运行时分、停站模型和运行等级（`calibration.ts`、`dynamics.ts`、D73/D74），也不改首末班常量（`src/data/firstlast.ts`）。
 
 ## 遇到问题先自己解决，别第一时间丢回给用户
@@ -118,7 +121,7 @@ C. <怎么做>：<效果、影响、代价>
 - 动了运行图，还要跑这三个脚本：
   - `npx tsx scripts/validate-plan.ts weekday` 和 `weekend`：两种日型都要 0 error；
   - `npx tsx scripts/firstlast.ts`：首末班和改前一致，或者偏差在任务允许的范围内；
-  - `npx tsx scripts/gaode-compare.ts`：不合格格数不能比改前多，可信列不能变差。
+  - `npx tsx scripts/gaode-compare.ts`：每 15 分钟车数的不合格格数不能比改前多。
 - 只整理结构、不该改变结果的改动：改前改后各生成一次两种日型的计划，比较 `trips` 和 `blocks` 的哈希，必须完全一致。
 - 动了 ATS / ARS、车载移动、联锁、调度命令、跨日搬运的，单测之外还要后台并行跑一小批随机压测（`scripts/fuzz-day.ts`，含第二天、天气和随机调度操作），0 完整性违例。只跑第一天、不带天气查不出这类问题：2026-10-20 第一天带故障 22 例全过，加上第二天和天气后 12 例里出了 4 例。
 - 不许为了让压测通过去放宽完整性检查的时限、豁免，也不许把现场标成「已知」跳过。
