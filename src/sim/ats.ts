@@ -1284,7 +1284,9 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
     const score = Math.max(0, Math.min(100, Math.round(stopScore(err) * 0.8 + Math.max(0, 20 - 10 * d.releases) - (d.restop ? 30 : 0))));
     rec(tr.retreat ? 0 : score, tr.retreat ? '过标退行' : [oneBrake ? '一把闸' : d.releases ? `缓解${d.releases}次` : '', d.restop ? '二次对标' : ''].filter(Boolean).join(' '));
     sim.log('I', '列车', `列车 ${trainLabel(tr)} 人工驾驶 ${STATIONS[task.station].name} 停车，对标误差 ${err >= 0 ? '欠' : '过'}${Math.abs(err).toFixed(2)} m`);
-    tr.reverser = 0;
+    // a normal stop leaves the reverser in forward; only a finished retreat
+    // parks it at zero so the driver has to select forward explicitly
+    if (tr.reverser === -1) tr.reverser = 0;
     arriveAtBerth(sim, tr, task);
     return;
   }
