@@ -1,15 +1,15 @@
 import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {platformBerth,dayPeriods,OUTER_BAND_MARGIN,TEMPLATES,dwellFactorAt,buildStops,tripTasks} from '../src/sim/timetable';
-import {DOOR_CYCLE, MIN_DWELL, MAX_DWELL_BUSY, plannedDwell, passengerMinimum, RIDERSHIP_TARGET} from '../src/sim/calibration';
+import {DOOR_CYCLE, DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, PLANNED_DOOR_BUDGET, MIN_DWELL, MAX_DWELL_BUSY, plannedDwell, passengerMinimum, RIDERSHIP_TARGET} from '../src/sim/calibration';
 import {RIDE_LOG} from '../src/data/ridelog';
-import {STATIONS} from '../src/data/line2';
+import {OPERATIONS,STATIONS} from '../src/data/line2';
 import {updateTrainTasks,newTrain} from '../src/sim/ats';
 import {releaseRoute} from '../src/sim/interlocking';
 import {computeBody,indexBodies} from '../src/sim/movement';
 import {classify} from '../src/sim/halt';
 import {computeDmi} from '../src/sim/dmi';
-import {trainLevel,LEVEL_LATE,levelAccel} from '../src/sim/energy';
+import {trainLevel,LEVEL_LATE,levelAccel,levelBand} from '../src/sim/energy';
 import {PERF} from '../src/sim/dynamics';
 import {capture,restore} from '../src/sim/state';
 
@@ -17,6 +17,17 @@ const advance=(s:Sim,t:number)=>{const end=s.t+t;while(s.t<end-1e-6)s.step();};
 
 describe('D74 diagram ATO levels',()=>{
  const make=()=>new Sim({dayType:'weekday',dateLabel:'night levels',startTime:14400,seed:1,noPossessions:true});
+ it('retains the former slow-grade whole-line diagram time without the platform stop cap',()=>{
+  const s=make();
+  // Measured with the former 50km/h cap, D74 coasting parameters and uniform 0.16 margin.
+  for(const [level,dn,up] of [[3,4723.7,4720.3],[4,4863.6,4859.7]]){
+   const rt=s.rt.byLevel![level];
+   expect(Math.abs(rt.dn.reduce((a,b)=>a+b,0)-dn),`level ${level} DN`).toBeLessThanOrEqual(10);
+   expect(Math.abs(rt.up.reduce((a,b)=>a+b,0)-up),`level ${level} UP`).toBeLessThanOrEqual(10);
+  }
+  expect(levelBand(1)).toEqual({band:0,lower:0});expect(levelBand(2)).toEqual({band:5/3.6,lower:0});
+  expect(OPERATIONS.runMargin).toBe(.20);
+ });
  it('chooses levels at interval departure, including a trip crossing into the night band',()=>{
   const s=make(),departure=21*3600+39*60+55;
   expect(buildStops(s.planCtx,'DN',0,2,0,true,.95)[0].runLevel).toBe(1); // elapsed-time solver probe, not night service
@@ -99,8 +110,9 @@ function fixture(station:number,delay:number,dwell:number,waiting=0,load=0){
  return {s,tr,p:berth.platform};
 }
 describe('automatic dwell and ATO regulation',()=>{
- it('includes the measured twelve-second closing/start sequence and passenger exchange in the floor',()=>{
-  expect(DOOR_CYCLE).toBe(3+12);expect(MIN_DWELL).toBe(DOOR_CYCLE+7);
+ it('uses the recorded lock and expected random opening/start times with the preserved dwell floor',()=>{
+  expect(DOOR_CLOSE_S).toBeCloseTo(5.7,12);expect(DOOR_CYCLE).toBeCloseTo(1+3+5.7+2.5,12);
+  expect(PLANNED_DOOR_BUDGET).toBe(15);expect(MIN_DWELL).toBe(22);
   expect(passengerMinimum(0,0,false)).toBe(MIN_DWELL);
  });
  it('calibrates the evening sample independently from peak and late-night stops without changing daily demand',()=>{
@@ -122,10 +134,12 @@ describe('automatic dwell and ATO regulation',()=>{
  });
  it('records DEP at wheel start after a dispatcher hold, rather than at door closure',()=>{
   const {s,tr}=fixture(5,0,25);const task=tr.tasks[0];if(task.k!=='stop')throw new Error('fixture stop');task.trip=0;
-  while(tr.phase==='dwell')s.step();tr.hold=true;expect(tr.pendingDeparture).toBeDefined();expect(s.depLog).toHaveLength(0);
+  while(tr.phase==='dwell')s.step();const heldAt=s.t;tr.hold=true;expect(tr.pendingDeparture).toBeDefined();expect(s.depLog).toHaveLength(0);
   advance(s,5);expect(tr.v).toBe(0);expect(s.depLog).toHaveLength(0);
-  tr.hold=false;advance(s,.2);expect(tr.v).toBeGreaterThan(0);expect(s.depLog).toHaveLength(1);
-  expect(s.depLog[0].delay).toBeGreaterThanOrEqual(5);
+  const releasedAt=s.t;tr.hold=false;advance(s,.2);expect(tr.v).toBeGreaterThan(0);expect(s.depLog).toHaveLength(1);
+  expect(releasedAt-heldAt).toBeCloseTo(5,5);
+  expect(s.depLog[0].t).toBeGreaterThan(releasedAt);
+  expect(s.depLog[0].delay).toBeCloseTo(s.depLog[0].t-task.dep!,8);
  });
  it('keeps the peak passenger minimum and recovers at following stops',()=>{
   const {s,tr}=fixture(12,7,30,1300,1900);const minimum=tr.dwellUntil-s.t;
@@ -133,13 +147,18 @@ describe('automatic dwell and ATO regulation',()=>{
   const atDeparture=tr.delay;
   let departures=0,phase=tr.phase;const until=s.t+1000;
   while(s.t<until&&departures<3){s.step();if(phase==='dwell'&&tr.phase==='run')departures++;phase=tr.phase;}
-  expect(departures).toBe(3);expect(tr.delay).toBeLessThan(atDeparture);expect(Math.abs(tr.delay)).toBeLessThan(1);
+  expect(departures).toBe(3);expect(tr.delay).toBeLessThan(atDeparture);expect(tr.delay).toBeGreaterThanOrEqual(DOOR_CLOSE_S + OPERATIONS.autoStartDelay[0] - PLANNED_CLOSE_BUDGET);
+  expect(tr.delay).toBeLessThan(1);
   expect(s.integrity.violations).toHaveLength(0);
  });
  it('does not give 047-2006 a long LAYOVER at 世纪大道 while seven seconds early',()=>{
   const {s,tr}=fixture(16,-7,25,80,500);tr.svc='047';tr.tripNo='2006';
+  const task=tr.tasks[0];if(task.k!=='stop')throw new Error('fixture stop');task.trip=0;
   expect(tr.dwellUntil-s.t).toBeCloseTo(32,1);expect(classify(s,tr).code).toBe('DWELL');
-  advance(s,32.2);expect(tr.phase).toBe('run');expect(Math.abs(tr.delay)).toBeLessThan(.3);
+  advance(s,32.2);expect(tr.phase).toBe('run');
+  const departure=s.depLog.find(d=>d.st===16)!;expect(departure).toBeDefined();
+  expect(departure.delay).toBeGreaterThanOrEqual(DOOR_CLOSE_S+OPERATIONS.autoStartDelay[0]-PLANNED_CLOSE_BUDGET);
+  expect(departure.delay).toBeLessThanOrEqual(DOOR_CLOSE_S+OPERATIONS.autoStartDelay[1]-PLANNED_CLOSE_BUDGET+.2);
  });
  it('caps early platform regulation at ten seconds and keeps ATP speed supervision',()=>{
   const {s,tr}=fixture(5,-60,25,0,0);expect(tr.dwellUntil-s.t).toBeCloseTo(35,1);

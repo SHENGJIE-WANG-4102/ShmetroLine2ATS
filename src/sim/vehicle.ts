@@ -96,11 +96,11 @@ export function doorCloseHold(sim: Sim, tr: Train): boolean {
 }
 
 /** when the train is ready to leave: a brake that does not release keeps it (true = hold) */
-export function departureHold(sim: Sim, tr: Train): boolean {
+export function departureHold(sim: Sim, tr: Train, activate = true): boolean {
   const f = tr.vfault;
   if (f?.kind === 'door' && f.stage !== 'armed') return true;
   if (!f || f.kind !== 'brake') return false;
-  if (f.stage === 'armed') {
+  if (activate && f.stage === 'armed') {
     f.stage = 'stuck';
     f.until = sim.t + BRAKE_RELEASE_TRY;
     sim.log('B', '列车', `列车 ${trainLabel(tr)} 在${stationHere(tr)}发车时第${f.car}车制动不缓解，司机处置中`, { key: `vb-${tr.id}`, train: tr.id });

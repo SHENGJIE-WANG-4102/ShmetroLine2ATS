@@ -17,6 +17,7 @@ import { PERF } from '../src/sim/dynamics';
 import { platformBerth } from '../src/sim/timetable';
 import { platformSide } from '../src/sim/ats';
 import type { Train } from '../src/sim/model';
+import { DOOR_CLOSE_S } from '../src/sim/calibration';
 import { closeDoors } from '../src/sim/psd';
 import { updateTrainTasks } from '../src/sim/ats';
 
@@ -136,7 +137,7 @@ describe('manual driving', () => {
 });
 
 describe('driver doors and the acceleration limit', () => {
-  it('CM departs 20 seconds early after actual lock confirmation and records one negative-delay departure', () => {
+  it('CM departs after the 5.7s lock sequence after actual lock confirmation and records one negative-delay departure', () => {
     const sim=makeSim('weekday',H),tr=dwellingDN(sim);
     const stop=tr.tasks[0];expect(stop.k).toBe('stop');if(stop.k!=='stop')return;
     const p=sim.topo.berths[stop.berth].platform;
@@ -144,12 +145,12 @@ describe('driver doors and the acceleration limit', () => {
     expect(closeDoors(sim,tr,p)).toBe(0);
     expect(sim.command({c:'manual',train:tr.id,mode:'CM'}).ok).toBe(true);
     sim.drive(tr.id,4);
-    runFor(sim,11);expect(tr.v).toBe(0);expect(tr.phase).toBe('dwell');
+    runFor(sim,DOOR_CLOSE_S-.2);expect(tr.v).toBe(0);expect(tr.phase).toBe('dwell');
     expect(computeDmi(sim,tr.id)?.trainDoor).toBe('closing');
-    runFor(sim,4);expect(tr.v).toBeGreaterThan(0);expect(tr.delay).toBeLessThan(-16);
+    runFor(sim,1);expect(tr.v).toBeGreaterThan(0);expect(tr.delay).toBeLessThan(-24);
     expect(computeDmi(sim,tr.id)?.trainDoor).toBe('closed');
     const early=()=>sim.events.filter(e=>e.code==='EARLY_DEPARTURE'&&e.train===tr.id);
-    expect(early()).toHaveLength(1);expect(early()[0].text).toMatch(/早发 (19|20) 秒/);
+    expect(early()).toHaveLength(1);expect(early()[0].text).toMatch(/早发 (26|27) 秒/);
     expect(sim.depLog.at(-1)?.delay).toBeLessThan(0);
     expect(tr.departureDisplay).toBeDefined();
     const deadline=sim.t+20;
@@ -215,7 +216,7 @@ describe('driver doors and the acceleration limit', () => {
     expect(sim.command({ c: 'door', train: tr.id, side }).ok).toBe(true);
     expect(tr.doorsOpen).toBe(true);
     expect(tr.doorMotion?.kind).toBe('closing');
-    // the closing sequence takes DOOR_CYCLE - 3 (12 s, D73) before the start
+    // Closing uses the shared recorded warning + mechanism sequence (5.7 s).
     runFor(sim, 15, check);
     expect(tr.doorsOpen).toBe(false);expect(sim.plat[p].psd).toBe('closed');
     expect(tr.phase).toBe('run');

@@ -17,7 +17,7 @@ import { updateHalts, rootCause } from '../src/sim/halt';
 import { platformBerth, tripTasks, addTurnback, blockTasks, turnbackAt, validatePlan } from '../src/sim/timetable';
 import { predictedLateness, RELIEF_DELAY } from '../src/sim/standby';
 import { OPERATIONS } from '../src/data/line2';
-import { MIN_DWELL } from '../src/sim/calibration';
+import { MIN_DWELL, DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET } from '../src/sim/calibration';
 import { doorMotionTick } from '../src/sim/psd';
 import { makeSim } from './helpers';
 
@@ -335,8 +335,8 @@ describe('movement and radio regressions', () => {
       }
       if (arrival && current.dir===1 && tr.v>0.05 && tr.tasks[0]?.k==='stop' && tr.tasks[0].station===7) departure=sim.t;
     }
-    expect(arrival).toBeGreaterThan(0);expect(departure-arrival).toBeGreaterThanOrEqual(120-0.2);
-    expect(departure-arrival).toBeLessThan(125);
+    expect(arrival).toBeGreaterThan(0);expect(departure-arrival).toBeGreaterThanOrEqual(120 - PLANNED_CLOSE_BUDGET + DOOR_CLOSE_S + OPERATIONS.autoStartDelay[0] - .2);
+    expect(departure-arrival).toBeLessThan(120 - PLANNED_CLOSE_BUDGET + DOOR_CLOSE_S + OPERATIONS.autoStartDelay[1] + .5);
     expect(sim.passengersServed).toBeGreaterThanOrEqual(1000);
     expect(sim.integrity.violations).toHaveLength(0);
   });
@@ -974,7 +974,8 @@ describe('paper-based turnback and depot procedures', () => {
     const tr = sim.trainList.find(t => t.link === berth.link) ?? sim.trainList[0];
     const platform = sim.topo.berths.find(b => b.station === 0 && b.kind === 'platform' && b.dir === 1)!;
     tr.link = berth.link; tr.off = berth.offset; tr.dir = berth.dir; tr.hist = [{ link: berth.link, dir: berth.dir }];
-    tr.v = 0; tr.phase = 'reversing'; tr.dwellUntil = sim.t; tr.tbStage = 'arrive';
+    // This fixture starts after the driver's change of ends; it exercises the signal/RM procedure.
+    tr.v = 0; tr.phase = 'reversing'; tr.phaseSince = sim.t - OPERATIONS.atoEndChange; tr.dwellUntil = sim.t; tr.tbStage = 'arrive';
     tr.forceLevel = 'TBTC'; tr.block = -1; tr.tripId = -1;
     tr.tasks = [{ k: 'reverse', berths: [berth.id], chosen: berth.id, station: 0, minTime: 0 },
       { k: 'stop', berth: platform.id, station: 0, trip: -1, arr: null, dep: sim.t + 300, doors: false, revenue: false }];

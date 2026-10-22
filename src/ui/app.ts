@@ -535,6 +535,16 @@ export class App {
     }, { passive: false });
     canvas.addEventListener('pointerleave', () => this.hover(null));
     window.addEventListener('keydown', (e) => this.onKey(e));
+    window.addEventListener('keyup', e => { const key = e.key.toLowerCase(); if (key === 'f' || key === 'g') this.releaseAto(key); });
+    window.addEventListener('blur', () => this.releaseAto());
+  }
+
+  private atoKeys = new Map<'f' | 'g', number>();
+  private releaseAto(key?: 'f' | 'g') {
+    for (const [button, train] of this.atoKeys) if (!key || key === button) {
+      this.store.command({ c: 'atoButton', train, button, down: false });
+      this.atoKeys.delete(button);
+    }
   }
 
   private onKey(e: KeyboardEvent) {
@@ -551,9 +561,23 @@ export class App {
     // manual driving of the selected train
     const sel = this.store.selection;
     const tr = sel?.kind === 'train' ? this.store.snap?.trains.find((t) => t.id === sel.id) : undefined;
+    const key = e.key.toLowerCase();
+    if (tr?.atoDriver && (key === 'f' || key === 'g')) {
+      e.preventDefault();
+      if (!e.repeat) {
+        this.atoKeys.set(key, tr.id);
+        this.store.command({ c: 'atoButton', train: tr.id, button: key, down: true });
+      }
+      return;
+    }
     if (tr?.manual) {
       let n: number | null = null;
       const k = e.key.toLowerCase();
+      if (['j', 'k', 'l'].includes(k) && !e.repeat) {
+        e.preventDefault();
+        this.store.command({ c: 'reverser', train: tr.id, position: k === 'j' ? -1 : k === 'k' ? 0 : 1 }).then(r => toast(r.msg, r.ok));
+        return;
+      }
       // single master controller, JRETS layout: Z power / release, Q brake, S neutral, E emergency
       const up = e.key === 'ArrowUp' || k === 'z';
       if (up) n = Math.min(4, tr.notch + 1);

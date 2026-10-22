@@ -40,6 +40,8 @@ export const SCALARS = [
   'nextCallId', 'autoRadio', 'autoDispatch', 'atoLine', 'scenarioFired', 'holidayFired', 'runLevel', 'randomLevel', 'nextRandomAt', 'nextBookmarkId', 'planRev',
 ] as const;
 
+/** Train-owned state (doors, reverser, retreat, ATO buttons, DMI sequence) carries
+ * with trains; their clocks are shifted by carryTrain, without Sim top-level fields. */
 /** Every checkpoint field must explicitly declare its operating-day ownership. */
 export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number], 'carry' | 'daily'> = {
   sw: 'carry',
@@ -111,7 +113,13 @@ function cloneTrain(tr: Train): Train {
     body: tr.body.map((b) => ({ ...b })),
     tasks: tr.tasks.slice(),
     departureDisplay: tr.departureDisplay && { ...tr.departureDisplay },
+    doorExchange: tr.doorExchange && { ...tr.doorExchange },
     doorMotion: tr.doorMotion && { ...tr.doorMotion },
+    recentBody: tr.recentBody?.map(b => ({ ...b })),
+    retreat: tr.retreat && { ...tr.retreat },
+    atoButtons: tr.atoButtons && { ...tr.atoButtons },
+    dmiQueue: tr.dmiQueue?.map(m => ({ ...m })),
+    dmiContext: tr.dmiContext && { ...tr.dmiContext },
     skipStations: new Set(tr.skipStations),
     trace: [],
     drv: { ...tr.drv, stops: tr.drv.stops.slice() },

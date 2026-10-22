@@ -1,7 +1,8 @@
 /** Calibrated service assumptions; factual sources are recorded in D29–D31. */
 import type { DayType, TrackDir } from './model';
 import { dayRandom } from './dayRandom';
-import { STATIONS } from '../data/line2';
+import { DOOR_REFERENCE_TIMING } from '../data/doorbank';
+import { OPERATIONS, STATIONS } from '../data/line2';
 export const RIDERSHIP_TARGET = { weekday: 1_090_000, weekend: 1_090_000 * 0.7 };
 /** 【假设】每日目标在中心值的 ±5% 内均匀抽取，两种日型共用规则。 */
 export const RIDERSHIP_RANGE = Object.fromEntries(Object.entries(RIDERSHIP_TARGET).map(([day,center])=>[day,{min:Math.round(center*.95),max:Math.round(center*1.05)}])) as Record<DayType,{min:number;max:number}>;
@@ -17,8 +18,16 @@ export function inPeakSection(day: DayType, station: number, t: number): boolean
  return day===PEAK_SECTION.day && station>=id(PEAK_SECTION.from) && station<=id(PEAK_SECTION.to)
   && PEAK_SECTION.hours.some(([a,b])=>h>=a && h<b);
 }
-export const DOOR_CYCLE = 15; // 【假设】 stop/open 3 s + measured closing warning → start 12 s (D73)
-export const MIN_DWELL = 22; // door cycle + minimum 7 s passenger exchange (D73)
+/** One physical clock shared by simulation, PSD, DMI and audio. */
+export const DOOR_CLOSE_S = DOOR_REFERENCE_TIMING.warningToMotionS + DOOR_REFERENCE_TIMING.motionToLockedS;
+export const meanRange = (r: readonly [number, number]) => (r[0] + r[1]) / 2;
+export const DOOR_CYCLE = meanRange(OPERATIONS.autoDoorOpenDelay) + DOOR_REFERENCE_TIMING.openingS
+  + DOOR_CLOSE_S + meanRange(OPERATIONS.autoStartDelay);
+/** D73图定停站原值保留：旧门序列预算15秒，关门至起车预算12秒。
+ * 物理门序列用区间期望12.2秒；差额2.8秒留作原图定客流作业余量。 */
+export const PLANNED_DOOR_BUDGET = 15; // D73图定门作业预算，D119保持
+export const PLANNED_CLOSE_BUDGET = 12;
+export const MIN_DWELL = 22; // D73保留的停站下限；物理门序列改用DOOR_CYCLE期望值
 export const MAX_EARLY_HOLD = 10;
 export const MAX_DWELL_BUSY = 85; // 【假设】 peak ceiling, calibrated against fleet counts (D73)
 export const MAX_DWELL = 70;
@@ -57,7 +66,7 @@ export function plannedDwell(day: DayType, station: number, dir: TrackDir, t: nu
  const exchange=rawDemand(day,station,dir,t);
  // 【假设】 fixed door time is present all day; only passenger exchange scales.
  return Math.max(MIN_DWELL, Math.min(busy ? MAX_DWELL_BUSY : MAX_DWELL,
-  DOOR_CYCLE + ((busy ? 32 : 27) + exchange * 8) * factor));
+  PLANNED_DOOR_BUDGET + ((busy ? 32 : 27) + exchange * 8) * factor));
 }
 export function passengerMinimum(board: number, alight: number, crowded: boolean, surge=1): number {
  const rate=DOORS_PER_SIDE*EXCHANGE_PER_DOOR*(crowded?.75:1);

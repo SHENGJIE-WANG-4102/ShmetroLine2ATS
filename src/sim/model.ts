@@ -261,6 +261,7 @@ export interface Train {
   /** manual driving: stopped at the mark, waiting for the driver to open the doors */
   doorsAwait: boolean;
   arrivedAt: number;
+  /** Passenger work plus physical door-cycle minimum; independent of timetable positioning holds. */
   depReadyAt: number;
   /** Door cycle complete; DEP is recorded only when wheels start. */
   pendingDeparture?: StopTask;
@@ -313,6 +314,19 @@ export interface Train {
   relievedBy?: string;
   /** psd bypass extra dwell */
   extraDwell: number;
+  /** Train-owned carry state; clocks are shifted by carryTrain. */
+  autoOpenAt?: number;
+  /** Passenger allocation waiting for physical opening; carries with the train. */
+  doorExchange?: { board: number; alight: number };
+  autoStartAt?: number;
+  atoDriver?: boolean;
+  atoButtons?: { f: boolean; g: boolean };
+  reverser?: -1 | 0 | 1;
+  recentBody?: BodySeg[];
+  retreat?: { distance: number; authorised: boolean };
+  dmiQueue?: { at: number; message: 'active' | 'located' | 'available' }[];
+  dmiContext?: { task: string; cab: number };
+  dmiCab?: number;
   // manual driving (人工驾驶接管)
   manual: boolean;
   /** master controller: -7..-1 brake, 0 coast, 1..4 traction; -8 = driver emergency brake */
@@ -573,7 +587,9 @@ export type Command =
   | { c: 'trainMaintenance'; fault: number }
   | { c: 'sectionBlock'; sections: number[]; on: boolean }
   | { c: 'switchBlock'; sw: number; on: boolean }
-  | { c: 'manual'; train: number; mode: 'CM' | 'RM' | 'AUTO' }
+  | { c: 'manual'; train: number; mode: 'CM' | 'RM' | 'AM' | 'AUTO' }
+  | { c: 'reverser'; train: number; position: -1 | 0 | 1 }
+  | { c: 'atoButton'; train: number; button: 'f' | 'g'; down: boolean }
   | { c: 'radio'; call: number; option: string }
   | { c: 'radioAuto'; on: boolean }
   | { c: 'env'; wind?: number; rain?: boolean; duration: number }
@@ -679,6 +695,9 @@ export interface TrainSnap {
   a: number;
   manual: boolean;
   notch: number;
+  atoDriver?: boolean;
+  reverser?: -1 | 0 | 1;
+  doorEnable?: { L: boolean; R: boolean };
   dwellLeft: number;
   nextStation: number;
   /** Upcoming passenger call is bypassed by train/platform skip-stop; UI audio only. */

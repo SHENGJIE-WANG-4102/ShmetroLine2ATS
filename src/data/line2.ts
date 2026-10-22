@@ -568,15 +568,26 @@ export const OPERATIONS = {
   /** a train passing a platform without stopping (跨站/跳停) runs through it at no more than this (km/h) */
   platformPassKmh: 45,
   /** a train entering or leaving a platform it stops at runs at no more than this (km/h) */
-  platformStopKmh: 50,
+  platformStopKmh: Infinity, // 用户决定：停站列车进出站均不另设平台限速
+  /** 【用户观察】停稳到自动开门，每站按种子抽取（秒）。 */
+  autoDoorOpenDelay: [0.5, 1.5] as const,
+  /** 【假设，用户未定】人工退行限速。 */
+  reverseKmh: 5,
+  /** 【假设】库线未建模，以各段出段信号前5米、±1米代替试验库线。 */
+  depotDoorTests: { BZL: { beforeSignal: 5 }, LYD: { beforeSignal: 5 }, CSD: { beforeSignal: 5 } } as Record<string, { beforeSignal: number }>,
   /** planned run time margin over the minimum ATO run between stations */
-  runMargin: 0.16,
+  runMargin: 0.20,
+  // 【假设】沿用原ATS试探规则的12km/h，避免用极低速消耗富余；非ATP最低速度。
+  sectionCruiseMinKmh: 12,
+  passRunMargin: 0.16, // 通过站速度仍45km/h，沿用通过走行余量
+  /** 【用户观察】锁闭后起步，AM自动确认与DTO共用，不叠加延时。 */
+  autoStartDelay: [1.5, 3.5] as const,
   /** ATO with a driver (DTO degraded / ATO operation): change of ends at a
    *  turnback, on top of the unattended DTO reversal (s) 【假设】 */
   atoEndChange: 45,
   /** ATO with a driver: departure after the doors close waits for the driver's
    *  ATO start button (s) 【假设】 */
-  atoStartDelay: 3,
+
 };
 
 /**

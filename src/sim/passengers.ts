@@ -7,6 +7,7 @@ import type { Sim } from './engine';
 import type { StopTask, Train } from './model';
 import { STATIONS, LINE_INFO } from '../data/line2';
 import { callCrowd } from './radio';
+import { ahead } from './topology';
 
 import { boardingDemand, inPeakSection, passengerMinimum } from './calibration';
 
@@ -87,32 +88,49 @@ export function passengersTick(sim: Sim, dt: number) {
   }
 }
 
-/** board/alight at a stop; returns the dwell (s) needed for the exchange */
-export function boardAndAlight(sim: Sim, tr: Train, platform: number, task: StopTask): number {
+/** Pure exchange allocation, captured when stopping and applied only once doors open. */
+export function planPassengerExchange(sim: Sim, tr: Train, platform: number, task: StopTask): { board: number; alight: number } {
   const { topo } = sim;
   const p = topo.platforms[platform];
   const ps = sim.plat[p.pool ?? platform];
   const st = p.station;
-  const dirDN = p.track === 'DN';
+  const direction = p.track === 'DN' ? 'DN' : 'UP';
   // alighting share: this station's weight among this and the remaining stations
   // (a trip with a stopping pattern: among the stations it still stops at)
   let rem = 0;
   const trip = task.trip >= 0 ? sim.plan.trips[task.trip] : undefined;
   if (trip?.revenue && trip.stops.some((x) => !x.stop)) {
-    for (const x of trip.stops) if (x.stop && (dirDN ? x.st >= st : x.st <= st)) rem += STATIONS[x.st].demand;
-  } else for (let i = st; dirDN ? i < STATIONS.length : i >= 0; i += dirDN ? 1 : -1) rem += STATIONS[i].demand;
+    for (const x of trip.stops) if (x.stop && (x.st === st || ahead(direction, st, x.st))) rem += STATIONS[x.st].demand;
+  } else {
+    const onward = STATIONS.map((_, i) => i).filter(i => i === st || ahead(direction, st, i));
+    if (direction === 'UP') onward.reverse();
+    for (const i of onward) rem += STATIONS[i].demand;
+  }
   const isEnd = task.dep === null;
   const alightFrac = isEnd ? 1 : Math.min(1, (STATIONS[st].demand / Math.max(0.1, rem)));
   const alight = Math.round(tr.load * alightFrac);
+  const remainingLoad = tr.load - alight;
+  const board = !isEnd && task.revenue && !task.noBoard
+    ? Math.max(0, Math.min(Math.floor(ps.waiting), LINE_INFO.crushCapacity - remainingLoad)) : 0;
+  return { board, alight };
+}
+
+export function exchangeDwell(sim: Sim, tr: Train, platform: number, exchange: { board: number; alight: number }): number {
+  const p = sim.topo.platforms[platform];
+  return passengerMinimum(exchange.board, exchange.alight,
+    tr.load - exchange.alight + exchange.board > LINE_INFO.capacity * .95, sim.plat[p.pool ?? platform].surge);
+}
+
+/** Commit the prepared exchange when the actual doors open; no exchange occurs while closed. */
+export function boardAndAlight(sim: Sim, tr: Train, platform: number, task: StopTask,
+  prepared = planPassengerExchange(sim, tr, platform, task)): number {
+  const p = sim.topo.platforms[platform], st = p.station, ps = sim.plat[p.pool ?? platform];
+  const alight = Math.min(tr.load, prepared.alight);
   tr.load -= alight;
-  let board = 0;
-  if (!isEnd && task.revenue && !task.noBoard) {
-    const room = Math.max(0, LINE_INFO.crushCapacity - tr.load);
-    board = Math.max(0, Math.min(Math.floor(ps.waiting), room));
-    ps.waiting -= board;
-    tr.load += board;
-    ps.stranded = Math.floor(ps.waiting);
-  }
+  const board = Math.max(0, Math.min(prepared.board, Math.floor(ps.waiting), LINE_INFO.crushCapacity - tr.load));
+  ps.waiting -= board;
+  tr.load += board;
+  ps.stranded = Math.floor(ps.waiting);
   sim.passengersServed += board;
   sim.metrics.boarded = (sim.metrics.boarded ?? 0) + board;
   const hour = Math.min(27, Math.floor(sim.t / 3600));

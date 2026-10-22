@@ -333,8 +333,9 @@ export class Dmi {
     }
     // door enable (CM: the ATP enables the platform side of a train stopped at
     // its mark; RM has none) — a green arrow on that side of the door icon
-    if (t.manual && t.mode === 'CM' && t.platSide && (t.doorsAwait || t.doors)) {
-      const left = t.platSide === 'L';
+    if (t.manual && t.mode === 'CM') for (const side of ['L', 'R'] as const) {
+      if (!t.doorEnable?.[side]) continue;
+      const left = side === 'L';
       const ax = left ? 404 : 506;
       c.fillStyle = C.green;
       c.beginPath();

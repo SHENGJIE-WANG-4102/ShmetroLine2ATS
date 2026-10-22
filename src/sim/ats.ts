@@ -13,13 +13,13 @@ import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute
 import { computeBody, reverseTrain, goalBerth, stopError, moveBack, rescueRouteReady } from './movement';
 import { takeVehicle, putVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
-import { applyEB, grantRM, setMode, distToNextSignal } from './onboard';
-import { openDoors, closeDoors, psdSafe } from './psd';
+import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell } from './onboard';
+import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
 import { blockTasks, tripTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/line2';
-import { boardAndAlight, boardWhileOpen } from './passengers';
+import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
 import { dmiNote } from './dmi';
-import { DOOR_CYCLE, MIN_DWELL, regulatedDwell } from './calibration';
+import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRange } from './calibration';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, type ArsWait, type HaltCode } from './halt';
 import { standsAt } from './operatingDay';
@@ -782,35 +782,41 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
 
   if (tr.phase === 'dwell') {
     const st = task as StopTask;
+    // Arrival delay remains meaningful until a departure actually becomes late.
+    // The same departure-clock update applies to every driving mode and hold.
+    if (st.dep !== null && sim.t > st.dep) tr.delay = sim.t - st.dep;
     const p = topo.berths[st.berth].platform;
     const ps = sim.plat[p];
     if (ps.esp) { tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + 1); return; }
     // handed back to automatic driving before the driver opened: open now
-    if (tr.doorsAwait && !tr.manual) startDoorCycle(sim, tr, st, p, tr.mode === 'RM');
+    if (tr.doorsAwait && !tr.manual && sim.t >= (tr.autoOpenAt ?? 0)) startDoorCycle(sim, tr, st, p, tr.mode === 'RM');
     if (!tr.manual && tr.doorsOpen) tr.doorSide = '';
     // doors open (closeDoors clears doorsOpen once closing starts): late arrivals keep boarding
     const closing = tr.doorMotion?.kind === 'closing';
     if (tr.doorsOpen && !tr.doorsAwait && !closing) boardWhileOpen(sim, tr, p, st, dt);
     // 站台折返: alighting done, the train changes ends with its doors open
-    if (tr.doorsOpen && !tr.doorsAwait && platformTurn(tr, st) && sim.t >= tr.dwellUntil - (DOOR_CYCLE - 3)) { turnOnPlatform(sim, tr, st); return; }
+    if (tr.doorsOpen && !tr.doorsAwait && platformTurn(tr, st) && sim.t >= tr.dwellUntil - PLANNED_CLOSE_BUDGET) { turnOnPlatform(sim, tr, st); return; }
     // the driver works the doors (driverDoor) and leaves once they are closed and locked
     if (tr.doorsAwait || tr.doorSide) return;
     const held = tr.hold || ps.hold;
     if (held) return;
-    // Closing and lock confirmation are part of the displayed stop. Normal
-    // doors close five seconds before zero; faults may extend that countdown.
+    // Keep the original diagram closing slot; the shorter physical sequence
+    // releases early, and ATS spends that gain in the next section.
     const closeExtra = ps.psd === 'bypass' ? BYPASS_EXTRA : ps.psdLinkFault || ps.psd === 'pslOpen' ? PSL_EXTRA : 0;
-    tr.intervalWait = tr.manual || sim.t >= tr.dwellUntil - (DOOR_CYCLE - 3) - closeExtra ? intervalDepartureHold(sim, tr, st) : undefined;
+    const closeAt = Math.max(tr.dwellUntil - PLANNED_CLOSE_BUDGET - closeExtra,
+      tr.depReadyAt - DOOR_CLOSE_S - meanRange(OPERATIONS.autoStartDelay) - closeExtra);
+    tr.intervalWait = tr.manual || sim.t >= closeAt ? intervalDepartureHold(sim, tr, st) : undefined;
     if (tr.intervalWait) return;
     if (closing) return;
-    if (tr.doorsOpen && !tr.manual && sim.t >= tr.dwellUntil - (DOOR_CYCLE - 3) - closeExtra) {
+    if (tr.doorsOpen && !tr.manual && sim.t >= closeAt) {
       // a car door that does not close (vehicle.ts)
       if (st.doors && doorCloseHold(sim, tr)) return;
       const extra = closeDoors(sim, tr, p);
       if (extra < 0) return;
-      tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + (DOOR_CYCLE - 3) + extra);
+      tr.dwellUntil = Math.max(sim.t + DOOR_CLOSE_S + extra, tr.autoStartAt ?? 0);
     }
     if (tr.doorsOpen || !psdSafe(ps) || sim.t < (tr.manual ? tr.doorLockedAt ?? 0 : tr.dwellUntil)) return;
+    if (!tr.manual && !tr.atoDriver && sim.t < (tr.autoStartAt ?? 0)) return;
     // turning back beyond the platform: wait here while every tail is taken —
     // following a train into an occupied tail locks both in (CBTC would allow it)
     const nx = tr.tasks[1];
@@ -822,7 +828,9 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     }
     // a brake that does not release, a door being dealt with (vehicle.ts)
     if (departureHold(sim, tr)) return;
+    if (tr.atoDriver && (!atoStartReady(sim, tr).ready || !tr.atoButtons?.f || !tr.atoButtons?.g)) return;
     // depart
+    tr.atoButtons = { f: false, g: false };
     tr.intervalWait = undefined;
     tr.intervalRelease = undefined;
     const remaining = stopError(sim, tr);
@@ -847,7 +855,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     setTurnbackStage(sim, tr, tr.level === 'TBTC' ? 'manual' : 'depart');
     tr.tbExitSig = tr.tbStage === 'manual' ? signalAheadFrom(sim, tr.link, tr.off, tr.dir, 500)?.sig ?? -1 : -1;
     tr.tbCallAt = 0;
-    dmiNote(sim, tr, 'DMI激活'); // cab change: the DMI at the new leading end activates
+    tr.dmiCab = (tr.dmiCab ?? 0) + 1;
     tr.phase = 'run';
     tr.phaseSince = sim.t;
     setTripFromTasks(sim, tr);
@@ -873,6 +881,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     tr.phase = 'dwell';
     tr.phaseSince = sim.t;
     tr.arrivedAt = sim.t;
+    tr.atoButtons = { f: false, g: false };
     tr.lastStation = task.station;
     tr.stopsMade++;
     ps.lastArr = sim.t;
@@ -898,10 +907,12 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
         complete(prev, end.arr);
     }
     recordTrace(sim, tr, true);
-    if (tr.manual && stopNeedsDoors(tr, task) && !tr.doorsOpen) {
-      // the driver opens the doors (driverDoor); until then the countdown shows the plan
+    if (stopNeedsDoors(tr, task) && !tr.doorsOpen) {
+      tr.autoOpenAt = tr.manual ? undefined : sim.t + OPERATIONS.autoDoorOpenDelay[0] + sim.rng() * (OPERATIONS.autoDoorOpenDelay[1] - OPERATIONS.autoDoorOpenDelay[0]);
+      // Prepare the final target now; only physical opening is delayed.
       tr.doorsAwait = true;
-      tr.dwellUntil = tr.depReadyAt = Math.max(sim.t + (task.minDwell ?? MIN_DWELL), task.dep ?? 0);
+      if (tr.manual) tr.dwellUntil = tr.depReadyAt = Math.max(sim.t + (task.minDwell ?? MIN_DWELL), task.dep ?? 0);
+      else prepareDoorCycle(sim, tr, task, p, tr.mode === 'RM');
       return;
     }
     startDoorCycle(sim, tr, task, p, tr.mode === 'RM');
@@ -912,7 +923,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     tr.phase = 'reversing';
     tr.phaseSince = sim.t;
     // DTO reverses unattended; with a driver (ATO / TBTC backup) the driver changes ends
-    tr.dwellUntil = sim.t + task.minTime + (tr.mode === 'DTO' ? 0 : OPERATIONS.atoEndChange);
+    tr.dwellUntil = sim.t + turnbackDwell(tr.mode, task.minTime);
     tr.lastStation = task.station;
     // reversed at a platform track: the next departure here leaves from it
     // (set now: the pull-out route is taken from tasks[1] while reversing)
@@ -967,11 +978,11 @@ function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
   setTurnbackStage(sim, tr, tr.level === 'TBTC' ? 'manual' : 'depart');
   tr.tbExitSig = tr.tbStage === 'manual' ? signalAheadFrom(sim, tr.link, tr.off, tr.dir, 500)?.sig ?? -1 : -1;
   tr.tbCallAt = 0;
-  dmiNote(sim, tr, 'DMI激活');
+  tr.dmiCab = (tr.dmiCab ?? 0) + 1;
   setTripFromTasks(sim, tr);
   arriveAtBerth(sim, tr, tr.tasks[0]);
   // no departure before the driver is in the other cab
-  tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + rev.minTime + (tr.mode === 'DTO' ? 0 : OPERATIONS.atoEndChange));
+  tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + turnbackDwell(tr.mode, rev.minTime));
 }
 
 /** the stop has a door cycle: passengers, or a clear-out (清客) */
@@ -983,46 +994,43 @@ function stopNeedsDoors(tr: Train, task: StopTask): boolean {
  * Doors open at a stop: passenger exchange and the dwell to the departure.
  * `noLink`: RM, no signalling door enable or PSD linkage (PSD from the PSL).
  */
-function startDoorCycle(sim: Sim, tr: Train, task: StopTask, p: number, noLink = false) {
+function prepareDoorCycle(sim: Sim, tr: Train, task: StopTask, p: number, noLink = false) {
   const ps = sim.plat[p];
+  const began = sim.t;
+  tr.doorExchange = task.doors ? planPassengerExchange(sim, tr, p, task) : undefined;
+  let dwell = task.doors ? Math.max(task.minDwell ?? MIN_DWELL, exchangeDwell(sim, tr, p, tr.doorExchange!))
+    : !task.revenue && tr.load > 0 ? Math.max(task.minDwell ?? 60, 60) : 10;
+  if (task.minDwell) dwell = Math.max(dwell, task.minDwell);
+  if (stopNeedsDoors(tr, task) && !tr.doorsOpen) dwell += doorOpenExtra(sim, p, noLink);
+  if (task.doors) dwell += tr.doorsCut * DOOR_CUT_DWELL;
+  if (tr.extraDwell > 0) { dwell += tr.extraDwell; tr.extraDwell = 0; }
+  const closeExtra = task.doors ? (ps.psd === 'bypass' ? BYPASS_EXTRA : ps.psdLinkFault || noLink ? PSL_EXTRA : 0) : 0;
+  dwell += closeExtra;
+  let ready = began + dwell;
+  if (task.dep !== null && task.arr !== null && task.dep > task.arr && task.revenue)
+    ready = began + regulatedDwell(task.dep - task.arr, dwell, began - task.arr);
+  else if (task.dep !== null) ready = Math.max(ready, task.dep, began + 20);
+  tr.dwellUntil = ready;
+  tr.depReadyAt = began + dwell;
+}
+
+/** Opening commits the exchange prepared at standstill; it never moves the departure target. */
+function startDoorCycle(sim: Sim, tr: Train, task: StopTask, p: number, noLink = false) {
+  if (tr.autoOpenAt === undefined) prepareDoorCycle(sim, tr, task, p, noLink);
+  tr.autoOpenAt = undefined;
   tr.doorsAwait = false;
-  let dwell = 10;
-  let doorExtra = 0;
   if (task.doors) {
-    // (already open after a turn on the platform: no second opening)
-    const open = tr.doorsOpen;
-    doorExtra = openDoors(sim, tr, p, noLink);
-    if (open) doorExtra = 0;
+    openDoors(sim, tr, p, noLink);
     const before = tr.load;
-    const paxDwell = boardAndAlight(sim, tr, p, task);
+    boardAndAlight(sim, tr, p, task, tr.doorExchange);
     if (tr.delay > 120) sim.metrics.boardedDelayed += Math.max(0, tr.load - before) + Math.round(before * 0.3);
-    dwell = Math.max(task.minDwell ?? MIN_DWELL, paxDwell);
   } else if (!task.revenue && tr.load > 0) {
-    // clear-out (清客)
-    doorExtra = openDoors(sim, tr, p, noLink);
+    openDoors(sim, tr, p, noLink);
     sim.passengersCleared += tr.load;
     sim.metrics.cleared += tr.load;
     tr.load = 0;
-    dwell = Math.max(task.minDwell ?? 60, 60);
   }
-  if (task.minDwell) dwell = Math.max(dwell, task.minDwell);
-  dwell += doorExtra;
-  // isolated car doors: the passengers at them move to the next door
-  if (task.doors) dwell += tr.doorsCut * DOOR_CUT_DWELL;
-  if (tr.extraDwell > 0) { dwell += tr.extraDwell; tr.extraDwell = 0; }
-  // Passenger exchange and the complete door/PSD cycle are the minimum.
-  // Only origin departures retain unrestricted timetable positioning holds.
-  const closeExtra = task.doors ? (ps.psd === 'bypass' ? BYPASS_EXTRA : ps.psdLinkFault || noLink ? PSL_EXTRA : 0) : 0;
-  dwell += closeExtra;
-  let ready = sim.t + dwell;
-  if (task.dep !== null && task.arr !== null && task.dep > task.arr && task.revenue) {
-    const planned = task.dep - task.arr;
-    ready = sim.t + regulatedDwell(planned, dwell, sim.t - task.arr);
-  } else if (task.dep !== null) ready = Math.max(ready, task.dep, sim.t + 20);
-  // with a driver the train leaves on the driver's ATO start button
-  if (tr.mode === 'AM' && !tr.manual) ready += OPERATIONS.atoStartDelay;
-  tr.dwellUntil = ready;
-  tr.depReadyAt = ready;
+  tr.doorExchange = undefined;
 }
 
 /** side of a platform ('L' / 'R' looking forward) for a train standing at it */
@@ -1030,6 +1038,70 @@ export function platformSide(sim: Sim, tr: Train, p: number): 'L' | 'R' {
   const lk = sim.topo.links[tr.link];
   const east = (lk.chainB - lk.chainA) * tr.dir > 0;
   return (sim.topo.platforms[p].face === 'N') === east ? 'L' : 'R';
+}
+
+/** Door enable is a physical position, independent of first passenger exchange. */
+export function doorEnable(sim: Sim, tr: Train): { L: boolean; R: boolean; depot: boolean } {
+  const no = { L: false, R: false, depot: false };
+  if (tr.v >= 0.05 || tr.doorMotion?.kind === 'closing') return no;
+  const st = tr.tasks[0];
+  if (tr.phase === 'dwell' && st?.k === 'stop' && stopNeedsDoors(tr, st) && Math.abs(stopError(sim, tr)) <= 1) {
+    const p = sim.topo.berths[st.berth].platform;
+    if (p >= 0) return { L: platformSide(sim, tr, p) === 'L', R: platformSide(sim, tr, p) === 'R', depot: false };
+  }
+  if (!tr.manual || tr.depotStage !== 'out') return no;
+  for (const dp of sim.topo.depots) {
+    const test = OPERATIONS.depotDoorTests[dp.key];
+    if (!test) continue;
+    for (const path of dp.transferPaths.filter(p => p.exitSignal >= 0)) {
+      const ahead = signalAheadFrom(sim, tr.link, tr.off, tr.dir, test.beforeSignal + 1);
+      if (ahead?.sig === path.exitSignal && Math.abs(ahead.dist - test.beforeSignal) <= 1)
+        return { L: true, R: true, depot: true };
+    }
+  }
+  return no;
+}
+
+/** One readiness predicate for the buttons, departure gate and halt diagnosis.
+ * Buttons themselves are not part of readiness: early presses never latch. */
+export function atoStartReady(sim: Sim, tr: Train): { ready: boolean; code: HaltCode; train: number; detail: string } {
+  const no = (code: HaltCode, detail: string, train = -1) => ({ ready: false, code, detail, train });
+  if (!tr.atoDriver || tr.mode !== 'AM' || tr.phase !== 'dwell') return no('MANUAL', '未接管AM停站列车');
+  if (tr.failed) return no('FAILED', '列车故障');
+  if (tr.eb) return no('EB', tr.ebReason || '紧急制动未缓解');
+  if (tr.pendingMode) return no('MODE_CHANGE', '等待驾驶模式转换');
+  const st = tr.tasks[0];
+  if (st?.k !== 'stop') return no('NO_TASK', '无站台发车任务');
+  const p = sim.topo.berths[st.berth].platform, ps = sim.plat[p];
+  if (!ps) return no('NO_TASK', '当前位置没有客运站台');
+  if (ps.esp) return no('ESP', `${sim.topo.platforms[p].name}紧急关闭`);
+  if (tr.hold || ps.hold) return no('HOLD', '列车或站台扣车');
+  if (tr.doorsAwait) return no('DWELL', '等待开门办理客运');
+  if (tr.doorsOpen || tr.doorSide || tr.doorMotion || sim.t < (tr.doorLockedAt ?? 0)) return no('DWELL', '等待车门关闭锁闭');
+  if (!psdSafe(ps)) return no('PSD_FAULT', '等待站台门关闭锁闭');
+  if (sim.t < tr.dwellUntil) return no('DWELL', '停站作业尚未完成');
+  const interval = intervalDepartureHold(sim, tr, st);
+  if (interval) return no('INTERVAL_LIMIT', interval.detail, interval.train);
+  const nx = tr.tasks[1];
+  if (nx?.k === 'reverse' && nx.berths.every(b => berthBusy(sim, b, tr.id)))
+    return no('BERTH_WAIT', '折返泊位均被占用/预约', berthHolder(sim, nx.berths[0], tr.id));
+  if (departureHold(sim, tr, false)) return no('FAILED', '等待列车门故障处置或制动缓解');
+  if (tr.maDist < 15) {
+    const w = tr.arsWait && sim.t - tr.arsWait.t <= 2.5 ? tr.arsWait : undefined;
+    return no(w?.code ?? (tr.maCode === 'NONE' ? 'ROUTE_WAIT' : tr.maCode),
+      w?.detail || tr.maReason || '等待有效发车授权', w?.train ?? tr.maTrain);
+  }
+  return { ready: true, code: 'MANUAL', train: -1, detail: '等待司机按 ATO 启动' };
+}
+
+/** Buttons are sampled through commands; pressing before readiness never latches. */
+export function atoButton(sim: Sim, tr: Train, button: 'f' | 'g', down: boolean) {
+  tr.atoButtons ??= { f: false, g: false };
+  if (!down) { tr.atoButtons[button] = false; return { ok: true, msg: 'ATO启动按钮释放' }; }
+  const start = atoStartReady(sim, tr);
+  if (!start.ready) return { ok: false, msg: `${start.detail}，ATO启动不计入` };
+  tr.atoButtons[button] = true;
+  return { ok: true, msg: 'ATO启动按钮按下' };
 }
 
 /**
@@ -1054,23 +1126,25 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
     if (st?.doors && doorCloseHold(sim, tr)) return { ok: false, msg: '列车车门无法关闭，等待处置' };
     const extra = closeDoors(sim, tr, p);
     if (extra < 0) return { ok: false, msg: '站台门无法关闭锁紧，等待车站处理（互锁解除）' };
-    tr.dwellUntil = sim.t + (DOOR_CYCLE - 3) + extra;
+    tr.dwellUntil = sim.t + DOOR_CLOSE_S + extra;
     return { ok: true, msg: `${word(side)}车门开始关闭${extra ? '，站台门由站务人员确认关闭' : ''}` };
   }
   if (tr.doorSide) return { ok: false, msg: `${word(tr.doorSide)}车门未关闭` };
   const rm = tr.mode === 'RM';
-  if (!st || !tr.doorsAwait || !plat) {
-    // stopped at the mark of a call with no passenger work (an empty run): no enable either
-    if (!rm && st && plat && !stopNeedsDoors(tr, st)) return { ok: false, msg: '无门使能：本站不办理客运（非载客车次）' };
-    if (!rm) return { ok: false, msg: '无门使能：列车未在站台停车窗内停稳' };
-    return wrongDoor(sim, tr, side, '区间或非停车位置');
-  }
-  if (side !== plat) {
-    if (!rm) return { ok: false, msg: `门使能仅给出站台侧（${word(plat)}）` };
-    return wrongDoor(sim, tr, side, '非站台侧');
+  const enabled = doorEnable(sim, tr);
+  if (!enabled[side]) {
+    if (!rm && st && !stopNeedsDoors(tr, st)) return { ok: false, msg: '无门使能：本站不办理客运（非载客车次）' };
+    if (!rm) return { ok: false, msg: plat ? '门使能仅给出客运停车窗内的站台侧' : '无门使能：列车未在客运停车窗或指定出库试验位置停稳' };
+    return wrongDoor(sim, tr, side, plat && side !== plat ? '非站台侧' : '区间或非停车位置');
   }
   tr.doorSide = side;
-  startDoorCycle(sim, tr, st, p, rm);
+  if (enabled.depot) {
+    tr.doorsOpen = true; tr.doorLockedAt = 0;
+    return { ok: true, msg: `${word(side)}车门开启（出库试验）` };
+  }
+  if (st && tr.doorsAwait) startDoorCycle(sim, tr, st, p, rm);
+  else if (st) openDoors(sim, tr, p, rm);
+
   return { ok: true, msg: `${word(side)}车门开启${rm ? '，站务人员操作PSL开启站台门' : ''}` };
 }
 
@@ -1127,9 +1201,14 @@ export function answerOverrun(sim: Sim, tr: Train | undefined, option: string): 
   if (d > 5) sim.metrics.safety.overrun++;
   if (task?.k !== 'stop') return { ok: true, msg: '' };
   if (option === 'skip') {
+    tr.retreat = undefined;
     sim.log('B', '列车', `列车 ${trainLabel(tr)} ${STATIONS[task.station].name} 过标 ${d.toFixed(0)} m，越站（未办理客运）`);
     tr.tasks.shift();
     return { ok: true, msg: '越站运行，前方站广播' };
+  }
+  if (tr.manual) {
+    tr.retreat = { distance: d, authorised: true };
+    return { ok: true, msg: '同意退行对标，司机操作换向器退行' };
   }
   // backing up under the dispatcher's permission takes its time
   moveBack(sim, tr, d);
@@ -1166,27 +1245,19 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
     // accuracy, one continuous brake application (一把闸), no second approach
     const oneBrake = d.releases === 0 && !d.restop;
     const score = Math.max(0, Math.min(100, Math.round(stopScore(err) * 0.8 + Math.max(0, 20 - 10 * d.releases) - (d.restop ? 30 : 0))));
-    rec(score, [oneBrake ? '一把闸' : d.releases ? `缓解${d.releases}次` : '', d.restop ? '二次对标' : ''].filter(Boolean).join(' '));
+    rec(tr.retreat ? 0 : score, tr.retreat ? '过标退行' : [oneBrake ? '一把闸' : d.releases ? `缓解${d.releases}次` : '', d.restop ? '二次对标' : ''].filter(Boolean).join(' '));
     sim.log('I', '列车', `列车 ${trainLabel(tr)} 人工驾驶 ${STATIONS[task.station].name} 停车，对标误差 ${err >= 0 ? '欠' : '过'}${Math.abs(err).toFixed(2)} m`);
+    tr.retreat = undefined;
+    tr.reverser = 0;
     arriveAtBerth(sim, tr, task);
     return;
   }
-  if (err >= -15 || task.dep === null) {
-    // overrun: back up to the mark (needs dispatcher permission in reality; granted automatically here)
-    rec(0, '过标退行');
-    sim.metrics.safety.overrun += err < -5 ? 1 : 0;
-    sim.log('C', '列车', `列车 ${trainLabel(tr)} ${STATIONS[task.station].name} 过标 ${(-err).toFixed(1)} m，退行对标`);
-    moveBack(sim, tr, -err);
-    arriveAtBerth(sim, tr, task);
-    if (tr.doorsAwait) tr.extraDwell += 20;
-    else { tr.dwellUntil += 20; tr.depReadyAt += 20; }
-    return;
+  if (!tr.retreat) {
+    tr.retreat = { distance: -err, authorised: -err <= 5 };
+    if (-err > 5) atoOverrun(sim, tr, task, err);
+    else dmiNote(sim, tr, '过标停车，司机退行对标', 'warn');
   }
-  // far overrun at a through station: the stop is lost (越站)
-  rec(0, '越站');
-  sim.metrics.safety.overrun++;
-  sim.log('B', '列车', `列车 ${trainLabel(tr)} ${STATIONS[task.station].name} 过标 ${(-err).toFixed(0)} m，越站（未办理客运）`);
-  tr.tasks.shift();
+
 }
 
 function enterDepot(sim: Sim, tr: Train, depot: number) {

@@ -66,7 +66,7 @@ export class CommandPanel {
     if (sys && snap) key += `|${snap.zones.join(',')}`;
     if (sel?.kind === 'train' && snap) {
       const t = snap.trains.find((x) => x.id === sel.id);
-      key += `|${t ? `${t.manual}${t.mode}${t.failed}${t.hold}${t.halt?.code === 'INTERVAL_LIMIT'}${this.hooks.following() === t.id}` : 'gone'}`;
+      key += `|${t ? `${t.manual}${t.atoDriver}${t.mode}${t.failed}${t.hold}${t.halt?.code === 'INTERVAL_LIMIT'}${this.hooks.following() === t.id}` : 'gone'}`;
     }
     if (sel && (sel.kind === 'switch' || sel.kind === 'section' || sel.kind === 'platform' || sel.kind === 'signal') && snap) {
       const arr = sel.kind === 'switch' ? snap.switches : sel.kind === 'section' ? snap.sections : sel.kind === 'platform' ? snap.platforms : snap.signals;
@@ -338,9 +338,10 @@ export class CommandPanel {
     // follow + driving
     const drive = h('div', { class: 'cmdgrid' },
       this.btn(following ? '取消跟踪' : '跟踪列车', () => this.hooks.follow(following ? null : id), following ? 'on' : 'primary'),
-      ...(t0.manual
+      ...(t0.manual || t0.atoDriver
         ? [this.btn('恢复自动驾驶', { title: `列车 ${t0.svc}-${t0.trip} 恢复自动驾驶（CBTC级 DTO 或降级ATO时 AM，TBTC级 AM）`, cmd: { c: 'manual', train: id, mode: 'AUTO' } }, 'primary')]
         : [
+          this.btn('ATO 驾驶', { title: `接管列车 ${t0.svc}-${t0.trip}：ATO驾驶`, cmd: { c: 'manual', train: id, mode: 'AM' }, detail: '自动驾驶，到站后关门锁闭、发车条件满足时，同时按住F和G启动。' }, 'warn'),
           this.btn('人工驾驶 CM', { title: `接管列车 ${t0.svc}-${t0.trip}：人工驾驶 CM（ATP 防护）`, cmd: { c: 'manual', train: id, mode: 'CM' }, detail: '由你操纵牵引/制动手柄驾驶列车（Z 牵引、Q 制动、S 中立位、E 紧急制动；Y/U 右/左侧车门）。到站停准后由你开关门，车门关好才能牵引。ATP 监督速度与移动授权，超速将触发紧急制动并计入安全违章。停站对标将评分。人工驾驶期间仿真速率最高 5×。' }, 'warn'),
           this.btn('人工驾驶 RM', { title: `接管列车 ${t0.svc}-${t0.trip}：限制人工驾驶 RM（≤25km/h）`, cmd: { c: 'manual', train: id, mode: 'RM' }, critical: true, detail: 'RM 模式无移动授权防护，司机目视行车，限速25km/h。越过红灯将记为冒进信号。须先停车。' }, 'danger'),
         ]),
@@ -350,8 +351,10 @@ export class CommandPanel {
     this.store.send({ type: 'dmi', train: id });
     this.dmi.showLever(t0.manual);
     this.el.append(this.dmi.el);
-    if (t0.manual) this.el.append(this.stopView.el);
+    if (t0.manual || t0.atoDriver) this.el.append(this.stopView.el);
+    if (t0.atoDriver) this.el.append(h('div', { class: 'keys' }, 'ATO启动：发车条件满足后同时按住 F + G'));
     if (t0.manual) this.el.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 右门 · ', h('b', {}, 'U'), ' 左门 · 鼠标滚轮/点击手柄档位'));
+    if (t0.manual) this.el.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
     const scores = h('div', { class: 'scores' });
     if (t0.drv || t0.manual) this.el.append(h('div', { class: 'sect-title' }, '人工驾驶记录（对标误差 / 得分）'), scores);
     this.el.append(this.liveKv(() => {
@@ -359,6 +362,7 @@ export class CommandPanel {
       if (!t) return [['状态', '已下线']];
       const dir = this.trainDir(t);
       return [
+        ...(t.manual ? [['换向器', t.reverser === -1 ? '后' : t.reverser === 0 ? '零' : '前'] as [string, string]] : []),
         ['目的地', t.dest || '—'], ['方向', dir === 'DN' ? '下行' : '上行'],
         ['当前任务', t.task], ['晚点', t.inService ? fmtDelay(t.delay) : '非载客', t.delay > 300 ? 'bad' : t.delay > 120 ? 'warn' : ''],
         ['停车原因', t.halt ? `${t.halt.label}${t.halt.blocker ? `（${t.halt.blocker}）` : ''} [${t.halt.code}] ${t.halt.detail}` : '—'],
@@ -371,7 +375,7 @@ export class CommandPanel {
       if (!t) return;
       const snap = this.store.snap!;
       this.dmi.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
-      if (t.manual) this.stopView.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
+      if (t.manual || t.atoDriver) this.stopView.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
       if (t.drv) {
         clear(scores);
         const st = t.drv.stops.slice(-8);

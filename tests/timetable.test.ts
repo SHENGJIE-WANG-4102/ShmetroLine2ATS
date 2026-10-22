@@ -200,7 +200,8 @@ describe('shared depot lead turnbacks', () => {
       }
       expect(validatePlan(sim.planCtx, sim.plan).filter(issue => issue.severity === 'error')).toEqual([]);
       expect(sim.plan.fleetPeak).toBeLessThanOrEqual(LINE_INFO.fleet);
-      if (dayType === 'weekday') expect(terminalReuseRejections(sim.plan).some(text => text.startsWith('4091→4148：') && text.includes('4089'))).toBe(true);
+      // Uniform running margin changes the candidate connection; the shared-lead conflict must still be rejected.
+      if (dayType === 'weekday') expect(terminalReuseRejections(sim.plan).some(text => text.startsWith('4091→4142：') && text.includes('4089'))).toBe(true);
     });
   }
 });
@@ -276,6 +277,9 @@ describe('D79–D81 Gaode service distribution', () => {
   const sim = new Sim({ dayType: 'weekday', dateLabel: 'Gaode bins', startTime: 14400, seed: 1 });
   const s = sim;
   const checks = [['北新泾', 'UP'], ['世纪公园', 'UP'], ['世纪公园', 'DN'], ['张江高科', 'UP'], ['张江高科', 'DN']] as const;
+  // 用户决定（D123）：北新泾上行 06:30 格接受少 3 列（开班 450 s 疏班原少 2 列，
+  // 取消平台限速后一班提前 26 s 落入上一格）；仍计入 bad。
+  const accepted: Record<string, number> = { '北新泾 UP 390': 3 };
   it('leaves at most eleven two-train misses across all checked windows and no three-train misses', () => {
     let bad = 0;
     for (const [name, dir] of checks) {
@@ -289,7 +293,7 @@ describe('D79–D81 Gaode service distribution', () => {
       for (const [from, to] of [[360, 660], [960, 1290], [1290, 1410]]) {
         for (let at = from; at < to; at += 15) {
           const difference = plan.filter(t => t >= at && t < at + 15).length - gaode.filter(t => t >= at && t < at + 15).length;
-          expect(Math.abs(difference), `${name} ${dir} ${at}`).toBeLessThan(3);
+          expect(Math.abs(difference), `${name} ${dir} ${at}`).toBeLessThan((accepted[`${name} ${dir} ${at}`] ?? 2) + 1);
           if (Math.abs(difference) >= 2) bad++;
         }
       }

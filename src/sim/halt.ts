@@ -13,6 +13,7 @@
  */
 import type { Sim } from './engine';
 import type { Train, StopTask } from './model';
+import { atoStartReady } from './ats';
 import { STATIONS } from '../data/line2';
 
 export type HaltCode =
@@ -106,6 +107,10 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (tr.failed) return r('FAILED');
   if (tr.phase === 'coupling') return r('COUPLING');
   if (tr.phase === 'dwell') {
+    if (tr.atoDriver) {
+      const start = atoStartReady(sim, tr);
+      return r(start.code, start.train, start.ready && tr.atoButtons?.f && tr.atoButtons?.g ? '等待列车起步' : start.detail, tr.dwellUntil);
+    }
     const st = tr.tasks[0] as StopTask | undefined;
     const p = st ? sim.topo.berths[st.berth].platform : -1;
     const ps = p >= 0 ? sim.plat[p] : null;
@@ -115,6 +120,7 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
     if (ps && ps.psd === 'closeFail') return r('PSD_FAULT', -1, sim.topo.platforms[p].name);
     const planned = tr.dwellUntil;
     if (sim.t < tr.dwellUntil) return r(st && st.arr === null && st.dep !== null && sim.t < st.dep - 30 ? 'LAYOVER' : 'DWELL', -1, '', planned);
+
     const wait = tr.arsWait;
     if (wait && sim.t - wait.t <= 2.5) return r(wait.code, wait.train, wait.detail, planned);
     if (tr.doorsAwait || tr.manual) return r('MANUAL', -1, '等待司机关门发车', planned);

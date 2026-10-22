@@ -35,23 +35,41 @@ export function dmiNote(sim: Sim, tr: Train, m: string, k: DmiMsg['k'] = 'info')
 const availMsg = (a: { mode: Mode; level: Level }) =>
   a.mode === 'RM' ? '仅RM模式可用' : 'ATPM模式可用';
 
+/** 【假设】空驶/过夜/热备沿用所在客运或出库任务，不另建类别。 */
+export function dmiTask(tr: Train): string {
+  if (tr.depotStage === 'in' || tr.tasks[0]?.k === 'depot') return 'in';
+  if (tr.depotStage === 'out') return 'out';
+  if (tr.tbStage !== 'none' || tr.tasks[0]?.k === 'reverse') return 'turn';
+  return tr.tasks.some(t => t.k === 'stop' && (t.stabledOut || t.standby)) && !tr.inService ? 'out' : 'service';
+}
+
 /** once a second: turn state changes into DMI messages */
 export function dmiTick(sim: Sim) {
   for (const tr of sim.trainList) {
     const av = availableMode(sim, tr);
+    const context = { task: dmiTask(tr), cab: tr.dmiCab ?? 0 };
+    const old = tr.dmiContext;
+    if (!old || old.cab !== context.cab || old.task !== context.task) {
+      const messages = !old || old.cab !== context.cab
+        ? ['active', 'located', 'available'] as const : ['located', 'available'] as const;
+      const at = Math.max(sim.t, (tr.dmiQueue?.at(-1)?.at ?? sim.t - 15) + 15);
+      tr.dmiQueue ??= [];
+      tr.dmiQueue.push(...messages.map((message, i) => ({ at: at + i * 15, message })));
+    }
+    tr.dmiContext = context;
+    while (tr.dmiQueue?.length && tr.dmiQueue[0].at <= sim.t + 1e-6) {
+      const next = tr.dmiQueue.shift()!;
+      const m = next.message === 'active' ? 'DMI激活' : next.message === 'located' ? '定位已确认' : availMsg(av);
+      tr.dmiLog.push({ t: next.at, m, k: next.message === 'available' && av.mode === 'RM' ? 'warn' : 'info' });
+      if (tr.dmiLog.length > LOG_MAX) tr.dmiLog.shift();
+    }
     const cur = {
       avail: `${av.mode}-${av.level}`, comm: tr.comm, mode: `${tr.mode}-${tr.level}`, eb: tr.eb, hold: tr.hold,
       stop: tr.stopUntil > sim.t, failed: tr.failed, over: tr.v > tr.vPermit + 0.3 && !tr.eb,
     };
     const p = tr.dmiPrev;
     tr.dmiPrev = cur;
-    if (!p) {
-      dmiNote(sim, tr, 'DMI激活');
-      // Activation already has a known track position; no new localisation event.
-      if (sim.topo.links[tr.link] && Number.isFinite(tr.off)) dmiNote(sim, tr, '定位已确认');
-      dmiNote(sim, tr, availMsg(av));
-      continue;
-    }
+    if (!p) continue;
     if (p.comm && !cur.comm) dmiNote(sim, tr, '连接丢失', 'warn');
     if (!p.comm && cur.comm) dmiNote(sim, tr, '连接恢复');
     if (p.avail !== cur.avail) {

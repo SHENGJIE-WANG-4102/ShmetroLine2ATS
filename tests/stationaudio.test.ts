@@ -5,14 +5,14 @@ import { StationAudio, StationSoundPlanner, compatibleBoth, platformAnnouncement
   isUndergroundStation, RecordedSoundPlayer, type StationAudioFrame, type StationTrain, type StationSoundCommand } from '../src/ui/stationaudio';
 import { OnboardAudio, OnboardSoundPlanner, cabinVolumes, onboardFrame, type OnboardAudioFrame } from '../src/ui/onboardaudio';
 import { VOICE_PARTS, ORIGINAL_ONBOARD, ONBOARD_DESTINATIONS, onboardAnnouncement, onboardDoorSide, VOICE_CROSSFADE_S, RECORDED_VOLUME_GAINS,
-  FIELD_1016_VOICE_PARTS, FIELD_1016_TERMINAL_CLIP, compatibleVoiceRecipe, RECORDED_ONBOARD } from '../src/data/onboardbank';
+  FIELD_1016_VOICE_PARTS, FIELD_1016_TERMINAL_CLIP, compatibleVoiceRecipe, RECORDED_ONBOARD, ADDITIONAL_ONBOARD_ROUTES } from '../src/data/onboardbank';
 import { Audio } from '../src/ui/audio';
 import { DoorAudio, DoorSoundPlanner, doorCycleSplit, type DoorAudioFrame } from '../src/ui/dooraudio';
 import { DOOR_TAKES } from '../src/data/doorbank';
 import type { OnboardAnnouncement, SoundClip } from '../src/data/soundbank';
 import { STATIONS } from '../src/data/line2';
 import type { Snapshot, PisData, TrainSnap, Plan } from '../src/sim/model';
-import type { Topology } from '../src/sim/topology';
+import { ahead, type Topology } from '../src/sim/topology';
 
 const station = STATIONS.findIndex(s => s.name === '江苏路');
 const tr = (patch: Partial<StationTrain> = {}): StationTrain => ({ id: 1, trip: '1234', direction: 'DN', mode: 'DTO', manual: false,
@@ -215,10 +215,10 @@ describe('separate recorded door clocks', () => {
     expect(c.fadeOutS).toBe(.4); expect(c.anchorAfterTail).toBe(true);
     expect(SOUND_BANK.find(c => c.id === 'arrive-both')!.range[1]).toBeGreaterThan(67.31);
   });
-  it('splits the existing 15 s door budget without changing train operation', () => {
+  it('shares the recorded 5.7 s warning-to-lock sequence with physical doors', () => {
     const split = doorCycleSplit();
-    expect(split.opening).toBe(3); expect(split.warning).toBe(2.7); expect(split.motion).toBe(3);
-    expect(split.confirmation).toBeCloseTo(6.3);
+    expect(split.opening).toBe(3); expect(split.warning).toBe(2.7); expect(split.motion).toBeCloseTo(3, 12);
+    expect(split.confirmation).toBeCloseTo(0);
     for (const take of DOOR_TAKES) expect(take.close[0] - take.warn[0]).toBeCloseTo(2.7, 2);
   });
   it('opens with one mechanical recording and no fabricated warning', () => {
@@ -653,6 +653,37 @@ describe('whole carriage PA, exact terminus and pre-rendered compositions', () =
   it('cannot replace an absent station or terminus name with another station', () => {
     expect(onboardAnnouncement('唐镇', 'DN', '广兰路', 'L')).toBeUndefined();
     expect(onboardAnnouncement('静安寺', 'DN', '淞虹路', 'L')).toBeUndefined();
+  });
+  it('covers only the authorised eastbound PXL to TZ route and excludes its origin and empty continuation', () => {
+    expect(ADDITIONAL_ONBOARD_ROUTES).toContainEqual({from:'PXL',to:'TZ',direction:'DN'});
+    const from=STATIONS.findIndex(s=>s.id==='PXL'),to=STATIONS.findIndex(s=>s.id==='TZ');
+    const expected=STATIONS.filter((_,i)=>ahead('DN',from,i)&&(i===to||ahead('DN',i,to))).map(s=>s.name);
+    const rows=ONBOARD_ANNOUNCEMENTS.filter(a=>a.destination==='唐镇');
+    expect(rows.map(a=>a.station).sort()).toEqual([...expected].sort());
+    for(const a of rows){
+      expect(a.direction).toBe('DN');expect(a.missingSentences).toEqual([]);
+      expect(a.next).toBeDefined();expect(a.arrived).toBeDefined();
+      expect(clip(a.next!.clipId).destination).toBe('唐镇');
+    }
+    expect(onboardAnnouncement('创新中路','DN','唐镇','R')).toBeUndefined();
+    expect(onboardAnnouncement('唐镇','UP','唐镇','L')).toBeUndefined();
+  });
+  it('adds the recorded clear-out only to the composed TZ terminal arrival while keeping through originals intact', () => {
+    const terminal=pa('唐镇','DN','唐镇');
+    const next=clip(terminal.next!.clipId),arrival=clip(terminal.arrived!.clipId);
+    expect(next.composition).toEqual(['zh-terminus','zh-name-tz','field1021-original-next-dn-tz-body']);
+    expect(arrival.provenance).toBe('composed');
+    expect(arrival.composition).toEqual(['zh-name-tz','zh-arrived','zh-left','zh-clearout-pxl','field1021-arrived-dn-tz-tail']);
+    const tail=VOICE_PARTS.find(p=>p.id===arrival.composition!.at(-1))!;
+    const raw=RECORDED_ONBOARD.find(a=>a.id==='field1021-original-arrived-dn-tz')!;
+    expect(tail.source).toBe(raw.source);expect(tail.range).toEqual([181.12,raw.range[1]]);
+    expect(VOICE_PARTS.some(p=>p.id==='field1021-arrived-dn-tz-head')).toBe(false);
+    const through=clip(pa('唐镇','DN','浦东1号2号航站楼').arrived!.clipId);
+    expect(through.provenance).toBe('original');expect(through.composition).toBeUndefined();
+    for(const a of ONBOARD_ANNOUNCEMENTS.filter(a=>a.destination==='唐镇'&&a.station!=='唐镇')) {
+      expect(clip(a.arrived!.clipId).composition??[]).not.toContain('zh-clearout-pxl');
+    }
+    expect(clip(pa('江苏路','DN','唐镇').arrived!.clipId).id).toBe(pa('江苏路','DN','浦东1号2号航站楼').arrived!.clipId);
   });
   it('fills eastern airport-bound announcements with complete original audio and retains terminal clear-out scope', () => {
     for (const station of ['唐镇','创新中路','华夏东路','川沙','凌空路','远东大道','海天三路','浦东1号2号航站楼']) {

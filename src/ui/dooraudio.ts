@@ -5,7 +5,7 @@
  */
 import { SOUND_BANK, clipDuration, type SoundClip, type SoundKind } from '../data/soundbank';
 import { DOOR_REFERENCE_TIMING, DOOR_TAKES } from '../data/doorbank';
-import { DOOR_CYCLE } from '../sim/calibration';
+import { DOOR_CLOSE_S } from '../sim/calibration';
 import { RecordedSoundPlayer, VVVF_MAX_RATE, isUndergroundStation, type StationTrain, type StationSoundCommand } from './stationaudio';
 
 export interface DoorAudioFrame {
@@ -13,7 +13,7 @@ export interface DoorAudioFrame {
   selectionKey: string; perspective: 'onboard' | 'platform'; station: number | null;
   trains: readonly StationTrain[];
 }
-export function doorCycleSplit(cycle = DOOR_CYCLE) {
+export function doorCycleSplit(cycle = DOOR_REFERENCE_TIMING.openingS + DOOR_CLOSE_S) {
   const opening = Math.min(DOOR_REFERENCE_TIMING.openingS, cycle);
   const closing = Math.max(0, cycle - opening);
   const warning = Math.min(DOOR_REFERENCE_TIMING.warningToMotionS, closing);

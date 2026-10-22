@@ -19,7 +19,8 @@ import type { Train } from './model';
 import { PSD, inTable, type PsdState } from './fsm';
 import { trainLabel } from './ats';
 import { callPsd } from './radio';
-import { DOOR_CYCLE } from './calibration';
+import { DOOR_CLOSE_S } from './calibration';
+import { OPERATIONS } from '../data/line2';
 import { doorCloseHold } from './vehicle';
 
 /** PSL operation by station staff per open / close (s) 【假设】 */
@@ -46,6 +47,11 @@ export function psdSafe(ps: { psd: PsdState }): boolean {
   return ps.psd === 'closed' || ps.psd === 'bypass';
 }
 
+/** Same additional opening time for dwell preparation and physical actuation. */
+export function doorOpenExtra(sim: Sim, p: number, noLink = false): number {
+  return sim.plat[p].psdLinkFault || noLink ? PSL_EXTRA : 0;
+}
+
 /**
  * Train stopped in the window: open train doors and PSD. Returns extra dwell (s).
  * `noLink`: the signalling does not work the PSD (RM: no door enable, no
@@ -56,10 +62,11 @@ export function openDoors(sim: Sim, tr: Train, p: number, noLink = false): numbe
   ps.psdTrain = tr.id;
   tr.doorsOpen = true;
   tr.doorLockedAt = 0;
+  tr.autoStartAt = undefined;
   const psl = ps.psdLinkFault || noLink;
   tr.doorMotion = ps.psd === 'bypass' ? undefined : { kind: 'opening', platform: p,
     trainAt: sim.t, psdAt: sim.t + DOOR_STAGGER_S, psl };
-  return psl ? PSL_EXTRA : 0;
+  return doorOpenExtra(sim, p, noLink);
 }
 
 function closeFailed(sim: Sim, tr: Train, p: number): boolean {
@@ -81,7 +88,7 @@ function closeFailed(sim: Sim, tr: Train, p: number): boolean {
  */
 export function closeDoors(sim: Sim, tr: Train, p: number): number {
   if (p < 0) {
-    tr.doorLockedAt = sim.t + (DOOR_CYCLE - 3);
+    tr.doorLockedAt = sim.t + DOOR_CLOSE_S;
     tr.doorMotion = { kind: 'closing', platform: -1, trainAt: tr.doorLockedAt, psdAt: sim.t, psdDone: true };
     return 0;
   }
@@ -95,7 +102,11 @@ export function closeDoors(sim: Sim, tr: Train, p: number): number {
   } else {
     if (ps.psd === 'pslOpen' || tr.doorMotion?.psl) extra = PSL_EXTRA;
   }
-  tr.doorLockedAt = sim.t + (DOOR_CYCLE - 3) + extra;
+  tr.doorLockedAt = sim.t + DOOR_CLOSE_S + extra;
+  if (!tr.manual && !tr.atoDriver) {
+    const [lo, hi] = OPERATIONS.autoStartDelay;
+    tr.autoStartAt = tr.doorLockedAt + lo + sim.rng() * (hi - lo);
+  }
   tr.doorMotion = { kind: 'closing', platform: p, trainAt: tr.doorLockedAt,
     psdAt: tr.doorLockedAt - DOOR_STAGGER_S };
   return extra;

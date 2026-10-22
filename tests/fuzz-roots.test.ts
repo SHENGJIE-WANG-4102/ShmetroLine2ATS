@@ -115,6 +115,7 @@ describe('weather command contract',()=>{
     const fault=sim.faults.at(-1)!.id;
     // Mapped by discriminator: adding a UI/worker command requires a sample.
     const commands: {[K in Command['c']]: Extract<Command,{c:K}>}={
+      reverser:{c:'reverser',train,position:0},atoButton:{c:'atoButton',train,button:'f',down:false},
       setRoute:{c:'setRoute',route:signal.routes[0]},cancelRoute:{c:'cancelRoute',signal:signal.id},guideRoute:{c:'guideRoute',route:signal.routes[0]},
       autoPass:{c:'autoPass',signal:signal.id,on:true},ars:{c:'ars',signal:signal.id,on:true},switchMove:{c:'switchMove',sw:0,pos:'N'},
       switchLock:{c:'switchLock',sw:0,on:false},switchFieldLock:{c:'switchFieldLock',sw:0,on:false},axleReset:{c:'axleReset',section:0},

@@ -89,10 +89,12 @@ export function controlAccel(v: number, vTarget: number, stopDist: number): numb
   return v > 0.1 ? -PERF.resist : 0;
 }
 
-/** Coasting band and cruise reduction (m/s); levels 1–3 retain D67 values. */
+/** Coasting band and cruise reduction (m/s); levels 1/2 retain D67 values.
+ * 【假设】D121 recalibrates slow grades after removing the platform stop cap,
+ * preserving their previous whole-line diagram running times with one margin. */
 export function levelBand(level: number): { band: number; lower: number } {
-  if (level === 4) return { band: 10 / 3.6, lower: 7.5 / 3.6 }; // 【假设】 diagram-only night level (D74)
-  if (level >= 3) return { band: 10 / 3.6, lower: 5 / 3.6 };
+  if (level === 4) return { band: 10 / 3.6, lower: 9.5 / 3.6 }; // diagram-only night level (D74, D121)
+  if (level >= 3) return { band: 10 / 3.6, lower: 6.5 / 3.6 };
   if (level === 2) return { band: 5 / 3.6, lower: 0 };
   return { band: 0, lower: 0 };
 }
@@ -208,7 +210,7 @@ function simulateRun(prof: LimitSeg[], hp: Profile, sgn: 1 | -1, start: number, 
 }
 
 /** stopping runs enter and leave the platforms at no more than `stopPlatformKmh` */
-export function computeRunTimes(topo: Topology, trainLen: number, stopPlatformKmh = OPERATIONS.platformStopKmh, runLevel = 1): RunTimes {
+export function computeRunTimes(topo: Topology, trainLen: number, stopPlatformKmh = OPERATIONS.platformStopKmh, runLevel = 1, minimum = false): RunTimes {
   const ch = topo.stations.map((s) => s.chain);
   const n = ch.length;
   const half = trainLen / 2;
@@ -237,8 +239,40 @@ export function computeRunTimes(topo: Topology, trainLen: number, stopPlatformKm
   const k = OPERATIONS.platformPassKmh;
   const [passDn, passUp] = pass(trackProfile(topo, 'DN', k), trackProfile(topo, 'UP', k));
   // planning margin over the minimum ATO run (OPERATIONS.runMargin)
-  const pad = (a: number[]) => a.map((t) => Math.floor(t * (1 + OPERATIONS.runMargin) * 10) / 10);
-  const result: RunTimes = { dn: pad(dn), up: pad(up), passDn: pad(passDn), passUp: pad(passUp) };
-  if (runLevel === 1) result.byLevel = Object.fromEntries([2, 3, 4].map(level => [level, computeRunTimes(topo, trainLen, stopPlatformKmh, level)]));
+  const pad = (a: number[], margin: number) => a.map(t => minimum ? t : Math.floor(t * (1 + margin) * 10) / 10);
+  const result: RunTimes = { dn: pad(dn, OPERATIONS.runMargin), up: pad(up, OPERATIONS.runMargin),
+    passDn: pad(passDn, OPERATIONS.passRunMargin), passUp: pad(passUp, OPERATIONS.passRunMargin) };
+  if (runLevel === 1) result.byLevel = Object.fromEntries([2, 3, 4].map(level => [level, computeRunTimes(topo, trainLen, stopPlatformKmh, level, minimum)]));
   return result;
+}
+
+/** Unhindered section ETA, including acceleration/braking rather than a fixed reserve.
+ * 【假设】80% nominal acceleration/braking retains the existing ATS estimate. */
+export function sectionEta(dist: number, v: number, cruise: number): number {
+  const a = PERF.aMax * .8, b = PERF.bService * .8;
+  if (dist <= 0) return 0;
+  // A lower target needs deceleration first. Using max(cruise,v) here would
+  // make every target below current speed have the same ETA.
+  if (cruise < v) return v / b + Math.max(0, dist - v * v / (2 * b)) / Math.max(.1, cruise);
+  const vc = Math.max(cruise, v);
+  const da = (vc * vc - v * v) / (2 * a), db = vc * vc / (2 * b);
+  if (da + db <= dist) return (vc - v) / a + vc / b + (dist - da - db) / vc;
+  const vp = Math.sqrt(Math.max(v * v, (dist + v * v / (2 * a)) / (1 / (2 * a) + 1 / (2 * b))));
+  return (vp - v) / a + vp / b;
+}
+
+/** ATS consumes the actual diagram section budget. No added station dwell.
+ * Bisection finds the cruise speed whose ETA matches time left; ATP, route,
+ * weather, running level and braking curves can still require a lower speed. */
+export function sectionCruise(dist: number, v: number, budget: number, ceiling: number): number {
+  if (!Number.isFinite(dist) || budget <= 0 || sectionEta(dist, v, ceiling) >= budget) return ceiling;
+  // Near the stopping point the precision controller must keep its own curve.
+  const brakeDistance = v * v / (2 * PERF.bPlan);
+  if (dist <= brakeDistance + 1) return ceiling;
+  let lo = Math.min(ceiling, OPERATIONS.sectionCruiseMinKmh / 3.6), hi = ceiling;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    if (sectionEta(dist, v, mid) > budget) lo = mid; else hi = mid;
+  }
+  return hi;
 }

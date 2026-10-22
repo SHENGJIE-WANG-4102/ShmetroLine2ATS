@@ -20,6 +20,7 @@ import { openCall, unsafeAhead } from './radio';
 import { nextLink } from './topology';
 import { swPos } from './interlocking';
 import { withdrawAuthority } from './movement';
+import { OPERATIONS } from '../data/line2';
 
 /** driver action time for a mode / level change at standstill (s) 【假设】 */
 export const MODE_CHANGE_TIME = 10;
@@ -46,13 +47,18 @@ export function cbtcAvailable(sim: Sim, tr: Train): boolean {
 
 /** DTO allowed for the train: the line runs DTO and its DTO equipment works */
 export function dtoAllowed(sim: Sim, tr: Train): boolean {
-  return !sim.atoLine && !tr.dtoInhibit;
+  return !sim.atoLine && !tr.dtoInhibit && !tr.atoDriver;
 }
 
 /** best automatic mode for the train at a level: under CBTC DTO, or ATO with
  * the driver in the cab when DTO is degraded; the TBTC backup runs ATO */
 export function autoMode(sim: Sim, tr: Train, level: Level): Mode {
   return level === 'CBTC' && dtoAllowed(sim, tr) ? 'DTO' : 'AM';
+}
+
+/** Existing turnback budget, including the driver's change of ends when required. */
+export function turnbackDwell(mode: Mode, minimum: number): number {
+  return minimum + (mode === 'DTO' ? 0 : OPERATIONS.atoEndChange);
 }
 
 /**
@@ -69,6 +75,11 @@ export function setMode(sim: Sim, tr: Train, mode: Mode, level: Level, why: stri
   tr.mode = mode;
   tr.level = level;
   tr.modeSince = sim.t;
+  // ATS may enter reversal before this tick's DTO→AM conversion. Complete the
+  // same driver budget used at reversal entry, without adding it twice.
+  const task = tr.tasks[0];
+  if (tr.phase === 'reversing' && task?.k === 'reverse')
+    tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(mode, task.minTime));
   if (mode !== 'RM') { tr.rmAuth = 0; tr.rmSig = -1; tr.rmReason = ''; }
   // A sighting scan is not an ATP authority. Mode/level changes can happen
   // after the second's ZC refresh, so validate the new protection immediately.
@@ -267,23 +278,43 @@ export function cmdLineAto(sim: Sim, on: boolean): { ok: boolean; msg: string } 
 }
 
 /** dispatcher hands a train to manual driving (CM / RM) or back to automatic (DTO / AM) */
-export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AUTO'): { ok: boolean; msg: string } {
+export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'): { ok: boolean; msg: string } {
   if (tr.failed) return { ok: false, msg: '列车故障中' };
   if (tr.phase === 'stabled') return { ok: false, msg: '列车已存车' };
   if (tr.eb) return { ok: false, msg: '列车紧急制动中，须先报告调度并获授权缓解' };
   if (mode === 'AUTO') {
-    if (!tr.manual) return { ok: false, msg: '列车未处于人工驾驶' };
+    if (!tr.manual && !tr.atoDriver) return { ok: false, msg: '列车未处于人工驾驶' };
     if (tr.v > 0.1 && tr.mode === 'RM') return { ok: false, msg: 'RM 转自动驾驶须停车后进行' };
     if (tr.doorSide && !tr.doorsOpen) return { ok: false, msg: '非站台侧车门未关闭' };
     const level: Level = cbtcAvailable(sim, tr) ? 'CBTC' : tr.level === 'CBTC' && !tr.comm ? 'CBTC' : 'TBTC';
     if (level === 'CBTC' && !tr.comm) return { ok: false, msg: '车地通信中断，不能以CBTC自动驾驶' };
-    if (!setMode(sim, tr, autoMode(sim, tr, level), level, '恢复自动驾驶')) return { ok: false, msg: '当前条件下不能转换（见状态机条件）' };
+    const priorDriver = tr.atoDriver;
+    tr.atoDriver = false;
+    if (!setMode(sim, tr, autoMode(sim, tr, level), level, '恢复自动驾驶')) {
+      tr.atoDriver = priorDriver;
+      return { ok: false, msg: '当前条件下不能转换（见状态机条件）' };
+    }
+    tr.atoButtons = { f: false, g: false };
     tr.manual = false;
     tr.notch = 0;
     return { ok: true, msg: `列车 ${trainLabel(tr)} 恢复 ${modeLabel(tr.mode, tr.level)} 自动驾驶` };
   }
+  if (mode === 'AM') {
+    const other = sim.trainList.find(o => o.id !== tr.id && (o.manual || o.atoDriver));
+    if (other) return { ok: false, msg: `列车 ${trainLabel(other)} 已被接管` };
+    if (tr.doorSide || tr.doorMotion?.kind === 'closing') return { ok: false, msg: '请先完成车门操作' };
+    if (!setMode(sim, tr, 'AM', tr.level, '司机接管ATO')) return { ok: false, msg: '当前条件不能转AM' };
+    tr.manual = false; tr.atoDriver = true; tr.reverser = 1; tr.notch = 0;
+    tr.atoButtons = { f: false, g: false };
+    // A takeover during automatic post-lock waiting goes straight to F/G.
+    if (tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen) {
+      tr.dwellUntil = Math.min(tr.dwellUntil, Math.max(sim.t, tr.doorLockedAt ?? 0));
+      tr.autoStartAt = undefined;
+    }
+    return { ok: true, msg: 'ATO驾驶接管，发车条件满足后同时按住F和G' };
+  }
   // one cab at a time: a second manual train would run on with its handle left where it was
-  const other = !tr.manual && [...sim.trains.values()].find((o) => o.manual);
+  const other = !tr.manual && [...sim.trains.values()].find((o) => o.id !== tr.id && (o.manual || o.atoDriver));
   if (other) return { ok: false, msg: `列车 ${trainLabel(other)} 正在人工驾驶，请先将其恢复自动驾驶` };
   if (mode === 'RM' && tr.v > 0.1) return { ok: false, msg: '转RM模式须先停车' };
   if (mode === 'CM' && tr.level === 'CBTC' && !tr.comm) return { ok: false, msg: '车地通信中断，无ATP防护，只能以RM模式驾驶' };
@@ -293,6 +324,8 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AUTO'): { ok
     tr.rmAuth = 0;
     tr.rmSig = -1;
   } else if (!setMode(sim, tr, 'CM', tr.level, '转人工驾驶')) return { ok: false, msg: '当前条件下不能转CM' };
+  tr.atoDriver = false; tr.reverser = 1;
+  tr.autoOpenAt = undefined; tr.doorExchange = undefined;
   tr.manual = true;
   tr.notch = tr.v > 0.1 ? 0 : -7;
   tr.drv = { stops: [], overspeed: 0, spad: 0, since: sim.t, releases: 0, braking: false, restop: false };

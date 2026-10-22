@@ -5,6 +5,7 @@ import {STATIONS} from '../src/data/line2';
 import {platformBerth,turnbackAt,serviceEnd} from '../src/sim/timetable';
 import {setTripFromTasks} from '../src/sim/ats';
 import {openDoors,closeDoors,doorMotionTick,DOOR_STAGGER_S,psdRepaired} from '../src/sim/psd';
+import {DOOR_CLOSE_S} from '../src/sim/calibration';
 import {capture} from '../src/sim/state';
 
 describe('Line 2 photographed cab content',()=>{
@@ -18,7 +19,7 @@ describe('Line 2 photographed cab content',()=>{
   s.t=opened+DOOR_STAGGER_S;doorMotionTick(s);expect(ps.psd).toBe('open');
   expect(DOOR_STAGGER_S).toBeGreaterThan(0);expect(DOOR_STAGGER_S).toBeLessThanOrEqual(.5);
   const close=s.t;expect(closeDoors(s,t,b.platform)).toBe(0);
-  const deadline=t.doorLockedAt!;expect(deadline-close).toBe(12);
+  const deadline=t.doorLockedAt!;expect(deadline-close).toBeCloseTo(DOOR_CLOSE_S);
   expect(t.doorsOpen).toBe(true);expect(ps.psd).toBe('open');
   expect(s.snapshot().trains.find(x=>x.id===t.id)).toMatchObject({doors:true,doorClosing:true});
   const cp=capture(s);s.t=deadline-DOOR_STAGGER_S;doorMotionTick(s);
@@ -87,9 +88,12 @@ describe('Line 2 photographed cab content',()=>{
   t.tasks[0]={...t.tasks[0],k:'stop',station:other,berth:platformBerth(s.topo,other,'UP'),trip:-1,arr:null,dep:null,doors:true,revenue:true};
   t.destStation=other;
   expect(computeDmi(s,t.id)?.next).toBe(STATIONS[other].name);
-  t.dmiPrev=null; t.dmiLog=[];
+  t.dmiPrev=null; t.dmiLog=[]; t.dmiContext=undefined; t.dmiQueue=[];
   dmiTick(s);
+  expect(t.dmiLog.map(m=>m.m)).toEqual(['DMI激活']);
+  s.t+=15;dmiTick(s);
   expect(t.dmiLog.map(m=>m.m)).toContain('定位已确认');
+  s.t+=15;dmiTick(s);
   expect(t.dmiLog.map(m=>m.m)).toContain('ATPM模式可用');
   const n=t.dmiLog.length;dmiTick(s);expect(t.dmiLog).toHaveLength(n);
  });

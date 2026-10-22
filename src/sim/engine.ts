@@ -23,7 +23,7 @@ import { updateTrainMotion, indexBodies, refreshAuthority, withdrawAuthority } f
 import {
   buildRouteTable, type RouteTable, spawnDue, updateTrainTasks, runARS, driverRM, recordTrace,
   cmdTrainHold, cmdSkip, cmdTurnback, cmdWithdraw, cmdRecoverService, cmdExchangeDuty, cmdAuthRM, cmdRescue, trainLabel,
-  extendTrainTasks, driverDoor, platformSide,
+  extendTrainTasks, driverDoor, platformSide, doorEnable, atoButton,
 } from './ats';
 import { stopError } from './movement';
 import { initYards, vehicleName, initVehicles, maintainFleet, arrangeYard } from './yard';
@@ -576,6 +576,13 @@ export class Sim {
       case 'ebRelease': return this.withTrain(cmd.train, (tr) => authoriseEBRelease(this, tr, '调度'));
       case 'trainLevel': return this.withTrain(cmd.train, (tr) => cmdTrainLevel(this, tr, cmd.level));
       case 'trainDto': return this.withTrain(cmd.train, (tr) => cmdTrainDto(this, tr, cmd.on));
+      case 'atoButton': return this.withTrain(cmd.train, tr => atoButton(this, tr, cmd.button, cmd.down));
+      case 'reverser': return this.withTrain(cmd.train, tr => {
+        if (!tr.manual || tr.v >= 0.05) return { ok: false, msg: '换向器只能在人工驾驶零速时操作' };
+        if (![-1, 0, 1].includes(cmd.position)) return { ok: false, msg: '无效换向器位置' };
+        tr.reverser = cmd.position;
+        return { ok: true, msg: `换向器：${cmd.position === 1 ? '前' : cmd.position === 0 ? '零' : '后'}` };
+      });
       case 'door': return this.withTrain(cmd.train, (tr) => driverDoor(this, tr, cmd.side));
       case 'lineAto': return cmdLineAto(this, cmd.on);
       case 'rescue': {
@@ -756,14 +763,14 @@ export class Sim {
         body, v: tr.v, level: tr.level, comm: tr.comm, mode: tr.mode, eb: tr.eb, phase: tr.phase, delay: tr.delay,
         tbStage: tr.tbStage, depotStage: tr.depotStage,
         load: tr.load, hold: tr.hold, failed: tr.failed, doors: tr.doorsOpen, doorClosing: tr.doorMotion?.kind === 'closing', doorSide: tr.doorSide, doorsAwait: tr.doorsAwait,
-        platSide: tr.manual && t0?.k === 'stop' && (tr.phase === 'dwell' || (tr.stopDist >= 0 && tr.stopDist < 400)) ? platformSide(this, tr, this.topo.berths[t0.berth].platform) : '',
+        platSide: (tr.manual || tr.atoDriver) && t0?.k === 'stop' && (tr.phase === 'dwell' || (tr.stopDist >= 0 && tr.stopDist < 400)) ? platformSide(this, tr, this.topo.berths[t0.berth].platform) : '',
         inService: tr.inService, hot: hotMark(tr), chain: this.trainChain(tr),
         maReason: tr.maReason, maDist: tr.maDist, vPermit: tr.vPermit, nextSig: tr.nextSignal,
         task: t0 ? describeTask(this, t0) : '—', kind: tr.tripId >= 0 ? this.plan.trips[tr.tripId].kind : '',
         rm: tr.mode === 'RM',
         vTarget: tr.vTarget, tgtV: tr.tgtV, tgtD: Number.isFinite(tr.tgtD) ? tr.tgtD : -1, tgtReason: tr.tgtReason,
         grade: gradePermille(this.topo, tr.link, tr.off, tr.dir), slip: tr.slip,
-        stopDist: Number.isFinite(tr.stopDist) ? tr.stopDist : -1, a: tr.a, manual: tr.manual, notch: tr.notch,
+        stopDist: Number.isFinite(tr.stopDist) ? tr.stopDist : -1, a: tr.a, manual: tr.manual, notch: tr.notch, atoDriver: tr.atoDriver, reverser: tr.reverser ?? 1, doorEnable: doorEnable(this, tr),
         dwellLeft: tr.phase === 'dwell' || tr.phase === 'reversing' ? Math.max(0, tr.dwellUntil - this.t) : 0,
         nextStation: nextStopStation(tr), ebReason: tr.eb ? tr.ebReason : tr.stopUntil > this.t ? tr.stopReason : '',
         nextStopSkipped: t0?.k === 'stop' && t0.revenue && t0.dep !== null &&
@@ -858,6 +865,8 @@ export function describeCommand(sim: Sim, cmd: Command): string {
     case 'ebRelease': return `授权缓解紧急制动 ${tn(cmd.train)}`;
     case 'trainLevel': return `列车控制级别 ${tn(cmd.train)} → ${cmd.level === 'AUTO' ? '自动' : cmd.level}`;
     case 'trainDto': return `${cmd.on ? '恢复DTO' : '降级ATO'} ${tn(cmd.train)}`;
+    case 'atoButton': return `${tn(cmd.train)} ATO启动${cmd.button.toUpperCase()}${cmd.down ? '按下' : '释放'}`;
+    case 'reverser': return `${tn(cmd.train)} 换向器${cmd.position}`;
     case 'door': return `${tn(cmd.train)} ${cmd.side === 'L' ? '左' : '右'}侧车门`;
     case 'lineAto': return cmd.on ? '全线转ATO运营（DTO兼容模式）' : '全线恢复DTO运营';
     case 'rescue': return `组织救援 ${tn(cmd.rescuer)}→${tn(cmd.failed)}`;

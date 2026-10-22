@@ -157,6 +157,7 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     ebSince: back(tr.ebSince), ebCallAt: back(tr.ebCallAt), modeSince: back(tr.modeSince), tbCallAt: back(tr.tbCallAt),
     pendingModeAt: back(tr.pendingModeAt), phaseSince: back(tr.phaseSince), dwellUntil: back(tr.dwellUntil),
     arrivedAt: back(tr.arrivedAt), depReadyAt: back(tr.depReadyAt), doorLockedAt: back(tr.doorLockedAt ?? 0), failRecoverAt: back(tr.failRecoverAt),
+    doorExchange: tr.doorExchange && { ...tr.doorExchange },
     doorMotion: tr.doorMotion && { ...tr.doorMotion, trainAt: back(tr.doorMotion.trainAt), psdAt: back(tr.doorMotion.psdAt) },
     lastTraceT: back(tr.lastTraceT), stopUntil: back(tr.stopUntil), waitSince: back(tr.waitSince),
     halt: { ...tr.halt, since: back(tr.halt.since), plannedUntil: back(tr.halt.plannedUntil), unplannedSince: back(tr.halt.unplannedSince) },
@@ -168,6 +169,12 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     departureDisplay: tr.departureDisplay && { ...tr.departureDisplay, stop: task(tr.departureDisplay.stop),
       headLeftAt: tr.departureDisplay.headLeftAt === undefined ? undefined : back(tr.departureDisplay.headLeftAt) },
     hist: tr.hist.slice(), body: tr.body.map(b => ({ ...b })), skipStations: new Set(tr.skipStations),
-    trace: [], dmiLog: [], dmiPrev: null,
+    autoStartAt: tr.autoStartAt === undefined ? undefined : tr.autoStartAt - DAY_S,
+    autoOpenAt: tr.autoOpenAt === undefined ? undefined : tr.autoOpenAt - DAY_S,
+    recentBody: tr.recentBody?.map(b => ({ ...b })),
+    retreat: tr.retreat && { ...tr.retreat }, atoButtons: tr.atoButtons && { ...tr.atoButtons },
+    dmiQueue: tr.dmiQueue?.map(m => ({ ...m, at: m.at - DAY_S })),
+    dmiContext: tr.dmiContext && { ...tr.dmiContext },
+    trace: [], dmiLog: tr.dmiLog.map(m => ({ ...m, t: m.t - DAY_S })), dmiPrev: tr.dmiPrev && { ...tr.dmiPrev },
   };
 }

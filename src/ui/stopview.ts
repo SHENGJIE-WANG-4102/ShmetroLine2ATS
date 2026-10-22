@@ -48,7 +48,8 @@ const GANGWAY = 0.6;
 const DOORS = 5;
 const DOOR_PITCH = 4.6;
 const FIRST_DOOR = 3.0;
-const DOOR_W = 1.4;
+const TRAIN_DOOR_W = 1.6;
+const PSD_DOOR_W = DOOR_PITCH / 2.25; // 门:固定玻璃=1:1.25
 const END_DOOR = 2.5;
 const PLATFORM = 188;
 /** cab side door and windscreen, from the nose (m) */
@@ -133,10 +134,10 @@ export function departureText(board: DmiData['departureBoard'], now: number): st
 const DIGITS = ['111101101101111', '010110010010111', '111001111100111', '111001111001111', '101101111001001',
   '111100111001111', '111100111101111', '111001001001001', '111101111101111', '111101111001111'];
 
-function dotNumber(c: CanvasRenderingContext2D, text: string, right: number, y: number) {
+function dotNumber(c: CanvasRenderingContext2D, text: string, right: number, y: number, color = '#31ef59') {
   const pitch = 3, w = text.length * 12 + 6, x = right - w;
   c.fillStyle = '#07110b'; c.fillRect(x, y - 11, w, 23);
-  c.fillStyle = '#31ef59';
+  c.fillStyle = color;
     [...text].forEach((n, i) => [...(n === 'H' ? '101101111101101' : DIGITS[Number(n)])].forEach((bit, p) => {
     if (bit === '1') { c.beginPath(); c.arc(x + 5 + i * 12 + p % 3 * pitch, y - 6 + Math.floor(p / 3) * pitch, 1.1, 0, Math.PI * 2); c.fill(); }
   }));
@@ -173,7 +174,7 @@ export class StopView {
     const platformDoorsOpen = d?.psd === 'open' || d?.psd === 'fault' ? true : d?.psd === 'closed' ? false : t.doors;
     const side = board?.side || t.platSide;
     const rem = board?.side && Number.isFinite(board.remaining) ? board.remaining : StopView.remaining(t);
-    const show = t.manual && !!side && Number.isFinite(rem) && rem < STOPVIEW_RANGE;
+    const show = (t.manual || t.atoDriver) && !!side && Number.isFinite(rem) && rem < STOPVIEW_RANGE;
     this.el.style.display = show ? 'block' : 'none';
     if (!show) return;
     const c = this.ctx;
@@ -238,7 +239,7 @@ export class StopView {
       for (let car = 0; car < CARS; car++) {
         doorsOf(EYE - car * CAR).forEach((dc, k) => {
           if (dc < pLeft - 2 || dc > pRight + 2) return;
-          const x = sx(dc - DOOR_W / 2), w = DOOR_W * PX;
+          const x = sx(dc - PSD_DOOR_W / 2), w = PSD_DOOR_W * PX;
           // leaves slide apart behind the fixed panels when open
           const shift = platformDoorsOpen ? w / 2 : 0;
           rect(x, 71, w, 8, platformDoorsOpen ? C.gap : C.leaf);
@@ -286,7 +287,7 @@ export class StopView {
       c.fillStyle = board.aspect === 'G' ? C.green : board.aspect === 'Y' || board.aspect === 'GUIDE' ? '#ffe153' : C.red;
       c.beginPath(); c.arc(x, y, 4, 0, Math.PI * 2); c.fill();
       const text = departureText(board, now);
-      if (text !== null) dotNumber(c, text, x - 13, y);
+      if (text !== null) dotNumber(c, text, x - 13, y, text !== 'H' && now > board.at ? '#ff4545' : '#31ef59');
       c.fillStyle = '#ffffff'; c.font = `10px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
       c.fillText(board.signalName, x, P(55));
     }
@@ -310,14 +311,14 @@ export class StopView {
       for (const side of [0, 1]) {
         const yWin = side ? 159 : 94, yDoor = side ? 159 : 90;
         for (let k = 0; k <= DOORS; k++) {
-          const wa = k < DOORS ? doorX[k] + DOOR_W / 2 + 0.25 : back + 0.8;
-          const wb = k === 0 ? winFront - 0.25 : doorX[k - 1] - DOOR_W / 2 - 0.25;
+          const wa = k < DOORS ? doorX[k] + TRAIN_DOOR_W / 2 + 0.25 : back + 0.8;
+          const wb = k === 0 ? winFront - 0.25 : doorX[k - 1] - TRAIN_DOOR_W / 2 - 0.25;
           if (wb > wa) rect(xOf(wa), yWin, (wb - wa) * PX, 5, C.window);
         }
         rect(a, side ? 166 : 90, b - a, 2, LINE);
         for (const d of doorX) {
           const state = stopViewDoorState(t, side === 0);
-          rect(xOf(d - DOOR_W / 2), yDoor, DOOR_W * PX, 9, state === 'closing' ? C.closingDoor : state === 'open' ? (side === 0 ? C.gap : C.red) : C.carDoor);
+          rect(xOf(d - TRAIN_DOOR_W / 2), yDoor, TRAIN_DOOR_W * PX, 9, state === 'closing' ? C.closingDoor : state === 'open' ? (side === 0 ? C.gap : C.red) : C.carDoor);
           if (state !== 'open' && PX >= 6) rect(xOf(d) - 0.5, yDoor, 1, 9, C.doorLine);
         }
         if (head) rect(xOf(-CAB_DOOR - CAB_DOOR_W / 2), yDoor, CAB_DOOR_W * PX, 9, C.carDoor);

@@ -10,7 +10,7 @@ const COMMANDS: Record<Command['c'], true> = {
   switchLock: true, switchFieldLock: true, axleReset: true, sectionUnlock: true, setTsr: true, cancelTsr: true,
   platformHold: true, platformSkip: true, platformEsp: true, psdBypass: true, trainHold: true, trainSkip: true,
   turnback: true, withdraw: true, recoverService: true, exchangeDuty: true, standby: true, authRM: true,
-  ebRelease: true, trainLevel: true, trainDto: true, lineAto: true, door: true, rescue: true,
+  ebRelease: true, trainLevel: true, trainDto: true, lineAto: true, door: true, reverser: true, atoButton: true, rescue: true,
   addTrain: true, overlay: true, zoneLevel: true, ack: true, fault: true, repair: true,
   trainMaintenance: true, sectionBlock: true, switchBlock: true, manual: true, radio: true, radioAuto: true,
   env: true, runLevel: true, randomFaults: true, scenarioEnd: true, bookmark: true, lowAdhesion: true,
@@ -25,6 +25,7 @@ export function validateCommand(sim: Sim, cmd: Command): string | null {
     setTsr: ['sections', 'kmh'], cancelTsr: ['sections'], platformHold: ['platform', 'on'], platformSkip: ['platform', 'on'],
     platformEsp: ['platform', 'on'], psdBypass: ['platform', 'on'], trainHold: ['train', 'on'], trainSkip: ['train', 'station', 'on'],
     turnback: ['train', 'station'], withdraw: ['train'], recoverService: ['train'], exchangeDuty: ['train', 'with'], standby: ['train'], authRM: ['train'], ebRelease: ['train'], trainLevel: ['train', 'level'],
+    reverser: ['train', 'position'], atoButton: ['train', 'button', 'down'],
     trainDto: ['train', 'on'], lineAto: ['on'], door: ['train', 'side'],
     rescue: ['failed', 'rescuer'], addTrain: ['depot', 'dir', 'to', 'time'], overlay: ['id', 'from', 'to', 'headway'],
     zoneLevel: ['zones', 'level'], ack: ['ids'], fault: ['kind', 'target', 'duration'], repair: ['fault'], trainMaintenance: ['fault'],
@@ -63,7 +64,9 @@ export function validateCommand(sim: Sim, cmd: Command): string | null {
     if (cmd.level === 'CBTC' && sim.faults.some(f => f.kind === 'zcFail' && !f.repaired && (f.target < 0 || cmd.zones.includes(f.target)))) return 'ZC 故障未修复，不能恢复CBTC';
   }
   if (cmd.c === 'sectionBlock' && !cmd.on && cmd.sections.some(s => sim.sec[s].poss >= 0)) return '施工封锁须施工销点后解封';
-  if (cmd.c === 'manual' && !['CM', 'RM', 'AUTO'].includes(cmd.mode)) return '无效驾驶模式';
+  if (cmd.c === 'manual' && !['CM', 'RM', 'AM', 'AUTO'].includes(cmd.mode)) return '无效驾驶模式';
+  if (cmd.c === 'reverser' && ![-1, 0, 1].includes(cmd.position)) return '无效换向器位置';
+  if (cmd.c === 'atoButton' && (!['f', 'g'].includes(cmd.button) || typeof cmd.down !== 'boolean')) return '无效ATO启动按钮';
   if (cmd.c === 'door' && !['L', 'R'].includes(cmd.side)) return '无效车门侧';
   if (cmd.c === 'randomFaults' && ![0, 1, 2, 3].includes(cmd.level)) return '故障等级须为0–3';
   if (cmd.c === 'runLevel' && ![0, 1, 2, 3].includes(cmd.level)) return '运行等级须为按图(0)或1–3';
