@@ -10,7 +10,7 @@ import { cancelTrip, STANDBY_CALL, type Block, type DepotTask, type StopTask, ty
 import type { Dir, Topology } from './topology';
 import { nextLink, travelDirection, ahead } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, type CmdResult } from './interlocking';
-import { computeBody, reverseTrain, goalBerth, stopError, moveBack, rescueRouteReady, reversePermission } from './movement';
+import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission } from './movement';
 import { takeVehicle, putVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell } from './onboard';
@@ -1072,14 +1072,26 @@ export function platformSide(sim: Sim, tr: Train, p: number): 'L' | 'R' {
   return (sim.topo.platforms[p].face === 'N') === east ? 'L' : 'R';
 }
 
+/** The stop whose window the train is standing in: the current dwell, or the
+ * stop it has just been cleared to leave — the ATP gives door enable by
+ * position, so doors can be reopened after the departure was booked. */
+function standingStop(sim: Sim, tr: Train): { st: StopTask; p: number } | undefined {
+  for (const st of [tr.tasks[0], tr.departureDisplay?.stop]) {
+    if (st?.k !== 'stop') continue;
+    const p = sim.topo.berths[st.berth].platform;
+    if (p >= 0 && Math.abs(berthError(sim, tr, st.berth)) <= 1) return { st, p };
+  }
+  return undefined;
+}
+
 /** Door enable is a physical position, independent of first passenger exchange. */
 export function doorEnable(sim: Sim, tr: Train): { L: boolean; R: boolean; depot: boolean } {
   const no = { L: false, R: false, depot: false };
   if (tr.v >= 0.05 || tr.doorMotion?.kind === 'closing') return no;
-  const st = tr.tasks[0];
-  if (tr.phase === 'dwell' && st?.k === 'stop' && stopNeedsDoors(tr, st) && Math.abs(stopError(sim, tr)) <= 1) {
-    const p = sim.topo.berths[st.berth].platform;
-    if (p >= 0) return { L: platformSide(sim, tr, p) === 'L', R: platformSide(sim, tr, p) === 'R', depot: false };
+  const at = standingStop(sim, tr);
+  if (at && stopNeedsDoors(tr, at.st)) {
+    const side = platformSide(sim, tr, at.p);
+    return { L: side === 'L', R: side === 'R', depot: false };
   }
   if (!tr.manual || tr.depotStage !== 'out') return no;
   for (const dp of sim.topo.depots) {
@@ -1149,7 +1161,8 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
   if (tr.doorMotion?.kind === 'closing') return { ok: false, msg: '车门正在关闭并等待锁闭确认' };
   const word = (x: 'L' | 'R') => (x === 'L' ? '左侧' : '右侧');
   const st = tr.phase === 'dwell' && tr.tasks[0]?.k === 'stop' ? tr.tasks[0] : undefined;
-  const p = st ? sim.topo.berths[st.berth].platform : -1;
+  // after the departure is booked, a train still in the window reopens without a new exchange
+  const p = st ? sim.topo.berths[st.berth].platform : standingStop(sim, tr)?.p ?? -1;
   const plat = p >= 0 ? platformSide(sim, tr, p) : '';
   // doors the signalling opened before the driver took over
   if (tr.doorsOpen && !tr.doorSide && plat) tr.doorSide = plat;
@@ -1175,7 +1188,7 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
     return { ok: true, msg: `${word(side)}车门开启（出库试验）` };
   }
   if (st && tr.doorsAwait) startDoorCycle(sim, tr, st, p, rm);
-  else if (st) openDoors(sim, tr, p, rm);
+  else if (p >= 0) openDoors(sim, tr, p, rm);
 
   return { ok: true, msg: `${word(side)}车门开启${rm ? '，站务人员操作PSL开启站台门' : ''}` };
 }

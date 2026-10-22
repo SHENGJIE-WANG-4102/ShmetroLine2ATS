@@ -393,6 +393,15 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
 export function stopError(sim: Sim, tr: Train): number {
   const goal = goalBerth(tr);
   if (goal < 0) return NaN;
+  const err = berthError(sim, tr, goal);
+  if (!Number.isNaN(err)) return err;
+  if (Number.isFinite(tr.stopDist) && tr.stopDist < 400) return tr.stopDist;
+  return NaN;
+}
+
+/** Signed distance from the head to a berth's stopping point along the
+ * travelled path; NaN when the berth is not on it. */
+export function berthError(sim: Sim, tr: Train, goal: number): number {
   const { topo } = sim;
   const b = topo.berths[goal];
   if (b.link === tr.link && b.dir === tr.dir) return (b.offset - tr.off) * tr.dir;
@@ -403,7 +412,6 @@ export function stopError(sim: Sim, tr: Train): number {
       return -(beyond + (b.dir === 1 ? link.len - b.offset : b.offset));
     beyond += link.len;
   }
-  if (Number.isFinite(tr.stopDist) && tr.stopDist < 400) return tr.stopDist;
   return NaN;
 }
 

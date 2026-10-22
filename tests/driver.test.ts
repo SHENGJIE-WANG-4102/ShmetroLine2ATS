@@ -138,6 +138,17 @@ describe('driver controls and physical enable',()=>{
   expect(driverDoor(s,t,side).ok).toBe(true);expect(t.doorLockedAt).toBeGreaterThan(locked);
   expect(b.platform).toBeGreaterThanOrEqual(0);
  });
+ it('a train still standing in the window after its departure is booked can reopen doors without a new exchange',()=>{
+  const {s,t,side}=fixture();expect(driverDoor(s,t,side).ok).toBe(true);s.t+=.3;doorMotionTick(s);
+  s.t=t.tasks[0].k==='stop'?t.tasks[0].dep!+1:s.t;expect(driverDoor(s,t,side).ok).toBe(true);
+  s.t=t.doorLockedAt!+.1;doorMotionTick(s);updateTrainTasks(s,t,.1);
+  expect(t.phase).toBe('run');expect(t.tasks[0]).toHaveProperty('station',13);expect(t.v).toBe(0);
+  const load=t.load,served=s.passengersServed;
+  expect(doorEnable(s,t)[side]).toBe(true);expect(driverDoor(s,t,side).ok).toBe(true);expect(t.doorsOpen).toBe(true);
+  expect(classify(s,t).detail).toContain('门');
+  s.t+=.3;doorMotionTick(s);expect(driverDoor(s,t,side).ok).toBe(true);
+  expect(t.load).toBe(load);expect(s.passengersServed).toBe(served);expect(s.metrics.safety.wrongDoor).toBe(0);
+ });
  it.each(['BZL','LYD','CSD'])('%s enables the exit test point only, both sides, without PSD or passengers',key=>{
   const {s,t}=fixture();t.phase='run';t.depotStage='out';const load=t.load;
   const depot=s.topo.depots.find(d=>d.key===key)!;
