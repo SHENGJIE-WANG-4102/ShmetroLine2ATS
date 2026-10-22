@@ -32,6 +32,12 @@ export function speedIndication(t: TrainSnap): string {
   return t.tgtReason === '限速' ? `前方限速 ${Math.round(t.tgtV * 3.6)}` : '前方停车';
 }
 
+/** Pure snapshot advisory; hidden outside CM, including old replay snapshots. */
+export function recommendedSpeed(t: TrainSnap): number | null {
+  return t.manual && t.mode === 'CM' && Number.isFinite(t.vRecommended)
+    ? Math.max(0, Math.min(t.vPermit, t.vRecommended!)) * 3.6 : null;
+}
+
 const W = 760;
 const H = 640;
 /** dial range and sweep: 0–120 km/h over 300°, 60 at 12 o'clock (Line 2 photos) */
@@ -248,8 +254,9 @@ export class Dmi {
       c.beginPath(); c.moveTo(tx, ty); c.lineTo(b1x, b1y); c.lineTo(b2x, b2y); c.closePath(); c.fill();
     }
     // the target speed of a coming restriction, in yellow on the rim, while it is announced
-    if (speedIndication(t)) {
-      const a = ang(t.tgtV * 3.6);
+    const recommendation = recommendedSpeed(t);
+    if (recommendation !== null || speedIndication(t)) {
+      const a = ang(recommendation ?? t.tgtV * 3.6);
       const [tx, ty] = pt(a, R + 4);
       const [b1x, b1y] = pt(a - 0.07, R + 24);
       const [b2x, b2y] = pt(a + 0.07, R + 24);
@@ -275,6 +282,11 @@ export class Dmi {
     c.fillStyle = C.white;
     c.font = `bold 20px ${FONT}`;
     c.fillText('km/h', CX, CY + R - 16);
+    if (recommendation !== null) {
+      c.font = `18px ${FONT}`;
+      c.fillStyle = C.yellow;
+      c.fillText(`实际：${Math.round(v)}　推荐：${Math.round(recommendation)}　最大：${Math.round(vp)}`, CX, 448, 370);
+    }
     c.textBaseline = 'alphabetic';
   }
 
@@ -351,11 +363,11 @@ export class Dmi {
     else if (t.hold) { msg = '扣车'; col = C.yellow; }
     else if (t.manual && t.doorSide && !t.doors) { msg = '非站台侧车门开启'; col = C.red; }
     else if (t.manual && t.doorsAwait) { msg = '停稳，待开门'; col = C.white; }
-    else if (t.manual) { msg = '人工驾驶'; col = C.white; }
+    else if (t.manual) { msg = t.halt?.detail || '人工驾驶'; col = C.white; }
     if (msg) {
-      c.font = `bold 26px ${FONT}`;
+      c.font = `bold ${msg.length > 12 ? 19 : 26}px ${FONT}`;
       c.fillStyle = col;
-      c.fillText(msg, 418, 424);
+      c.fillText(msg, 418, 424, 326);
     }
   }
 

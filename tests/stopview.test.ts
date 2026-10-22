@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { stopViewScale, FREEZE_REM, departureSeconds, departureText, stopViewDoorState } from '../src/ui/stopview';
+import { recommendedSpeed } from '../src/ui/dmi';
+import type { TrainSnap } from '../src/sim/model';
 
 describe('stopping close-up scale', () => {
+  it('shows the advisory only in CM and reads only the current snapshot',()=>{
+    const t={manual:true,mode:'CM',vRecommended:20,vPermit:22} as TrainSnap;
+    expect(recommendedSpeed(t)).toBe(72);
+    expect(recommendedSpeed({...t,vRecommended:10})).toBe(36);
+    expect(recommendedSpeed(t)).toBe(72);
+    for(const mode of ['DTO','AM','RM'] as const)expect(recommendedSpeed({...t,mode})).toBeNull();
+    expect(recommendedSpeed({...t,vRecommended:undefined})).toBeNull();
+  });
   it('distinguishes closing from open and locked, including a manually opened far-side door', () => {
     expect(stopViewDoorState({doors:true,doorSide:'',doorClosing:true},true)).toBe('closing');
     expect(stopViewDoorState({doors:true,doorSide:'',doorClosing:true},false)).toBe('closed');

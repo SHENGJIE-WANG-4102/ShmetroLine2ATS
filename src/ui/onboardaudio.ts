@@ -27,7 +27,7 @@ export function onboardFrame(snap: Snapshot, heard: TrainSnap | null, topo: Topo
   const paSide = onboardDoorSide(train?.nextStation ?? -1, train?.direction ?? 'DN', destination);
   return { t: snap.t, rate: snap.speed, paused: snap.paused, train, destination,
     skipConfirmed:planned?.stop===false||skipped||heard?.nextStopSkipped===true,
-    doorSide: paSide === 'B' ? 'B' : heard?.platSide || paSide,
+    doorSide: paSide === 'B' ? 'B' : (heard?.manual || heard?.atoDriver ? heard.platSide : '') || paSide,
     // A distant call can lie beyond the authority scan, with stopDist=-1.
     // The plan/worker intent still identifies it as a call for departure PA.
     willStop: !!train && train.nextStation >= 0 && planned?.stop !== false && !skipped && heard?.nextStopSkipped !== true &&

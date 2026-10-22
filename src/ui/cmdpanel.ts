@@ -351,7 +351,7 @@ export class CommandPanel {
     this.store.send({ type: 'dmi', train: id });
     this.dmi.showLever(t0.manual);
     this.el.append(this.dmi.el);
-    if (t0.manual || t0.atoDriver) this.el.append(this.stopView.el);
+    this.el.append(this.stopView.el);
     if (t0.atoDriver) this.el.append(h('div', { class: 'keys' }, 'ATO启动：发车条件满足后同时按住 F + G'));
     if (t0.manual) this.el.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 右门 · ', h('b', {}, 'U'), ' 左门 · 鼠标滚轮/点击手柄档位'));
     if (t0.manual) this.el.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
@@ -375,7 +375,7 @@ export class CommandPanel {
       if (!t) return;
       const snap = this.store.snap!;
       this.dmi.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
-      if (t.manual || t.atoDriver) this.stopView.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
+      this.stopView.draw(t, snap.dmi?.train === id ? snap.dmi : null, snap.t);
       if (t.drv) {
         clear(scores);
         const st = t.drv.stops.slice(-8);

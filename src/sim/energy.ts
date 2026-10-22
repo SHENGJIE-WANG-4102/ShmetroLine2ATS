@@ -47,8 +47,8 @@ export function newEnergy(): EnergyState {
 }
 
 /** the run level a train actually runs: late trains run level 1 */
-export function trainLevel(sim: Sim, tr: Train): number {
-  if (tr.delay > LEVEL_LATE) return 1;
+export function trainLevel(sim: Sim, tr: Train, delay = tr.delay): number {
+  if (delay > LEVEL_LATE) return 1;
   if (sim.runLevel > 0) return sim.runLevel;
   const trip = sim.plan.trips[tr.tripId];
   const task = tr.tasks[0];

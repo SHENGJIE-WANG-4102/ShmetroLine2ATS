@@ -10,7 +10,7 @@ import { cancelTrip, STANDBY_CALL, type Block, type DepotTask, type StopTask, ty
 import type { Dir, Topology } from './topology';
 import { nextLink, travelDirection, ahead } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, type CmdResult } from './interlocking';
-import { computeBody, reverseTrain, goalBerth, stopError, moveBack, rescueRouteReady } from './movement';
+import { computeBody, reverseTrain, goalBerth, stopError, moveBack, rescueRouteReady, reversePermission } from './movement';
 import { takeVehicle, putVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell } from './onboard';
@@ -865,7 +865,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     tr.intervalWait = undefined;
     tr.intervalRelease = undefined;
     const remaining = stopError(sim, tr);
-    tr.departureDisplay = { stop: st, remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p) };
+    tr.departureDisplay = { stop: st, at: tr.dwellUntil, remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p) };
     tr.tasks.shift();
     ps.lastDep = sim.t;
     tr.phase = 'run';
@@ -902,6 +902,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
   const { topo } = sim;
   tr.v = 0;
   if (task.k === 'stop') {
+    tr.retreat = undefined;
     tr.departureDisplay = undefined;
     const duty = sim.plan.blocks[tr.block];
     if (duty?.start.kind === 'stable' && duty.start.berth === task.berth && duty.trips[0] === task.trip
@@ -1201,10 +1202,11 @@ export function stopScore(err: number): number {
 const OVERRUN_BACK_MAX = 15;
 
 /** An ATO train stopped beyond its mark; wait for the existing dispatch procedure. */
-function atoOverrun(sim: Sim, tr: Train, task: StopTask, err: number) {
+export function atoOverrun(sim: Sim, tr: Train, task: StopTask, err: number, refusal?: string) {
   tr.overrun = -err;
   tr.stopUntil = sim.t + 86400;
-  tr.stopReason = '过标停车';
+  tr.stopReason = refusal ? `退行受阻：${refusal}` : '过标停车';
+  if (refusal) dmiNote(sim, tr, `退行受阻：${refusal}，请调度指示`, 'warn');
   const st = STATIONS[task.station].name;
   const m = (-err).toFixed(1);
   sim.log('B', '列车', `列车 ${trainLabel(tr)} ${st} 制动停车过标 ${m} m`, { key: `overrun-${tr.id}`, train: tr.id });
@@ -1212,7 +1214,7 @@ function atoOverrun(sim: Sim, tr: Train, task: StopTask, err: number) {
   const end = task.dep === null;
   openCall(sim, {
     kind: 'overrun', from: `列车 ${trainLabel(tr)} 司机`, train: tr.id,
-    text: `${st}进站滑行过标 ${m} m，车门与站台门未对齐，请求${far ? '指示' : '退行对标'}`,
+    text: `${st}进站滑行过标 ${m} m，车门与站台门未对齐，${refusal ? `退行受阻（${refusal}），` : ''}请求${far || refusal ? '指示' : '退行对标'}`,
     options: [
       { key: 'back', label: '同意退行对标' },
       ...(end ? [] : [{ key: 'skip', label: '越站，不办理客运' }]),
@@ -1252,7 +1254,11 @@ export function answerOverrun(sim: Sim, tr: Train | undefined, option: string): 
 /** a manually driven train has come to a stand: check the stopping position */
 function manualArrival(sim: Sim, tr: Train, task: Task) {
   const err = stopError(sim, tr);
-  if (Number.isNaN(err)) return;
+  if (Number.isNaN(err)) {
+    if (tr.retreat && !tr.overrun && task.k === 'stop')
+      atoOverrun(sim, tr, task, -tr.retreat.distance, reversePermission(sim, tr).detail);
+    return;
+  }
   if (task.k !== 'stop') {
     // turnback / stabling berths: within a few metres is fine
     if (err <= 5 && err >= -3) arriveAtBerth(sim, tr, task);
@@ -1278,7 +1284,6 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
     const score = Math.max(0, Math.min(100, Math.round(stopScore(err) * 0.8 + Math.max(0, 20 - 10 * d.releases) - (d.restop ? 30 : 0))));
     rec(tr.retreat ? 0 : score, tr.retreat ? '过标退行' : [oneBrake ? '一把闸' : d.releases ? `缓解${d.releases}次` : '', d.restop ? '二次对标' : ''].filter(Boolean).join(' '));
     sim.log('I', '列车', `列车 ${trainLabel(tr)} 人工驾驶 ${STATIONS[task.station].name} 停车，对标误差 ${err >= 0 ? '欠' : '过'}${Math.abs(err).toFixed(2)} m`);
-    tr.retreat = undefined;
     tr.reverser = 0;
     arriveAtBerth(sim, tr, task);
     return;
@@ -1287,6 +1292,10 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
     tr.retreat = { distance: -err, authorised: -err <= 5 };
     if (-err > 5) atoOverrun(sim, tr, task, err);
     else dmiNote(sim, tr, '过标停车，司机退行对标', 'warn');
+  }
+  if (!tr.overrun) {
+    const permit = reversePermission(sim, tr);
+    if (!permit.ok) atoOverrun(sim, tr, task, err, permit.detail);
   }
 
 }

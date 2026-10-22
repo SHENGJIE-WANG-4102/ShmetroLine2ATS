@@ -27,6 +27,16 @@ const motion = (cmds: StationSoundCommand[]) => plays(cmds).filter(c => c.clips[
 const countdown = (seconds: number, patch: Partial<StationTrain> = {}) => tr({ v: .75 * seconds, distance: .375 * seconds * seconds, ...patch });
 
 describe('recorded platform scheduling', () => {
+  it('automatic platform close-up side never overrides the existing announcement side',()=>{
+    const topo={links:[{platform:-1,track:'DN'}],platforms:[],stations:STATIONS.map(()=>({platforms:{DN:0,UP:1}}))} as unknown as Topology;
+    const nextStation=STATIONS.findIndex(s=>s.id==='JSL'),destination='浦东1号2号航站楼';
+    const expected=onboardDoorSide(nextStation,'DN',destination);
+    const heard={...tr({nextStation}),link:0,dir:1,tripId:-1,dest:destination,task:'停站 江苏路',stopDist:100,
+      manual:false,atoDriver:false,platSide:expected==='L'?'R':'L'} as unknown as TrainSnap;
+    const snap={t:100,speed:1,paused:false,platforms:new Uint16Array(2)} as unknown as Snapshot;
+    expect(onboardFrame(snap,heard,topo,null).doorSide).toBe(expected);
+    expect(onboardFrame(snap,{...heard,manual:true,mode:'CM'},topo,null).doorSide).toBe(heard.platSide);
+  });
   it('starts a stable arrival at its stop anchor and does not repeat it', () => {
     const p = new StationSoundPlanner();
     expect(motion(p.update(frame(100, [countdown(14.2)])))).toEqual([]);

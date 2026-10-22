@@ -2329,3 +2329,42 @@ grep命中的12测试文件按文件运行：除core的11文件327过/4败，cor
 【假设】沿用D126：工作日、文件名近似钟点、10/14未知钟点用22:00情景；受控实跑种子7/干轨/200人/无前车，末班为隔离任务实跑。ETA加减速度沿用原近似口径，未将它当成现场新标定参数。二轮改动 `src/sim/ats.ts`、`dynamics.ts`、`movement.ts`、`scripts/audio/field-model.ts`、`tests/field-calibration.test.ts`、本文件及现场报告；未触碰其他会话文件，未跑npm test/soak/simday。性能是任务书要求的独立CPU基准，不是长安全回归。系统保持静音。
 
 120倍重点：13:10龙阳路加开往广兰路及回程广兰路中间线G2309，看30km/h段结束后delay是否合理、车尾出清后正常提速；12:00、22:15机场三组长区间看巡航平台。末班工作日1391/1380/3003、双休日1379/1372/3003。等待环另行关注22:22远东大道090/122，不在本轮擅加让行规则。
+
+## D128 10/22晚试玩：退行路径、模式切换、CM推荐速度及统一发车时钟
+
+2026-10-22，按 `docs/handoff-playtest-1022-evening.md`，优先于区间时分分析。只修改工作区，未提交、推送或切分支。此前时分分析的3个音频入口修改暂存原处，另有车底运用原型及14号线资料，均未作为本任务改动。
+
+### 复现与修复
+
+1. **退行与模式切换分开验证。** 机场→海天三路UP完整物理走行、近站接管CM、手柄控制开过标后停稳：新建案例过标约1.12m，改前 `reversePermission` 本来返回允许；未宣称复现截图071-1044同车同秒。但改前另一个真实走行约1.92m过标案例，在AUTO自动对标、完成到站后残留 `retreat`，再切CM/P4速度为0，已复现第5项。另用连续1m短链的边界夹具证实，原 `computeBody` 保留“车身链数+1条链”会把需要退回的链裁掉；两项新回归在冻结改前源码均失败，改后通过。
+2. **修路径保留根因。** `pathBody` 统一按物理长度取车体及历史范围，车尾后至少保留5m；实际过标距离、已有退行授权距离更长时保留完整返回范围。`hist` 与 `recentBody` 使用同一范围，后者只取实际占用过的部分。投影检查不再裁短其历史副本。整列扫掠、后方车、他车进路、道岔原位及防护检查保留；无法定位停车点明确拒绝，不把NaN当检查通过，也不往运动状态写NaN。
+3. **拒绝退行有出路。** 任何已有退行状态的拒绝（含旧历史缺失）复用 `atoOverrun/openCall` 的退行/越站请示；DMI日志、司机状态和调度来电写实际 `permit.detail`。调度同意退行不绕开安全检查；选越站后才清退行状态并允许司机改前进。完成到站统一清理 `retreat`，不再仅人工到站时清理，消除AUTO→CM残留牵引封锁。人工牵引抑制与停车原因共用 `manualTractionHold`，门未关、未锁闭、换向器零位及模式转换各报实际原因。
+4. **近景完整接线。** 详情面板无条件挂载/刷新近景，`StopView`、快照 `platSide` 取消接管限制；DTO/AM/CM/RM选中后均按距离和站台侧显示，对标、H和离站5秒消隐沿用。车载选片仅在原来manual/atoDriver条件下读取该侧别，自动车仍用原报站数据，保留双侧门优先，不因新增画面改变声音。
+5. **CM推荐只显示。** 现有目标计算同时供自动控制与CM建议，复用D127完整路径/ETA、预算、限速、制动、低粘着及迟到判据；`levelTarget` 从已有等级控制提取，同一减速值用于建议。CM的预算迟到只作局部计算，不改它的实际delay；牵引仍走原手柄/ATP分支，不用建议控制运动。新增黄色三角及“实际/推荐/最大”，仅CM显示，帮助同步。测试同一物理状态改变到站预算，建议速度变化而CM的v/a/位置/delay完全一致；一级时与DTO目标相等。
+6. **发车时刻一处计算。** `computeDmi` 停站/换端时用 `dwellUntil`，进站用计划时刻，DEP与近景板均取同一结果；离站显示保留该实际时钟，红色超时和H规则不改。新增 `departureDisplay.at` 随车保存、跨日减一天；`vRecommended` 为随车派生值、每次移动更新，快照和检查点同步。没有新增Sim顶层字段；Train归属说明在 `state.ts`，时钟搬运在 `carryTrain`。
+
+【假设】跨链驾驶回归将隔离夹具的停车点放到链端前3m，以覆盖真实站点不容易命中的边界；连续1m短链也是边界夹具，均不是新线路参数。实际海天三路完整走行另外保留。未改运行图、时分/停站模型、富余、运行等级参数、限速或首末班数据。
+
+### 验证与范围
+
+直接相关6文件185项通过：driver36、dmi5、stopview6、field-calibration10、stationaudio124、continuous-day4。追加core104项，整批为288通过、备车顶替1项在并行负载下超60秒；原60秒门槛单独复跑该项57.46秒通过，合计289个不同用例通过，日志为 `tests-final.log`、`core-retry.log`。类型检查和网页生产构建通过。原近景测试停留在换端阶段却未设置实际发车时钟，本轮补 `dwellUntil=t+28`，不再要求实际时钟为0时显示图定28秒；新增晚到场景图定已过15秒而实际剩14秒，两处严格同秒。没有放宽完整性、权限或等待时限。
+
+Browser插件不可用，使用独立无声的headless Edge/Playwright。实际主页身份、非空、无构建错误覆盖通过；真实帮助页点击驾驶页检查新说明。DMI/近景画布切换DTO/CM/RM，在1600×1100、1280×900检查；真实 `CommandPanel` 选中未接管DTO并点击跟踪，近景已挂载可见。晚到DTO的DEP=07:50:59、当前07:50:45，点阵计时14；CM示例74/72/79，RM不显示推荐。0页面/控制台错误；既有TrackView绘图调用仍有一条警告栈。受控快照用于界面验证，实际运动由上述仿真回归验证，不冒称真实浏览器整线驾驶。截图、DOM/画布断言在 `ui.json`、`dto-panel.png`、`dto.png`、`cm.png`。
+
+随机批：改前冻结源码与改后4例101–104均在第一天遇回段等待环，4例车次、链路和首个失败秒数一致：101为22:22:01的090/122回段；102为10:48:19的029回段/064-0028；103为09:30:23的065/083回段；104为09:22:18的049-4033/028回段。未新增类型，仍是4失败/0完整通过，未完成第二天随机覆盖，不能称两日0违例。最终补齐未知路径拒绝/数值保护后，再以最终模型哈希重跑102/103，仍分别同车同秒同等待链；未豁免、跳过或继续越过失败。详细结果在 `fuzz-before-frozen/`、`fuzz-after/`、`fuzz-verified/`。两种日型的trips/blocks哈希均与改前完全相同，见 `plan-hashes.json`。
+
+复跑命令（所有一次性输出均在忽略目录 `work/evening-playtest/`）：
+
+```powershell
+npx tsc --noEmit
+npx vitest run tests/driver.test.ts tests/dmi.test.ts tests/stopview.test.ts tests/field-calibration.test.ts tests/stationaudio.test.ts tests/continuous-day.test.ts tests/core.test.ts
+npm run build
+npx tsx work/evening-playtest/reproduce.ts --cycle
+npx tsx work/evening-playtest/plan-compare.ts
+node work/evening-playtest/ui.mjs
+npx tsx scripts/fuzz-day.ts --cases 4 --jobs 2 --out work/evening-playtest/fuzz-after
+npx tsx scripts/fuzz-day.ts 102 --level 2 --wind 1 --density 3:4 --day-type weekend --date 2026-10-24 --template none --out work/evening-playtest/fuzz-verified
+npx tsx scripts/fuzz-day.ts 103 --level 3 --wind 1 --density 3:4 --day-type weekday --date 2026-10-19 --template ciie --out work/evening-playtest/fuzz-verified
+```
+
+120倍只看自动车：选中DTO/AM看进站近景、对标和发车时钟；人工驾驶需降至≤5倍，重点在海天三路UP过标约2m后退行、停站中AUTO/AM/CM往返切换后关门发车、长区间CM推荐速度随预算变化。系统音频设置未再改动。未运行npm test、soak或simday。

@@ -9,6 +9,27 @@ import { buildStops, platformBerth, tripTasks } from '../src/sim/timetable';
 import { releaseRoute } from '../src/sim/interlocking';
 
 describe('field section measurement harness', () => {
+  it('CM advisory shares the ATO target, responds to the budget, and never controls manual effort or delay', () => {
+    const sim=createProbeWorld();
+    probeSection(sim,STATIONS.findIndex(s=>s.id==='YDD'),STATIONS.findIndex(s=>s.id==='HTS'),'DN',43200);
+    for(let i=0;i<300;i++)sim.step();
+    const tr=sim.trainList[0];
+    expect(sim.command({c:'manual',train:tr.id,mode:'CM'}).ok).toBe(true);sim.drive(tr.id,1);
+    const saved=capture(sim),id=tr.id;
+    updateTrainMotion(sim,tr,.1);
+    const cm=tr.vRecommended!,motion={v:tr.v,a:tr.a,off:tr.off,link:tr.link,delay:tr.delay};
+    expect(cm).toBeGreaterThan(0);expect(cm).toBeLessThanOrEqual(tr.vPermit);
+    expect(sim.snapshot().trains.find(t=>t.id===id)?.vRecommended).toBe(cm);
+    restore(sim,saved);const auto=sim.trains.get(id)!;auto.manual=false;auto.mode='DTO';
+    updateTrainMotion(sim,auto,.1);expect(auto.vTarget).toBeCloseTo(cm,8);expect(auto.vRecommended).toBeUndefined();
+    restore(sim,saved);const manual=sim.trains.get(id)!;const task=manual.tasks[0];
+    if(task.k!=='stop'||task.arr===null)throw Error('expected onward arrival');
+    manual.tasks[0]={...task,arr:task.arr+120};updateTrainMotion(sim,manual,.1);
+    expect(manual.vRecommended).toBeLessThan(cm);
+    expect({v:manual.v,a:manual.a,off:manual.off,link:manual.link,delay:manual.delay}).toEqual(motion);
+    const cp=capture(sim);manual.vRecommended=99;restore(sim,cp);
+    expect(sim.trains.get(id)!.vRecommended).toBe(cp.trains.find(t=>t.id===id)!.vRecommended);
+  });
   it('uses real departure, arrival and door clocks with ATO regulation enabled', () => {
     const sim = createProbeWorld();
     const from = STATIONS.findIndex(s => s.id === 'YDD'), to = STATIONS.findIndex(s => s.id === 'HTS');

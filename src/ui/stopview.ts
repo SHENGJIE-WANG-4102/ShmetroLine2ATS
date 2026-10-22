@@ -174,7 +174,7 @@ export class StopView {
     const platformDoorsOpen = d?.psd === 'open' || d?.psd === 'fault' ? true : d?.psd === 'closed' ? false : t.doors;
     const side = board?.side || t.platSide;
     const rem = board?.side && Number.isFinite(board.remaining) ? board.remaining : StopView.remaining(t);
-    const show = (t.manual || t.atoDriver) && !!side && Number.isFinite(rem) && rem < STOPVIEW_RANGE;
+    const show = !!side && Number.isFinite(rem) && rem < STOPVIEW_RANGE;
     this.el.style.display = show ? 'block' : 'none';
     if (!show) return;
     const c = this.ctx;

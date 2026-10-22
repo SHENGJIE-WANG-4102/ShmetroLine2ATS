@@ -104,6 +104,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
   }
   const dwelling = tr.phase === 'dwell' || tr.phase === 'reversing';
   if (dwelling) dep = tr.dwellUntil;
+  else if (tr.departureDisplay) dep = tr.departureDisplay.at ?? tr.departureDisplay.stop.dep ?? -1;
   // platform screen doors where the head stands
   let psd: DmiData['psd'] = 'none';
   const pi = topo.links[tr.link].platform;
@@ -123,7 +124,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
   if (current?.k === 'stop') {
     const b = topo.berths[current.berth];
     const found = b.platform < 0 ? null : signalAheadFrom(sim, b.link, b.offset, b.dir);
-    if (found) departureBoard = { at: current.dep ?? -1, signalName: topo.signals[found.sig].name,
+    if (found) departureBoard = { at: dep, signalName: topo.signals[found.sig].name,
       signalOffset: found.dist, aspect: sim.sig[found.sig].aspect,
       held: tr.hold || sim.plat[b.platform].hold, headLeftAt: tr.departureDisplay?.headLeftAt,
       remaining: tr.departureDisplay?.remaining ?? err, side: tr.departureDisplay?.side ?? platformSide(sim, tr, b.platform), station: current.station };

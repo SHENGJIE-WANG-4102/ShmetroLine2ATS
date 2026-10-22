@@ -128,10 +128,22 @@ describe('Line 2 photographed cab content',()=>{
    const b=s.topo.berths.find(b=>b.platform===p.id&&!b.reverse)!;
    if(!b)continue;
    t.tasks=[{k:'stop',berth:b.id,station:b.station,trip:-1,arr:null,dep:s.t+28,doors:true,revenue:true}];
+   t.dwellUntil=s.t+28;
    const board=computeDmi(s,t.id)!.departureBoard;
    expect(board, p.name).toBeDefined();expect(board!.signalOffset).toBeGreaterThanOrEqual(0);
    expect(board!.at).toBe(s.t+28);
   }
+ });
+ it('uses the ATS departure clock for both displays after a late arrival and retains it on departure',()=>{
+  const s=new Sim({dayType:'weekday',dateLabel:'late-board',startTime:14400,seed:7,noPossessions:true});
+  const t=s.trainList[0],b=s.topo.berths[platformBerth(s.topo,12,'DN')];
+  t.link=b.link;t.off=b.offset;t.dir=b.dir;t.hist=[{link:b.link,dir:b.dir}];t.phase='dwell';
+  const stop={k:'stop' as const,berth:b.id,station:b.station,trip:-1,arr:s.t-5,dep:s.t-15,doors:true,revenue:true};
+  t.tasks=[stop];t.dwellUntil=s.t+14;t.departureDisplay=undefined;
+  const d=computeDmi(s,t.id)!;expect(d.dep-s.t).toBe(14);expect(d.departureBoard!.at).toBe(d.dep);
+  t.hold=true;t.dwellUntil+=9;expect(computeDmi(s,t.id)!.departureBoard).toMatchObject({at:t.dwellUntil,held:true});
+  t.phase='run';t.tasks=[];t.departureDisplay={stop,at:t.dwellUntil,remaining:0,side:'L'};
+  expect(computeDmi(s,t.id)).toMatchObject({dep:t.dwellUntil,departureBoard:{at:t.dwellUntil}});
  });
 });
 

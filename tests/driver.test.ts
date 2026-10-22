@@ -13,6 +13,8 @@ import {sectionCruise,sectionEta,computeRunTimes} from '../src/sim/dynamics';
 import {closeDoors} from '../src/sim/psd';
 import {OPERATIONS} from '../src/data/line2';
 import {setMode} from '../src/sim/onboard';
+import {driveOverrun,reverseToMark} from './helpers/driver-approach';
+import {stopError,advance} from '../src/sim/movement';
 const make=()=>new Sim({dayType:'weekday',date:'2026-10-22',dateLabel:'driver',startTime:14400,seed:7,noPossessions:true,autoRadio:false});
 function fixture(){
  const s=make(),t=s.trainList[0],b=s.topo.berths[platformBerth(s.topo,12,'DN')];
@@ -26,6 +28,97 @@ function fixture(){
  computeBody(s,t);indexBodies(s);return {s,t,b,side:doorEnable(s,t).L?'L' as const:'R' as const};
 }
 describe('driver controls and physical enable',()=>{
+ it('keeps the rear swept path across multiple one-metre links instead of retaining one link',()=>{
+  const {s,t,b}=fixture();
+  // Boundary geometry fixture: a legal train footprint extends behind the
+  // stopping link. Actual traversal, not a filled-in unvisited return path.
+  const lengths=[100,1,1,200];
+  s.topo={...s.topo,nodes:Array.from({length:5},(_,i)=>({...s.topo.nodes[0],id:i,kind:'joint' as const,
+    links:[...(i>0?[i-1]:[]),...(i<4?[i]:[])]})),
+   links:lengths.map((len,i)=>({...s.topo.links[b.link],id:i,a:i,b:i+1,len,section:i})),
+   berths:[{...b,id:0,link:3,offset:184,dir:1}]};
+  for(let i=0;i<4;i++)Object.assign(s.sec[i],{lockRoute:-1,blocked:false,envTsr:0,directionEsp:false,disturbed:false});
+  Object.assign(t,{link:3,dir:1,off:180,phase:'run',hist:lengths.map((_,link)=>({link,dir:1})),recentBody:undefined,
+   retreat:undefined,overrun:0,stopDist:4});
+  t.tasks=[{k:'stop',berth:0,station:b.station,trip:-1,arr:s.t,dep:s.t+30,doors:true,revenue:true}];
+  computeBody(s,t);expect(advance(s,t,7)).toBe(true);computeBody(s,t);indexBodies(s);
+  t.retreat={distance:3,authorised:true};
+  expect(t.hist.map(h=>h.link)).toEqual([0,1,2,3]);
+  expect(reversePermission(s,t)).toMatchObject({ok:true});
+  const cp=capture(s);t.recentBody![0].from=99;restore(s,cp);
+  expect(s.trains.get(t.id)!.recentBody).toEqual(cp.trains.find(x=>x.id===t.id)!.recentBody);
+ });
+ it.each([4,8])('returns across link boundaries after a physical %sm overrun, with consent above 5m',metres=>{
+  const {s,t,berth}=driveOverrun(metres,true);
+  expect(-stopError(s,t)).toBeGreaterThan(metres-1);
+  expect(t.link).not.toBe(berth.link);
+  if(metres>5) {
+   expect(reversePermission(s,t).ok).toBe(false);
+   const call=s.calls.find(c=>c.state==='ringing'&&c.kind==='overrun')!;
+   expect(s.command({c:'radio',call:call.id,option:'back'}).ok).toBe(true);
+  }
+  expect(reversePermission(s,t).ok).toBe(true);
+  reverseToMark(s,t);expect(t.phase).toBe('dwell');expect(Math.abs(stopError(s,t))).toBeLessThanOrEqual(1);
+  const side=doorEnable(s,t).L?'L':'R';expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  expect(t.doorsOpen).toBe(true);expect(t.eb,t.ebReason).toBe(false);
+ });
+ it.each(['route','train'] as const)('requests dispatch when a rear %s denies return; skip alone clears forward inhibition',blocker=>{
+  const {s,t}=driveOverrun();
+  const section=s.topo.links[t.link].section;
+  if(blocker==='route'){s.sec[section].lockRoute=0;s.routes.set(0,{owner:999,route:0,state:'locked'} as any);}
+  else {const end=s.topo.links[t.link].len;s.linkBodies.get(t.link)!.push({train:999,from:end-1,to:end});}
+  updateTrainTasks(s,t);
+  const permit=reversePermission(s,t);expect(permit.ok).toBe(false);
+  expect(t.dmiLog.at(-1)?.m).toContain(permit.detail);
+  const call=s.calls.find(c=>c.kind==='overrun'&&c.state==='ringing')!;
+  expect(call.text).toContain(permit.detail);expect(call.options.map(x=>x.key)).toContain('skip');
+  s.command({c:'reverser',train:t.id,position:1});s.drive(t.id,4);updateTrainMotion(s,t,.1);expect(t.v).toBe(0);
+  if(blocker==='route')expect(s.routes.get(0)?.owner).toBe(999);
+  expect(s.command({c:'radio',call:call.id,option:'skip'}).ok).toBe(true);expect(t.retreat).toBeUndefined();
+ });
+ it('missing historical stop location still requests dispatch with the actual path refusal',()=>{
+  const {s,t}=driveOverrun(4,true);t.hist=[{link:t.link,dir:t.dir}];t.stopDist=Infinity;
+  expect(Number.isNaN(stopError(s,t))).toBe(true);updateTrainTasks(s,t);
+  const permit=reversePermission(s,t);expect(permit).toMatchObject({ok:false,detail:'退行停车点不在本车已走路径内'});
+  expect(s.calls.find(c=>c.kind==='overrun'&&c.state==='ringing')?.text).toContain(permit.detail);
+  s.command({c:'reverser',train:t.id,position:-1});s.drive(t.id,4);updateTrainMotion(s,t,.1);
+  expect(t.v).toBe(0);expect(t.stopDist).toBe(Infinity);expect(t.lastMa).toBe(0);expect(t.lastDs).toBe(0);
+ });
+ it('describes manual door, reverser and authority inhibitions instead of an empty MANUAL reason',()=>{
+  const {s,t}=fixture();t.phase='run';t.doorsAwait=false;t.reverser=1;t.notch=4;t.stopUntil=0;
+  t.doorLockedAt=s.t+1;expect(classify(s,t).detail).toContain('锁闭');
+  t.doorLockedAt=0;t.reverser=0;expect(classify(s,t).detail).toContain('零位');
+  t.reverser=1;t.maDist=0;t.maCode='ROUTE_WAIT';t.maReason='出站信号关闭';
+  expect(classify(s,t)).toMatchObject({code:'ROUTE_WAIT',detail:'出站信号关闭'});
+ });
+ it('automatic completion of a real overrun clears the retreat before switching back to CM',()=>{
+  const {s,t}=driveOverrun();expect(t.retreat).toBeDefined();
+  expect(s.command({c:'manual',train:t.id,mode:'AUTO'}).ok).toBe(true);
+  for(let n=0;n<1000;n++) {
+   for(const call of s.calls.filter(c=>c.state==='ringing'&&c.kind==='overrun'))
+    s.command({c:'radio',call:call.id,option:'back'});
+   s.step();
+   if(t.phase==='dwell')break;
+  }
+  expect(t.phase).toBe('dwell');expect(t.retreat).toBeUndefined();
+  for(let n=0;n<1000&&t.phase==='dwell';n++)s.step();
+  expect(t.phase).toBe('run');expect(s.command({c:'manual',train:t.id,mode:'CM'}).ok).toBe(true);
+  s.drive(t.id,4);for(let n=0;n<30;n++)s.step();expect(t.v).toBeGreaterThan(0);
+ });
+ it.each(['DTO','AM'] as const)('%s → CM and CM → automatic → CM can depart before/after door completion',mode=>{
+  for(const locked of [false,true]) {
+   const {s,t,side,b}=fixture();t.mode=mode;t.manual=false;t.doorsAwait=false;t.dwellUntil=s.t+10;
+   if(!locked){t.manual=true;driverDoor(s,t,side);t.manual=false;}
+   expect(s.command({c:'manual',train:t.id,mode:'CM'}).ok).toBe(true);
+   expect(s.command({c:'manual',train:t.id,mode:'AUTO'}).ok).toBe(true);
+   expect(s.command({c:'manual',train:t.id,mode:'CM'}).ok).toBe(true);
+   if(!locked){s.t+=.3;doorMotionTick(s);expect(driverDoor(s,t,side).ok).toBe(true);}
+   s.t=Math.max(s.t+11,t.doorLockedAt??0);doorMotionTick(s);updateTrainTasks(s,t);
+   expect(t.phase).toBe('run');expect(t.tasks[0]).not.toHaveProperty('berth',b.id);
+   s.drive(t.id,4);for(let n=0;n<20;n++){s.t+=.1;updateTrainMotion(s,t,.1);}
+   expect(t.v).toBeGreaterThan(0);expect(t.retreat).toBeUndefined();
+  }
+ });
  it('adds the existing driver turnback budget when DTO converts to AM during reversal, only once',()=>{
   const {s,t,b}=fixture();t.mode='DTO';t.manual=false;t.level='CBTC';t.phase='reversing';t.phaseSince=s.t-10;
   t.tasks=[{k:'reverse',station:b.station,berths:[b.id],chosen:b.id,minTime:40}];t.dwellUntil=t.phaseSince+40;

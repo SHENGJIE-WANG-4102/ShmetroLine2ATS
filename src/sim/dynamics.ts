@@ -106,12 +106,17 @@ export function levelAccel(state: { v: number; a: number; coast: boolean }, leve
     state.coast = false;
     return controlAccel(speedAfterEasing(state.v, state.a), vT, stopAt);
   }
-  const { band, lower } = levelBand(level);
-  const vc = vT >= vCruise - 0.1 ? vT - lower : vT;
+  const { band } = levelBand(level);
+  const vc = levelTarget(level, vT, vCruise);
   if (state.coast && state.v < vc - band) state.coast = false;
   else if (!state.coast && state.v >= vc - 0.3) state.coast = true;
   if (state.coast && state.v <= vc) return -PERF.resist;
   return controlAccel(speedAfterEasing(state.v, state.a), vc, stopAt);
+}
+
+/** The same cruise reduction for traction control and the CM recommendation. */
+export function levelTarget(level: number, target: number, cruise: number, speed = Infinity): number {
+  return level > 1 && speed >= 5 && target >= cruise - .1 ? target - levelBand(level).lower : target;
 }
 
 // ---------------------------------------------------------------- planning run times

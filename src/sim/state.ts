@@ -40,7 +40,7 @@ export const SCALARS = [
   'nextCallId', 'autoRadio', 'autoDispatch', 'atoLine', 'scenarioFired', 'holidayFired', 'runLevel', 'randomLevel', 'nextRandomAt', 'nextBookmarkId', 'planRev',
 ] as const;
 
-/** Train-owned state (doors, reverser, retreat, ATO buttons, DMI sequence) carries
+/** Train-owned state (doors, reverser, retreat, recent path, CM advisory, ATO buttons, DMI sequence) carries
  * with trains; their clocks are shifted by carryTrain, without Sim top-level fields. */
 /** Every checkpoint field must explicitly declare its operating-day ownership. */
 export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number], 'carry' | 'daily'> = {

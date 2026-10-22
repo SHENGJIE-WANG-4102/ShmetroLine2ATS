@@ -267,7 +267,7 @@ export interface Train {
   pendingDeparture?: StopTask;
   /** Last platform retained until five seconds after the head leaves it.
    * Physical distance is integrated by the simulator, never by UI frames. */
-  departureDisplay?: { stop: StopTask; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number };
+  departureDisplay?: { stop: StopTask; at?: number; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number };
   load: number;
   delay: number;
   hold: boolean;
@@ -323,6 +323,8 @@ export interface Train {
   atoButtons?: { f: boolean; g: boolean };
   reverser?: -1 | 0 | 1;
   recentBody?: BodySeg[];
+  /** Derived CM advisory only; carried/replayed with the train, refreshed by motion. */
+  vRecommended?: number;
   retreat?: { distance: number; authorised: boolean };
   dmiQueue?: { at: number; message: 'active' | 'located' | 'available' }[];
   dmiContext?: { task: string; cab: number };
@@ -685,6 +687,8 @@ export interface TrainSnap {
   kind: string;
   rm: boolean;
   vTarget: number;
+  /** CM advisory in m/s; absent for automatic and restricted manual modes. */
+  vRecommended?: number;
   tgtV: number;
   tgtD: number;
   tgtReason: string;

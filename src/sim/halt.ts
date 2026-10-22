@@ -14,6 +14,7 @@
 import type { Sim } from './engine';
 import type { Train, StopTask } from './model';
 import { atoStartReady } from './ats';
+import { manualTractionHold } from './movement';
 import { STATIONS } from '../data/line2';
 
 export type HaltCode =
@@ -140,7 +141,12 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (tr.pendingMode) return r('MODE_CHANGE');
   if (tr.stopUntil > sim.t) return r('INCIDENT', -1, tr.stopReason, tr.stopUntil);
   if (tr.hold) return r('HOLD');
-  if (tr.manual) return r('MANUAL');
+  if (tr.manual) {
+    const hold = manualTractionHold(sim, tr);
+    if (hold) return r('MANUAL', -1, hold);
+    if (tr.maDist <= 1 && tr.maCode !== 'NONE') return r(tr.maCode, tr.maTrain, tr.maReason);
+    return r('MANUAL', -1, tr.notch <= 0 ? '等待司机加牵引' : '司机牵引起步');
+  }
   if (!tr.tasks.length) return r('NO_TASK');
   if (tr.tasks[0].k === 'rescue') return r('RESCUE', tr.tasks[0].target);
   const plannedUntil = 0;

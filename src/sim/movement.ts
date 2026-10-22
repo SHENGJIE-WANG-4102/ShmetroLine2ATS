@@ -11,8 +11,8 @@ import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
 import { levelAccel, trainLevel } from './energy';
 import { swPos } from './interlocking';
 import { TRACTION_UNITS } from './vehicle';
-import { PERF, brakingSpeed, jerkLimited, tractionAccel, sectionEta, sectionCruise, staticLinkLimit, taskPlatformLimit, type SectionLimit } from './dynamics';
-import { routeLeadsTo, distanceToBerthFrom, type TaskPathVisitor } from './ats';
+import { PERF, brakingSpeed, jerkLimited, tractionAccel, sectionEta, sectionCruise, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
+import { routeLeadsTo, distanceToBerthFrom, atoOverrun, type TaskPathVisitor } from './ats';
 import type { HaltCode } from './halt';
 import { applyEB } from './onboard';
 import { psdSafe } from './psd';
@@ -462,10 +462,10 @@ function checkTrainsOnLink(
 }
 
 /** Recompute body footprint from head + history. */
-export function computeBody(sim: Sim, tr: Train, remember = true) {
+function pathBody(sim: Sim, tr: Train, length: number) {
   const { topo } = sim;
   const body: BodySeg[] = [];
-  let remaining = tr.len;
+  let remaining = length;
   const l = topo.links[tr.link];
   if (tr.dir === 1) {
     const from = Math.max(0, tr.off - remaining);
@@ -476,7 +476,6 @@ export function computeBody(sim: Sim, tr: Train, remember = true) {
     body.push({ link: tr.link, from: tr.off, to });
     remaining -= to - tr.off;
   }
-  let used = 1;
   for (let i = tr.hist.length - 2; i >= 0 && remaining > 0.01; i--) {
     const h = tr.hist[i];
     const hl = topo.links[h.link];
@@ -489,14 +488,27 @@ export function computeBody(sim: Sim, tr: Train, remember = true) {
       body.push({ link: h.link, from: 0, to });
       remaining -= to;
     }
-    used++;
   }
-  if (tr.hist.length > used + 1) tr.hist.splice(0, tr.hist.length - used - 1);
+  return body;
+}
+
+export function computeBody(sim: Sim, tr: Train, remember = true) {
+  const body = pathBody(sim, tr, tr.len);
   tr.body = body;
   if (remember) {
-    // Only links still in recent history are eligible; no inferred unvisited track.
-    const links = new Set(tr.hist.map(h => h.link));
-    const visited = (tr.recentBody ?? []).filter(b => links.has(b.link));
+    // Keep a measured distance behind the tail, rather than one arbitrarily
+    // short link. An overrun retains its entire return as it grows, including
+    // returns requiring dispatch consent. Projection must not prune its copy.
+    const err = stopError(sim, tr);
+    const back = Math.max(5, Number.isFinite(err) ? -err : 0, tr.retreat?.distance ?? 0, tr.overrun);
+    const retained = pathBody(sim, tr, tr.len + back);
+    if (tr.hist.length > retained.length) tr.hist.splice(0, tr.hist.length - retained.length);
+    const visited = (tr.recentBody ?? []).flatMap(b => {
+      const span = retained.find(r => r.link === b.link);
+      if (!span) return [];
+      const from = Math.max(b.from, span.from), to = Math.min(b.to, span.to);
+      return to > from ? [{ link: b.link, from, to }] : [];
+    });
     for (const b of body) {
       const old = visited.find(v => v.link === b.link);
       if (old) { old.from = Math.min(old.from, b.from); old.to = Math.max(old.to, b.to); }
@@ -604,8 +616,10 @@ function runLevelAccel(sim: Sim, tr: Train, vT: number, vCruise: number, stopAt:
 /** Full swept footprint on the train's actual recent path, never a new route.
  * Check the whole return before permitting traction; repeat while reversing. */
 export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -stopError(sim, tr))) {
-  if (!tr.retreat?.authorised || tr.tasks[0]?.k !== 'stop' || !Number.isFinite(distance))
+  if (!tr.retreat?.authorised)
     return { ok: false, detail: '等待调度同意退行', train: -1 };
+  if (tr.tasks[0]?.k !== 'stop') return { ok: false, detail: '退行缺少停车对标任务', train: -1 };
+  if (!Number.isFinite(distance)) return { ok: false, detail: '退行停车点不在本车已走路径内', train: -1 };
   const projected = { ...tr, hist: tr.hist.slice(), body: tr.body.slice() };
   const swept = tr.body.slice();
   let left = distance;
@@ -616,7 +630,8 @@ export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -s
     swept.push(...projected.body);
     left -= step;
   }
-  if (Math.abs(stopError(sim, projected)) > 1 || projected.body.reduce((s, b) => s + b.to - b.from, 0) < tr.len - .01)
+  const endError = stopError(sim, projected);
+  if (!Number.isFinite(endError) || Math.abs(endError) > 1 || projected.body.reduce((s, b) => s + b.to - b.from, 0) < tr.len - .01)
     return { ok: false, detail: '退行范围超出本车已占用路径', train: -1 };
   for (const b of swept) {
     const visited = tr.recentBody?.find(v => v.link === b.link);
@@ -648,12 +663,15 @@ export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -s
 
 function manualReverse(sim: Sim, tr: Train, dt: number) {
   const err = stopError(sim, tr), permit = reversePermission(sim, tr);
+  if (!permit.ok && tr.retreat && !tr.overrun && tr.tasks[0]?.k === 'stop')
+    atoOverrun(sim, tr, tr.tasks[0], Number.isFinite(err) ? err : -tr.retreat.distance, permit.detail);
   const limit = OPERATIONS.reverseKmh / 3.6;
-  tr.stopDist = Math.max(0, -err); tr.vPermit = permit.ok ? limit : 0; tr.vEbi = tr.vPermit;
+  tr.stopDist = Number.isFinite(err) ? Math.max(0, -err) : Infinity; tr.vPermit = permit.ok ? limit : 0; tr.vEbi = tr.vPermit;
   tr.maDist = 0; // No forward authority; lastMa below is the separately supervised return distance.
   tr.maSigs = []; tr.maFar = 0; tr.maReason = permit.detail;
   tr.maCode = permit.ok ? 'STOP_POINT' : permit.train >= 0 ? 'TRAIN_AHEAD' : 'DIRECTION_WAIT'; tr.maTrain = permit.train;
   tr.vTarget = permit.ok ? limit : 0;
+  tr.vRecommended = 0;
   if (!tr.eb && (tr.v > limit + 1e-6 || err > 1)) {
     triggerEB(sim, tr, err > 1 ? '退行越过停车窗' : '退行超速防护', 'atp');
     if (tr.v > limit) { tr.drv.overspeed++; sim.metrics.safety.overspeed++; }
@@ -664,7 +682,7 @@ function manualReverse(sim: Sim, tr: Train, dt: number) {
   const before = tr.v;
   tr.v = Math.max(0, before + a * dt); tr.a = a;
   let ds = (before + tr.v) * dt / 2;
-  const remaining = Math.max(0, 1 - err);
+  const remaining = Number.isFinite(err) ? Math.max(0, 1 - err) : 0;
   if (ds > remaining) {
     if (!tr.eb) triggerEB(sim, tr, '退行越过停车窗', 'atp');
     ds = remaining; tr.v = 0; tr.a = 0;
@@ -675,6 +693,7 @@ function manualReverse(sim: Sim, tr: Train, dt: number) {
 }
 
 export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
+  tr.vRecommended = undefined;
   // A withdrawn target may be inside the braking distance. The onboard keeps
   // its last issued authority while braking; after standstill it can accept
   // the shorter replacement. This is not permission to overrun an issued MA.
@@ -689,6 +708,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     tr.v = 0;
     tr.a = 0;
     tr.vTarget = 0;
+    if (tr.manual && tr.mode === 'CM') tr.vRecommended = 0;
     tr.tgtV = 0;
     tr.tgtD = tr.phase === 'dwell' ? 0 : Infinity;
     tr.tgtReason = tr.phase === 'dwell' ? '停站' : '';
@@ -725,14 +745,17 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   // the ATP curves end at the movement authority.
   const rm = tr.mode === 'RM';
   const regulated = !rm && !tr.manual && tr.inService && (tr.mode === 'DTO' || tr.mode === 'AM');
+  const recommend = tr.manual && tr.mode === 'CM';
+  const targetRegulated = regulated || recommend && tr.inService;
   // Running delay against the arrival plan: the arrival this train makes
   // from here at the current speed limit, compared with the planned arrival.
   const nextStop = tr.tasks[0];
-  const budgetProfile = regulated && nextStop?.k === 'stop' && nextStop.arr !== null ? regulationProfile(sim, tr) : null;
+  const budgetProfile = targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null ? regulationProfile(sim, tr) : null;
   const budgetDistance = budgetProfile?.distance ?? Infinity;
-  if (regulated && tr.phase === 'run' && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance))
-    tr.delay = sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, budgetProfile?.limits, PERF.atoMargin) - nextStop.arr;
-  const atoMargin = regulated && tr.delay > 2 ? PERF.atoFastMargin : PERF.atoMargin;
+  const targetDelay = targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance)
+    ? sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, budgetProfile?.limits, PERF.atoMargin) - nextStop.arr : tr.delay;
+  if (regulated) tr.delay = targetDelay;
+  const atoMargin = targetRegulated && targetDelay > 2 ? PERF.atoFastMargin : PERF.atoMargin;
   const stopAt = Math.min(scan.stopDist, scan.maDist);
   // the profile (gradient.ts): gravity on the train, and the height of a point
   // ahead for the ATP curves, which brake against the grade as well (D65)
@@ -744,7 +767,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   const rise = (d: number) => sense ? heightAt(prof, head + sense * d) - h0 : 0;
   // wet rail (adhesion.ts); in low-adhesion mode ATO brakes earlier and softer on the exposed section
   const adh = adhesionLimit(sim, tr);
-  const lowAdh = sim.env.lowAdh && adh.exposed && !tr.manual;
+  const lowAdh = sim.env.lowAdh && adh.exposed && (!tr.manual || recommend);
   const bPlan = lowAdh ? LOW_ADH_BPLAN : PERF.bPlan;
   let vT = scan.vBody - (rm ? 0.3 : atoMargin);
   let vPerm = scan.vBody;
@@ -777,17 +800,18 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   }
   consider(tr.maDist, 0, tr.maReason || 'MA终点');
   if (scan.stopDist !== Infinity && scan.stopDist <= scan.maDist) consider(scan.stopDist, 0, '停车点');
-  if (regulated && nextStop?.k === 'stop' && nextStop.arr !== null) {
+  if (targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null) {
     vT = Math.min(vT, sectionCruise(budgetDistance, tr.v, nextStop.arr - sim.t, PERF.vMax - atoMargin, budgetProfile?.limits, atoMargin));
   }
   vT = Math.min(vT, vPerm, tr.vCap);
   // standing a few metres short of a signal at stop: ATO does not start into
   // so short an authority (it could not ease off in time under the jerk limit)
-  if (!rm && !tr.manual && tr.v < 0.05 && scan.maCode === 'ROUTE_WAIT' && scan.maDist < 15 && scan.stopDist > scan.maDist) vT = 0;
-  if (tr.mode === 'CM') vT *= 0.96;
+  if (!rm && (!tr.manual || recommend) && tr.v < 0.05 && scan.maCode === 'ROUTE_WAIT' && scan.maDist < 15 && scan.stopDist > scan.maDist) vT = 0;
   if (tr.hold && tr.v < 0.1) vT = 0;
   if (standStill) vT = 0;
   vT = Math.max(0, vT);
+  if (recommend) tr.vRecommended = tr.eb ? 0 : Math.max(0,
+    levelTarget(targetRegulated ? trainLevel(sim, tr, targetDelay) : 1, vT, scan.vBody - atoMargin, tr.v));
   tr.vTarget = vT;
   tr.vPermit = Math.max(0, vPerm);
   tr.vEbi = rm ? PERF.vRM + PERF.atpTolerance : vEbi;
@@ -817,7 +841,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   } else if (tr.manual) {
     a = notchAccel(tr.v, tr.notch);
     // door-closed loop: no traction with any door open
-    if ((standStill || tr.doorSide || tr.doorsOpen || sim.t < (tr.doorLockedAt ?? 0) || tr.reverser === 0 || tr.retreat) && a > 0) a = 0;
+    if (manualTractionHold(sim, tr) && a > 0) a = 0;
     trackApproach(tr);
   } else {
     let c = runLevelAccel(sim, tr, vT, scan.vBody - atoMargin, stopAt, regulated);
@@ -899,6 +923,20 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     }
   }
   computeBody(sim, tr);
+}
+
+/** One predicate for traction inhibition and the driver's standstill reason. */
+export function manualTractionHold(sim: Sim, tr: Train): string {
+  if (tr.pendingMode && tr.v < .05) return '等待驾驶模式转换';
+  if (tr.stopUntil > sim.t) return tr.stopReason || '等待区间停车解除';
+  if (tr.doorsOpen || tr.doorSide) return '等待车门关闭';
+  if (sim.t < (tr.doorLockedAt ?? 0)) return '等待车门锁闭';
+  if (tr.reverser === 0) return '换向器在零位';
+  if (tr.retreat) {
+    const permit = reversePermission(sim, tr);
+    return permit.ok ? '过标停车，换向器打后退行对标' : permit.detail;
+  }
+  return '';
 }
 
 /** 一把闸: brake releases while moving in the last 200 m before a manual station stop */

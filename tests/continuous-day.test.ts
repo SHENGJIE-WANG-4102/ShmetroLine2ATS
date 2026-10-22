@@ -67,7 +67,8 @@ describe('continuous operating days',()=>{
   const stamp=100000;
   Object.assign(s.trainList[0],{ebSince:stamp,ebCallAt:stamp,modeSince:stamp,tbCallAt:stamp,pendingModeAt:stamp,phaseSince:stamp,dwellUntil:stamp,doorLockedAt:stamp,arrivedAt:stamp,depReadyAt:stamp,failRecoverAt:stamp,lastTraceT:stamp,stopUntil:stamp,waitSince:stamp});
   const berth=s.topo.berths.find(b=>b.kind==='platform')!;
-  s.trainList[0].departureDisplay={stop:{k:'stop',berth:berth.id,station:berth.station,trip:-1,arr:stamp,dep:stamp,doors:true,revenue:true},remaining:-2,side:'L',headLeftAt:stamp};
+  s.trainList[0].departureDisplay={stop:{k:'stop',berth:berth.id,station:berth.station,trip:-1,arr:stamp,dep:stamp,doors:true,revenue:true},at:stamp,remaining:-2,side:'L',headLeftAt:stamp};
+  s.trainList[0].vRecommended=11;
   s.trainList[0].doorMotion={kind:'closing',platform:berth.platform,trainAt:stamp,psdAt:stamp-.3};
   s.sw[0].moveUntil=stamp;s.plat[0].lastDep=stamp;s.plat[0].lastArr=stamp;s.plat[0].limitUntil=stamp;
   const ar=[...s.routes.values()][0];ar.committed=70001;ar.arsTrain=70002;ar.guideUntil=stamp;ar.cancelAt=stamp;ar.setAt=stamp;
@@ -80,6 +81,8 @@ describe('continuous operating days',()=>{
   s.dispatcher.next.set('test',stamp);s.vehicleResets=[{train:s.trainList[0].id,at:stamp,fault:1}];
   s.log('B','test','persist',{key:'test'});const eid=s.nextEventId;
   const n=new Sim({...nextOperatingConfig(s),noPossessions:false},s);
+  expect(n.trainList[0].departureDisplay?.at).toBe(stamp-DAY_S);
+  expect(n.trainList[0].vRecommended).toBe(11);
   expect(n.faults[0].repairAt).toBe(Infinity);expect(n.faults[0].stageAt).toBe(stamp-DAY_S);expect(n.sig[0].failed).toBe(true);
   expect(n.routes.get(ar.route)?.committed).toBe(70001);
   expect(n.routes.get(ar.route)?.arsTrain).toBe(70002);

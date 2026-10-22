@@ -167,6 +167,7 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     tasks: tr.tasks.map(task),
     ...(tr.pendingDeparture ? { pendingDeparture: task(tr.pendingDeparture) as StopTask } : {}),
     departureDisplay: tr.departureDisplay && { ...tr.departureDisplay, stop: task(tr.departureDisplay.stop),
+      at: tr.departureDisplay.at === undefined ? undefined : back(tr.departureDisplay.at),
       headLeftAt: tr.departureDisplay.headLeftAt === undefined ? undefined : back(tr.departureDisplay.headLeftAt) },
     hist: tr.hist.slice(), body: tr.body.map(b => ({ ...b })), skipStations: new Set(tr.skipStations),
     autoStartAt: tr.autoStartAt === undefined ? undefined : tr.autoStartAt - DAY_S,
