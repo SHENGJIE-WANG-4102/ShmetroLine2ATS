@@ -34,7 +34,7 @@ import { dispatcherTick, newDispatcher, type DispatcherState } from './dispatche
 import { exposureOf, envTick, initPossessions, setWeather, setLowAdhesion } from './env';
 import { holidayOf, holidayFixedRuns, holidayTick, type HolidayDay } from './holiday';
 import { vehicleTick, vehicleNote } from './vehicle';
-import { initConnections, connectionsTick, connectionDeparture, type Connection } from './connections';
+import { initConnections, connectionDeparture, type Connection } from './connections';
 import { scheduleInstructorEvents, type InstructorScheduleEntry, type InstructorOccurrence, type RandomFaultEntry, newMetrics, scenarioTick, startScenario, endScenario, randomTick, setRandomFaults, SCENARIOS } from './scenario';
 import { computePis } from './pis';
 import { computeDmi, dmiTick } from './dmi';
@@ -435,7 +435,6 @@ export class Sim {
     dmiTick(this);
     scenarioTick(this);
     holidayTick(this);
-    connectionsTick(this);
     vehicleTick(this);
     randomTick(this);
     updateFaultLifecycle(this);

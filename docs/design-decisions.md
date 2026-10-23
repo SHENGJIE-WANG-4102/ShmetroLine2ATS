@@ -2425,3 +2425,7 @@ npx tsx scripts/fuzz-day.ts 103 --level 3 --wind 1 --density 3:4 --day-type week
 2026-10-22 试玩。用户决定：换向器只由司机操作，人工停车对标（含退行后）不再自动归零，退行完成后由司机自己拨回前进。
 
 人工驾驶关门锁闭后，ATS 立即记发车并换成下一站任务，车可能仍停在站台。门使能原先按当前停站任务判断，因此再开门报「无门使能」。现按位置判断：车停稳在当前停站或刚记发车那一站（`departureDisplay.stop`）停车点 ±1 m 内即给站台侧使能（`standingStop`，`berthError` 从 `stopError` 拆出复用）。记发车后重开只开关车门和站台门，不再上下客，不改已记发车时刻。`tests/driver.test.ts` 新增一例覆盖。
+
+## D133 末班换乘不互相等候（用户决定）
+
+2026-10-23 用户决定：现实中各线末班不为换乘客扣车或互相等候，车站广播提醒乘客注意换乘线路首末班时间。D63 设想的「他线末班随机晚点 0~10 分钟、2号线扣车等候最多 5 分钟、请他线等候最多 4 分钟」没有依据，全部去掉：不再有 connFeed/connOnward 调度来电、站台扣车和随机晚点。末班接续只按各线公布时刻能衔接的换乘生成（他线→2号线必须按图赶得上 2号线该方向最后一班），2号线晚点赶不上时记一条事件（I 级，不再是 C 级报警）并计滞留人数。改动 `src/sim/connections.ts`、`model.ts`（去掉 actual/holdUntil 和 asked/held/waiting 状态）、`radio.ts`、`engine.ts`、`src/ui/side.ts`。`npx tsc --noEmit` 通过；calibration、timetable 两个测试文件除 D126 已记的 3 条旧失败外全部通过（主仓库改前同样 3 条失败）。

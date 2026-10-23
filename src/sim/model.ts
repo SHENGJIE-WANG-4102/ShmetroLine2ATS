@@ -723,19 +723,15 @@ export interface Connection {
   st: number;
   line: string;
   toward: string;
-  /** other line, as planned: last arrival (feed) or departure (onward) */
+  /** other line's last arrival (feed) or departure (onward), as published */
   planned: number;
-  /** the same with the day's delay (onward: plus any wait agreed) */
-  actual: number;
   walk: number;
   dir: TrackDir;
   /** Line 2 trip and its planned departure (feed) or arrival (onward) here */
   trip: number;
   l2: number;
   pax: number;
-  state: 'pending' | 'asked' | 'held' | 'waiting' | 'made' | 'missed' | 'void';
-  /** we set the platform hold (feed, until the transfer is done) */
-  holdUntil?: number;
+  state: 'pending' | 'made' | 'missed' | 'void';
 }
 
 export interface PisRow {

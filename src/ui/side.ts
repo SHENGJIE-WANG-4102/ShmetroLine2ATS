@@ -320,28 +320,27 @@ export class SidePanel {
   /** tonight's last-train connections near now (D63) */
   private renderConnections(snap: NonNullable<Store['snap']>) {
     const now = snap.t;
-    const list = snap.connections.filter((c) => c.state === 'asked' || c.state === 'held' || c.state === 'missed'
+    const list = snap.connections.filter((c) => c.state === 'missed'
       || (c.kind === 'feed' ? c.l2 : c.planned) >= now - 15 * 60 && (c.kind === 'feed' ? c.l2 : c.planned) <= now + 60 * 60)
       .sort((a, b) => (a.kind === 'feed' ? a.l2 : a.planned) - (b.kind === 'feed' ? b.l2 : b.planned));
     if (!list.length) return;
     const STATE: Record<string, [string, string]> = {
-      pending: ['—', ''], asked: ['待调度应答', 'color:var(--warn)'], held: ['扣车等候', 'color:var(--warn)'], waiting: ['按图', ''],
+      pending: ['—', ''],
       made: ['已衔接', 'color:var(--ok, inherit)'], missed: ['未衔接', 'color:var(--bad)'], void: ['车次取消', ''],
     };
     const hm = (t: number) => fmtTime(t).slice(0, 5);
     const line = (c: (typeof list)[number]) => `${/^\d+$/.test(c.line) ? `${c.line}号线` : c.line}往${c.toward}`;
     const trip = (id: number) => snap.trains.find((t) => t.tripId === id);
     this.tabBody.append(h('div', { class: 'sect-title' }, '末班接续（他线末班 ↔ 2号线）'),
-      h('div', { class: 'hint' }, '“他线→2号线”：他线末班换乘乘客能否赶上2号线该方向末班，晚点时车站请求扣车；“2号线→他线”：2号线列车晚点赶不上他线末班时，可请求他线等候。'),
+      h('div', { class: 'hint' }, '按各线公布的末班时刻能衔接的换乘。各线不互相等候（车站广播提醒乘客注意换乘线路首末班时间），2号线晚点赶不上的换乘乘客记为滞留。'),
       h('table', { class: 'grid' }, h('thead', {}, h('tr', {}, h('th', {}, '车站'), h('th', {}, '接续'), h('th', {}, '他线'), h('th', {}, '2号线'), h('th', {}, '状态'))),
         h('tbody', {}, ...list.map((c) => {
           const tr = trip(c.trip);
           const [label, style] = STATE[c.state];
-          const late = c.actual - c.planned > 60 ? `（晚${Math.round((c.actual - c.planned) / 60)}′）` : '';
           return h('tr', { style: tr ? 'cursor:pointer' : '', onclick: () => { if (tr) { this.store.select({ kind: 'train', id: tr.id }); this.hooks.locate(); } } },
             h('td', {}, STATIONS[c.st].name),
             h('td', {}, c.kind === 'feed' ? `${line(c)} → 2号线${c.dir === 'DN' ? '下行' : '上行'}` : `2号线${c.dir === 'DN' ? '下行' : '上行'} → ${line(c)}`),
-            h('td', { class: 'mono' }, `${hm(c.kind === 'feed' ? c.planned + 30 : c.planned)}${late}`),
+            h('td', { class: 'mono' }, hm(c.kind === 'feed' ? c.planned + 30 : c.planned)),
             h('td', { class: 'mono' }, `${hm(c.l2)}${tr && tr.delay > 60 ? `（晚${Math.round(tr.delay / 60)}′）` : ''}`),
             h('td', { style }, label));
         }))));

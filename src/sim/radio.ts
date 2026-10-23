@@ -18,7 +18,6 @@ import { setBypass } from './psd';
 import { HALT, type HaltCode } from './halt';
 import { nextLink } from './topology';
 import { swPos } from './interlocking';
-import { answerConnection, expireConnection } from './connections';
 import { answerVehicle } from './vehicle';
 
 export const AUTO_DELAY = 15;
@@ -80,12 +79,6 @@ export function answerCall(sim: Sim, id: number, option: string, auto = false): 
   if (auto && (option === 'rm' || call.kind === 'rmPreset' && option === 'approve')) return { ok: false, msg: '自动应答不能授权RM' };
   const r = applyAnswer(sim, call, option);
   if (!r.ok) {
-    // a connection settled by another call meanwhile: nothing left to answer
-    if (call.kind === 'connFeed' || call.kind === 'connOnward') {
-      call.state = 'withdrawn';
-      sim.log('I', '通话', `${call.from}：${r.msg}，通话结束`, { manual: !auto });
-      return r;
-    }
     sim.log('C', '通话', `【应答拒绝】${call.from}：${r.msg}`, { manual: !auto });
     return r;
   }
@@ -100,9 +93,6 @@ export function answerCall(sim: Sim, id: number, option: string, auto = false): 
 function applyAnswer(sim: Sim, call: RadioCall, option: string): { ok: boolean; msg: string } {
   const tr = call.train !== undefined ? sim.trains.get(call.train) : undefined;
   switch (call.kind) {
-    case 'connFeed':
-    case 'connOnward':
-      return answerConnection(sim, call.kind, call.target!, option);
     case 'vTraction':
     case 'vDoorCut':
     case 'vDoorStuck':
@@ -389,10 +379,6 @@ function expire(sim: Sim, c: RadioCall) {
   const tr = c.train !== undefined ? sim.trains.get(c.train) : undefined;
   const again = (delay: number) => sim.pendingCalls.push({ at: sim.t + delay, spec: { kind: c.kind, from: c.from, text: c.text, options: c.options, auto: c.auto, timeout: c.deadline - c.t, train: c.train, station: c.station, target: c.target } });
   switch (c.kind) {
-    case 'connFeed':
-    case 'connOnward':
-      expireConnection(sim, c.target!);
-      break;
     case 'overrun':
       if (tr?.overrun) again(30);
       break;
