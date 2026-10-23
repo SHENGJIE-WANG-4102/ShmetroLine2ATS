@@ -851,7 +851,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
       }
       const extra = closeDoors(sim, tr, p);
       if (extra < 0) return;
-      tr.dwellUntil = Math.max(sim.t + DOOR_CLOSE_S + extra, tr.autoStartAt ?? 0);
+      setDepartureReadyAt(tr, Math.max(sim.t + DOOR_CLOSE_S + extra, tr.autoStartAt ?? 0));
     }
     if (tr.doorsOpen || !psdSafe(ps) || sim.t < (tr.manual ? tr.doorLockedAt ?? 0 : tr.dwellUntil)) return;
     if (!tr.manual && !tr.atoDriver && sim.t < (tr.autoStartAt ?? 0)) return;
@@ -877,7 +877,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     tr.intervalWait = undefined;
     tr.intervalRelease = undefined;
     const remaining = stopError(sim, tr);
-    tr.departureDisplay = { stop: st, at: tr.dwellUntil, remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p) };
+    tr.departureDisplay = { stop: st, at: dwellDepartureAt(tr), remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p) };
     tr.tasks.shift();
     ps.lastDep = sim.t;
     tr.phase = 'run';
@@ -1171,6 +1171,23 @@ export function atoButton(sim: Sim, tr: Train, button: 'f' | 'g', down: boolean)
   return { ok: true, msg: 'ATO启动按钮按下' };
 }
 
+/** The driver's door readiness must not replace the ATS countdown target.
+ * A later ATS change to dwellUntil supplies a new target without UI state feedback. */
+export function dwellDepartureAt(tr: Train): number {
+  const display = tr.departureDisplay;
+  return tr.phase === 'dwell' && display?.readyAt === tr.dwellUntil
+    ? display.at ?? tr.dwellUntil : tr.dwellUntil;
+}
+
+/** Door work or cab handover changes permission, not an existing display target. */
+export function setDepartureReadyAt(tr: Train, at: number) {
+  if (tr.phase === 'dwell' && tr.departureDisplay?.readyAt !== undefined) {
+    tr.departureDisplay.at = dwellDepartureAt(tr);
+    tr.departureDisplay.readyAt = at;
+  }
+  tr.dwellUntil = at;
+}
+
 /**
  * The driver of a manual train presses a door button (Y right / U left): the
  * same side again closes. CM and RM alike (user): the door enable is given only
@@ -1178,7 +1195,7 @@ export function atoButton(sim: Sim, tr: Train, button: 'f' | 'g', down: boolean)
  * station staff work the PSD from the PSL 【假设】.
  */
 export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean; msg: string } {
-  if (!tr.manual && !simulatedAmDriver(tr)) return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
+  if (!tr.manual && !tr.atoDriver && !simulatedAmDriver(tr)) return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
   if (tr.v > 0.05) return { ok: false, msg: '列车未停稳，不能操作车门' };
   if (tr.doorMotion?.kind === 'closing') return { ok: false, msg: '车门正在关闭并等待锁闭确认' };
   const word = (x: 'L' | 'R') => (x === 'L' ? '左侧' : '右侧');
@@ -1191,9 +1208,12 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
   if (tr.doorSide === side) {
     if (side !== plat || !tr.doorsOpen) { closeDoors(sim, tr, -1); return { ok: true, msg: `${word(side)}车门开始关闭` }; }
     if (st?.doors && doorCloseHold(sim, tr)) return { ok: false, msg: '列车车门无法关闭，等待处置' };
+    const displayAt = dwellDepartureAt(tr);
     const extra = closeDoors(sim, tr, p);
     if (extra < 0) return { ok: false, msg: '站台门无法关闭锁紧，等待车站处理（互锁解除）' };
-    tr.dwellUntil = Math.max(sim.t + DOOR_CLOSE_S + extra,simulatedAmDriver(tr)?tr.autoStartAt??0:0);
+    setDepartureReadyAt(tr, Math.max(sim.t + DOOR_CLOSE_S + extra,simulatedAmDriver(tr)?tr.autoStartAt??0:0));
+    if ((tr.manual || tr.atoDriver) && st)
+      tr.departureDisplay = { stop: st, at: displayAt, readyAt: tr.dwellUntil, side: plat };
     return { ok: true, msg: `${word(side)}车门开始关闭${extra ? '，站台门由站务人员确认关闭' : ''}` };
   }
   if (tr.doorSide) return { ok: false, msg: `${word(tr.doorSide)}车门未关闭` };

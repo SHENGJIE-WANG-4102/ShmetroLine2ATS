@@ -189,9 +189,15 @@ describe('shared depot lead turnbacks', () => {
       expect(terminalOccupancy(plan, sim.topo).get(station)?.some(hold => hold.block === block) ?? false).toBe(false);
     });
     it(`${dayType}: keeps depot return windows and the published fleet feasible`, () => {
+      const rejections = terminalReuseRejections(sim.plan);
+      const rejectedReturnNos = new Set(rejections.flatMap(text => {
+        const match = /^(.+)→(.+)：折返待发与 (.+) 出入段/.exec(text)!;
+        expect(match, text).not.toBeNull();
+        return [match[1], ...match[3].split('、')];
+      }));
       const moves = depotMoves(sim.plan.blocks, sim.plan.trips, sim.planCtx).filter(move => move.delta > 0 && move.window
-        && ['4091', '4089'].includes(sim.plan.trips[move.trip!].no));
-      if (dayType === 'weekday') expect(moves).toHaveLength(2);
+        && rejectedReturnNos.has(sim.plan.trips[move.trip!].no));
+      if (dayType === 'weekday') expect(moves.length).toBeGreaterThanOrEqual(2);
       for (let i = 0; i < moves.length; i++) for (let j = i + 1; j < moves.length; j++) {
         const a = moves[i], b = moves[j];
         if (a.link !== b.link) continue;
@@ -200,8 +206,28 @@ describe('shared depot lead turnbacks', () => {
       }
       expect(validatePlan(sim.planCtx, sim.plan).filter(issue => issue.severity === 'error')).toEqual([]);
       expect(sim.plan.fleetPeak).toBeLessThanOrEqual(LINE_INFO.fleet);
-      // Uniform running margin changes the candidate connection; the shared-lead conflict must still be rejected.
-      if (dayType === 'weekday') expect(terminalReuseRejections(sim.plan).some(text => text.startsWith('4091→4142：') && text.includes('4089'))).toBe(true);
+      // Running times change candidate identities. Every reported rejection
+      // must describe an unconnected pair and a real shared-lead conflict.
+      if (dayType === 'weekday') {
+        expect(rejections.length).toBeGreaterThan(0);
+        for (const text of rejections) {
+          const match = /^(.+)→(.+)：折返待发与 (.+) 出入段/.exec(text)!;
+          expect(match, text).not.toBeNull();
+          const [arrival, departure] = match.slice(1, 3).map(no => sim.plan.trips.find(t => t.no === no)!);
+          const blockers = match[3].split('、').map(no => sim.plan.trips.find(t => t.no === no)!);
+          expect(arrival, text).toBeDefined();expect(departure, text).toBeDefined();
+          for (const blocker of blockers) expect(blocker, text).toBeDefined();
+          const duty = sim.plan.blocks[arrival.block];
+          const next = duty.trips.slice(duty.trips.indexOf(arrival.id) + 1).find(id => !sim.plan.trips[id].cancelled);
+          expect(next, text).not.toBe(departure.id);
+          const plan = structuredClone(sim.plan), id = plan.trips.length, block = plan.blocks.length;
+          plan.trips.push({ ...structuredClone(arrival), id, block }, { ...structuredClone(departure), id: id + 1, block });
+          plan.blocks.push({ id: block, svc: 'rejected-turn', start: { kind: 'stable', station: arrival.from },
+            end: { kind: 'none' }, trips: [id, id + 1] });
+          expect(validatePlan(sim.planCtx, plan).some(issue => issue.code === 'DEPOT_CONFLICT'
+            && issue.blocks?.[1] === block && blockers.some(t => t.block === issue.blocks![0])), text).toBe(true);
+        }
+      }
     });
   }
 });
@@ -570,7 +596,13 @@ describe('timetable validator', () => {
       for (const id of block.trips) sim.plan.trips[id].cancelled = true;
     const original = sim.plan.trips.map(trip => ({ cancelled: trip.cancelled, stops: structuredClone(trip.stops) }));
     const firstAdded = sim.plan.trips.length;
-    const result = applyOverlay(sim.planCtx, sim.plan, OVERLAY_PRESETS[0]);
+    // Explicit recovery pressure: three-minute requests, with only one spare
+    // beyond each yard's remaining base-duty requirement. The normal
+    // fifteen-minute preset can now fit in full after shorter dwells, so it
+    // no longer exercises complete-circulation rejection by coincidence.
+    const recovery = { ...OVERLAY_PRESETS[0], headway: 180 };
+    const stock = { at: sim.t, levels: yardNeed(sim.topo, sim.plan).map(n => n + 1), departed: [], done: [] };
+    const result = applyOverlay(sim.planCtx, sim.plan, recovery, { now: sim.t, canExtend: () => false, stock });
     expect(result.trips).toBeGreaterThan(0);
     expect(fmtIssues(validatePlan(sim.planCtx, sim.plan))).toBe('');
     expect(sim.plan.trips.slice(0, firstAdded).map(trip => ({ cancelled: trip.cancelled, stops: trip.stops }))).toEqual(original);
@@ -641,28 +673,30 @@ describe('timetable validator', () => {
     expect(validatePlan(sim.planCtx,sim.plan).some(issue => issue.code==='DEPOT_CONFLICT' && issue.blocks?.includes(inbound.id))).toBe(true);
   });
   it('uses the independent SHR lead, and still rejects a turn forced across the return route',()=>{
-    const sim=new Sim({dayType:'weekday',dateLabel:'SHR return',startTime:14400,seed:1}),p=sim.plan;
-    const inbound=p.blocks.find(b=>b.end.kind==='depot'&&sim.topo.depots[b.end.depot].key==='BZL'
-      &&p.trips[b.trips.at(-1)!].dir==='UP'&&p.trips[b.trips.at(-1)!].to===4)!;
-    expect(inbound).toBeDefined();
-    const other=p.blocks.find(b=>b!==inbound&&b.trips.some((id,k)=>{
-      const a=p.trips[id],d=p.trips[b.trips[k+1]];return d&&!a.cancelled&&!d.cancelled&&a.dir==='UP'&&a.to===4&&d.dir==='DN'&&d.from===4;
-    }))!;
-    const k=other.trips.findIndex((id,k)=>p.trips[id].dir==='UP'&&p.trips[id].to===4&&p.trips[other.trips[k+1]]?.dir==='DN');
-    const departure=p.trips[other.trips[k+1]],last=p.trips[inbound.trips.at(-1)!],delta=departure.stops[0].dep-10-last.stops.at(-1)!.arr;
-    last.stops=last.stops.map(s=>({...s,arr:s.arr+delta,dep:s.dep+delta}));
+    const sim=new Sim({dayType:'weekday',dateLabel:'SHR return',startTime:14400,seed:1});
+    const depot=sim.topo.depots.find(depot=>depot.key==='BZL')!,station=depot.station,at=8*3600;
+    const arriving=sim.plan.trips.find(t=>!t.cancelled&&t.dir==='UP'&&t.to===station)!;
+    const departing=sim.plan.trips.find(t=>!t.cancelled&&t.dir==='DN'&&t.from===station)!;
+    const shift=(trip:typeof arriving,delta:number)=>trip.stops.map(s=>({...s,arr:s.arr+delta,dep:s.dep+delta}));
+    // Only these two duties use the leads: an unrelated planned depot exit
+    // must not decide whether the independent SHR2 route exists.
+    const last={...structuredClone(arriving),id:0,block:0,no:'test-return',stops:shift(arriving,at-10-arriving.stops.at(-1)!.arr)};
+    const arrival={...structuredClone(arriving),id:1,block:1,no:'test-arrival',stops:shift(arriving,at-180-arriving.stops.at(-1)!.arr)};
+    const departure={...structuredClone(departing),id:2,block:1,no:'test-departure',stops:shift(departing,at-departing.stops[0].dep)};
+    const inbound={id:0,svc:'return',start:{kind:'stable' as const,station:last.from},end:{kind:'depot' as const,depot:depot.id},trips:[0]};
+    const other={id:1,svc:'turn',start:{kind:'stable' as const,station:arrival.from},end:{kind:'none' as const},trips:[1,2]};
+    const p={...sim.plan,trips:[last,arrival,departure],blocks:[inbound,other]};
     const conflicts = () => validatePlan(sim.planCtx, p).some(issue => issue.code === 'DEPOT_CONFLICT'
       && issue.blocks?.[0] === inbound.id && issue.blocks?.[1] === other.id);
     expect(conflicts()).toBe(false);
-    const depot = sim.topo.depots.find(depot => depot.key === 'BZL')!;
     const stub = depot.transferPaths[depot.portals.entry.UP.path].stub;
-    const reverse = blockTasks(sim.topo, p, other).find(task => task.k === 'reverse' && task.station === 4);
+    const reverse = blockTasks(sim.topo, p, other).find(task => task.k === 'reverse' && task.station === station);
     expect(reverse?.k).toBe('reverse');
     if (reverse?.k === 'reverse') expect(reverse.berths.every(berth => sim.topo.berths[berth].link !== stub)).toBe(true);
-    const berths = sim.topo.stations[4].turnbackBerths;
-    sim.topo.stations[4].turnbackBerths = berths.filter(berth => sim.topo.berths[berth].link === stub);
+    const berths = sim.topo.stations[station].turnbackBerths;
+    sim.topo.stations[station].turnbackBerths = berths.filter(berth => sim.topo.berths[berth].link === stub);
     try { expect(conflicts()).toBe(true); }
-    finally { sim.topo.stations[4].turnbackBerths = berths; }
+    finally { sim.topo.stations[station].turnbackBerths = berths; }
   });
   it('protects a basic-plan return through the reversing exit platform after the nominal yard exit time', () => {
     const sim = new Sim({ dayType: 'weekday', dateLabel: 'conversion reservation', startTime: 14400, seed: 1 });

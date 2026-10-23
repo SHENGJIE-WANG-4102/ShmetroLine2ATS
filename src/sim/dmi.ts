@@ -9,7 +9,7 @@ import { STATIONS, fleetEntry } from '../data/line2';
 import { stopError } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
 import { serviceEnd } from './timetable';
-import { signalAheadFrom, platformSide } from './ats';
+import { signalAheadFrom, platformSide, dwellDepartureAt } from './ats';
 
 const LOG_MAX = 40;
 
@@ -103,7 +103,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     break;
   }
   const dwelling = tr.phase === 'dwell' || tr.phase === 'reversing';
-  if (dwelling) dep = tr.dwellUntil;
+  if (dwelling) dep = dwellDepartureAt(tr);
   else if (tr.departureDisplay) dep = tr.departureDisplay.at ?? tr.departureDisplay.stop.dep ?? -1;
   // platform screen doors where the head stands
   let psd: DmiData['psd'] = 'none';
@@ -138,7 +138,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     next: names.next,
     log: tr.dmiLog.slice().reverse(),
     dep,
-    dwellTotal: dwelling ? Math.max(1, tr.dwellUntil - tr.phaseSince) : 0,
+    dwellTotal: dwelling ? Math.max(1, dep - tr.phaseSince) : 0,
     avail: availableMode(sim, tr),
     psd,
     trainDoor: doorFault ? 'fault' : tr.doorMotion?.kind === 'closing' ? 'closing' : tr.doorsOpen || tr.doorSide ? 'open' : sim.t < (tr.doorLockedAt ?? 0) ? 'closing' : tr.doorsCut > 0 ? 'isolated' : 'closed',

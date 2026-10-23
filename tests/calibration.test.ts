@@ -140,9 +140,28 @@ describe('automatic dwell and ATO regulation',()=>{
  });
  it('recovers seven seconds at an ordinary station and closes before countdown zero',()=>{
   const {s,tr}=fixture(5,7,32,40,100);const arrived=s.t;
+  const stop=tr.tasks[0];if(stop.k!=='stop')throw Error('fixture stop');stop.trip=0;
   expect(tr.dwellUntil-arrived).toBeCloseTo(25,1);expect(computeDmi(s,tr.id)?.dwellTotal).toBeCloseTo(25,1);
-  advance(s,13.5);expect(tr.doorsOpen).toBe(false);expect(tr.phase).toBe('dwell');expect(tr.dwellUntil-s.t).toBeGreaterThan(0);
-  advance(s,11.8);expect(tr.phase).toBe('run');expect(Math.abs(tr.delay)).toBeLessThan(.3);expect(tr.v).toBeGreaterThan(0);
+  const meanStart=(OPERATIONS.autoStartDelay[0]+OPERATIONS.autoStartDelay[1])/2;
+  const closeAt=Math.max(tr.dwellUntil-PLANNED_CLOSE_BUDGET,tr.depReadyAt-DOOR_CLOSE_S-meanStart);
+  advance(s,closeAt-s.t-.1);expect(tr.doorsOpen).toBe(true);expect(tr.doorMotion?.kind).not.toBe('closing');
+  advance(s,.2);expect(tr.doorsOpen).toBe(true);expect(tr.doorMotion?.kind).toBe('closing');
+  expect(tr.phase).toBe('dwell');expect(tr.dwellUntil-s.t).toBeGreaterThan(0);
+  // The close command begins motion; doors stay open until physical lock.
+  const lockedAt=tr.doorLockedAt!,startAt=tr.autoStartAt!;
+  expect(lockedAt-closeAt).toBeGreaterThanOrEqual(DOOR_CLOSE_S-1e-6);
+  expect(lockedAt-closeAt).toBeLessThanOrEqual(DOOR_CLOSE_S+.1);
+  expect(startAt-lockedAt).toBeGreaterThanOrEqual(OPERATIONS.autoStartDelay[0]);
+  expect(startAt-lockedAt).toBeLessThanOrEqual(OPERATIONS.autoStartDelay[1]);
+  advance(s,lockedAt-s.t-.1);expect(tr.doorsOpen).toBe(true);
+  advance(s,.2);expect(tr.doorsOpen).toBe(false);expect(tr.phase).toBe('dwell');
+  advance(s,startAt-s.t+.2);expect(tr.phase).toBe('run');expect(tr.v).toBeGreaterThan(0);
+  // D119 preserves the diagram budget while using the measured shorter cycle.
+  const departure=s.depLog.find(d=>d.st===5)!;expect(departure).toBeDefined();
+  expect(departure.delay).toBeLessThan(0);
+  expect(departure.t-startAt).toBeGreaterThanOrEqual(-1e-6);
+  expect(departure.t-startAt).toBeLessThanOrEqual(.2);
+  expect(departure.delay).toBeCloseTo(departure.t-(arrived+25),8);
   expect(s.integrity.violations).toHaveLength(0);
  });
  it('records DEP at wheel start after a dispatcher hold, rather than at door closure',()=>{

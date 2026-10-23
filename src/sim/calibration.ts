@@ -63,10 +63,11 @@ export function boardingDemand(day: DayType, station: number, dir: TrackDir, t: 
  * avoids artificial time jumps when a train straddles a template boundary. */
 export function plannedDwell(day: DayType, station: number, dir: TrackDir, t: number, factor = 1): number {
  const busy=STATIONS[station].demand>=1.4;
- const exchange=rawDemand(day,station,dir,t);
- // 【假设】 fixed door time is present all day; only passenger exchange scales.
+ const exchange=(rawDemand(day,station,dir,t)+rawDemand(day,station,dir==='DN'?'UP':'DN',t))/2;
+ // D138【假设】: shared platform exchange window, calibrated to paper AM trips.
+ // The fixed door budget stays separate; directional demand still drives passengers.
  return Math.max(MIN_DWELL, Math.min(busy ? MAX_DWELL_BUSY : MAX_DWELL,
-  PLANNED_DOOR_BUDGET + ((busy ? 32 : 27) + exchange * 8) * factor));
+  PLANNED_DOOR_BUDGET + (32 + exchange * 2) * factor));
 }
 export function passengerMinimum(board: number, alight: number, crowded: boolean, surge=1): number {
  const rate=DOORS_PER_SIDE*EXCHANGE_PER_DOOR*(crowded?.75:1);

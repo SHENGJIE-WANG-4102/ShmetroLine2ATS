@@ -16,7 +16,7 @@ import type { Sim } from './engine';
 import type { EbCause, ForceLevel, Level, Mode, Train, ReverseTask } from './model';
 import type { Topology } from './topology';
 import { MODE, allowed, modeState, type ModeState } from './fsm';
-import { trainLabel } from './ats';
+import { trainLabel, setDepartureReadyAt } from './ats';
 import { openCall, unsafeAhead } from './radio';
 import { nextLink } from './topology';
 import { swPos } from './interlocking';
@@ -95,7 +95,7 @@ export function setMode(sim: Sim, tr: Train, mode: Mode, level: Level, why: stri
     const delta=(Number(simulatedAmDriver(tr))-Number(wasSimulatedDriver))*OPERATIONS.atoDriverWork.postLockExtraS;
     const previous=tr.autoStartAt;
     tr.autoStartAt+=delta;
-    if(tr.dwellUntil<=previous)tr.dwellUntil=Math.max(tr.doorLockedAt??0,tr.autoStartAt);
+    if(tr.dwellUntil<=previous)setDepartureReadyAt(tr,Math.max(tr.doorLockedAt??0,tr.autoStartAt));
   }
   // ATS may enter reversal before this tick's DTO→AM conversion. Complete the
   // same driver budget used at reversal entry, without adding it twice.
@@ -331,7 +331,7 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
       // another random draw or changing the player's own F/G procedure.
       const [lo,hi]=OPERATIONS.autoStartDelay;
       tr.autoStartAt=tr.doorLockedAt!+(lo+hi)/2+OPERATIONS.atoDriverWork.postLockExtraS;
-      tr.dwellUntil=Math.max(tr.dwellUntil,tr.autoStartAt);
+      setDepartureReadyAt(tr,Math.max(tr.dwellUntil,tr.autoStartAt));
     }
     return { ok: true, msg: `列车 ${trainLabel(tr)} 恢复 ${modeLabel(tr.mode, tr.level)} 自动驾驶` };
   }
@@ -349,7 +349,7 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
     tr.atoButtons = { f: false, g: false };
     // A takeover during automatic post-lock waiting goes straight to F/G.
     if (tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen) {
-      tr.dwellUntil = Math.min(tr.dwellUntil, Math.max(sim.t, tr.doorLockedAt ?? 0));
+      setDepartureReadyAt(tr, Math.min(tr.dwellUntil, Math.max(sim.t, tr.doorLockedAt ?? 0)));
       tr.autoStartAt = undefined;
     }
     return { ok: true, msg: 'ATO驾驶接管，发车条件满足后同时按住F和G' };

@@ -6,7 +6,7 @@ import {computeBody,indexBodies,updateTrainMotion,reversePermission} from '../sr
 import {doorMotionTick} from '../src/sim/psd';
 import {capture,restore} from '../src/sim/state';
 import {carryWorld,nextOperatingConfig,DAY_S} from '../src/sim/operatingDay';
-import {dmiTick,availableMode} from '../src/sim/dmi';
+import {dmiTick,availableMode,computeDmi} from '../src/sim/dmi';
 import {classify} from '../src/sim/halt';
 import {DOOR_CLOSE_S} from '../src/sim/calibration';
 import {sectionCruise,sectionPlan,computeRunTimes} from '../src/sim/dynamics';
@@ -29,6 +29,83 @@ function fixture(){
  computeBody(s,t);indexBodies(s);return {s,t,b,side:doorEnable(s,t).L?'L' as const:'R' as const};
 }
 describe('driver controls and physical enable',()=>{
+ it.each(['CM','AM'] as const)('%s retains the ATS countdown through early closing, hold and authorised early departure',mode=>{
+  const {s,t,side}=fixture();t.mode=mode;t.manual=mode==='CM';t.atoDriver=mode==='AM';
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  s.t+=.3;doorMotionTick(s);
+  const before=computeDmi(s,t.id)!,target=before.dep;
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  const lock=t.doorLockedAt!;expect(lock).toBeLessThan(target);
+  expect(computeDmi(s,t.id)!).toMatchObject({dep:target,dwellTotal:before.dwellTotal});
+  s.t=lock-.01;doorMotionTick(s);updateTrainTasks(s,t);expect(t.phase).toBe('dwell');
+  if(mode==='AM')expect(s.command({c:'atoButton',train:t.id,button:'f',down:true}).ok).toBe(false);
+  s.t=lock;doorMotionTick(s);
+  expect(s.command({c:'trainHold',train:t.id,on:true}).ok).toBe(true);
+  updateTrainTasks(s,t);expect(t.phase).toBe('dwell');
+  expect(computeDmi(s,t.id)?.departureBoard).toMatchObject({at:target,held:true});
+  expect(s.command({c:'trainHold',train:t.id,on:false}).ok).toBe(true);
+  if(mode==='AM') {
+   t.maDist=0;expect(s.command({c:'atoButton',train:t.id,button:'f',down:true}).ok).toBe(false);t.maDist=1000;
+   for(const button of ['f','g'] as const)expect(s.command({c:'atoButton',train:t.id,button,down:true}).ok).toBe(true);
+  }
+  updateTrainTasks(s,t);expect(t.phase).toBe('run');expect(s.t).toBeLessThan(target);
+  expect(computeDmi(s,t.id)?.dep).toBe(target);
+  if(mode==='CM')s.drive(t.id,4);
+  for(let n=0;n<100&&t.v===0;n++)s.step();
+  expect(t.v,`${t.maCode}: ${t.maReason}`).toBeGreaterThan(0);expect(t.eb,t.ebReason).toBe(false);
+  expect(s.t).toBeLessThan(target);
+ });
+ it.each(['CM','AM'] as const)('%s late closing keeps the elapsed departure target, and a later ATS adjustment replaces it',mode=>{
+  const {s,t,side}=fixture();t.mode=mode;t.manual=mode==='CM';t.atoDriver=mode==='AM';
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  const target=computeDmi(s,t.id)!.dep;s.t=target+5;doorMotionTick(s);
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  expect(computeDmi(s,t.id)?.dep).toBe(target);
+  expect(Math.max(0,computeDmi(s,t.id)!.dep-s.t)).toBe(0);
+  // ATS publishes a new dwell target after the driver's close command.
+  t.dwellUntil=s.t+30;
+  expect(computeDmi(s,t.id)!).toMatchObject({dep:t.dwellUntil,dwellTotal:t.dwellUntil-t.phaseSince});
+ });
+ it.each(['CM','AM'] as const)('%s closing target survives simulated-driver handback, takeover and reopening',mode=>{
+  const {s,t,side}=fixture();t.mode=mode;t.manual=mode==='CM';t.atoDriver=mode==='AM';
+  expect(s.command({c:'lineAto',on:true}).ok).toBe(true);
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  s.t+=.3;doorMotionTick(s);const target=computeDmi(s,t.id)!.dep;
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  const lock=t.doorLockedAt!;
+  expect(s.command({c:'manual',train:t.id,mode:'AUTO'}).ok).toBe(true);
+  expect(t.dwellUntil).toBeGreaterThan(lock);expect(computeDmi(s,t.id)?.dep).toBe(target);
+  s.t=lock;doorMotionTick(s);
+  expect(s.command({c:'manual',train:t.id,mode:'AM'}).ok).toBe(true);
+  expect(t.dwellUntil).toBe(lock);expect(computeDmi(s,t.id)?.dep).toBe(target);
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  s.t+=.3;doorMotionTick(s);
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  expect(computeDmi(s,t.id)?.dep).toBe(target);
+  // A real ATS target update still wins when the cab is handed back again.
+  t.dwellUntil=target+30;
+  expect(s.command({c:'manual',train:t.id,mode:'AUTO'}).ok).toBe(true);
+  expect(computeDmi(s,t.id)?.dep).toBe(target+30);
+ });
+ it('saves the closing countdown independently and shifts both clocks across the operating day',()=>{
+  const {s,t,side}=fixture();s.t=99900;t.phaseSince=s.t;
+  t.tasks=t.tasks.map(task=>task.k==='stop'?{...task,arr:s.t,dep:s.t+60}:task);
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  s.t+=.3;doorMotionTick(s);const target=computeDmi(s,t.id)!.dep;
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  const ready=t.dwellUntil,cp=capture(s);t.departureDisplay!.at=1;
+  restore(s,cp);const restored=s.trains.get(t.id)!;
+  expect(restored.departureDisplay).toMatchObject({at:target,readyAt:ready});
+  expect(restored.departureDisplay).not.toBe(cp.trains.find(tr=>tr.id===t.id)!.departureDisplay);
+  expect(computeDmi(s,t.id)?.dep).toBe(target);
+  const next=new Sim(nextOperatingConfig(s));carryWorld(next,s);
+  const carried=next.trains.get(t.id)!;
+  expect(carried.departureDisplay).toMatchObject({at:target-DAY_S,readyAt:ready-DAY_S});
+  expect(carried.dwellUntil).toBe(ready-DAY_S);expect(computeDmi(next,t.id)?.dep).toBe(target-DAY_S);
+  // Checkpoints predating the optional readiness marker retain their old fallback.
+  delete carried.departureDisplay!.readyAt;
+  expect(computeDmi(next,t.id)?.dep).toBe(carried.dwellUntil);
+ });
  it('keeps the rear swept path across multiple one-metre links instead of retaining one link',()=>{
   const {s,t,b}=fixture();
   // Boundary geometry fixture: a legal train footprint extends behind the

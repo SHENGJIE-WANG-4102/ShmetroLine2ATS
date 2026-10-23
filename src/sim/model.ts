@@ -266,9 +266,10 @@ export interface Train {
   depReadyAt: number;
   /** Door cycle complete; DEP is recorded only when wheels start. */
   pendingDeparture?: StopTask;
-  /** Last platform retained until five seconds after the head leaves it.
-   * Physical distance is integrated by the simulator, never by UI frames. */
-  departureDisplay?: { stop: StopTask; at?: number; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number };
+  /** Driver closing retains the ATS display target independently of door readiness;
+   * readyAt identifies the readiness clock at capture, so a later ATS adjustment wins.
+   * The platform remains until five seconds after the head leaves it. */
+  departureDisplay?: { stop: StopTask; at?: number; readyAt?: number; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number };
   load: number;
   delay: number;
   hold: boolean;

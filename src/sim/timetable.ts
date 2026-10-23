@@ -130,20 +130,21 @@ interface ClockBand { from: number; to: number; value: number; valueTo?: number 
 // D73/D74 calibration clocks are independent of service frequency and route patterns.
 const DWELL_BANDS: Record<DayType, ClockBand[]> = {
   weekday: [
-    { from: 0, to: H(6, 5), value: 0.95 },
+    { from: 0, to: H(6, 5), value: 0.918 },
     { from: H(6, 5), to: H(6, 50), value: 1 },
     { from: H(6, 50), to: H(9, 30), value: 0.8 },
     { from: H(9, 30), to: H(16, 50), value: 1 },
     { from: H(16, 50), to: H(19, 30), value: 0.8 },
-    { from: H(19, 30), to: H(21), value: 1.1 },
-    { from: H(21), to: H(21, 40), value: 1.1, valueTo: 0.43 },
-    { from: H(21, 40), to: Infinity, value: 0.43 },
+    // D138【假设】: existing evening band fitted to the seven ride-east samples.
+    { from: H(19, 30), to: H(21), value: 1.2 },
+    { from: H(21), to: H(21, 40), value: 1.1, valueTo: 0.418 },
+    { from: H(21, 40), to: Infinity, value: 0.418 },
   ],
   weekend: [
-    { from: 0, to: H(6, 40), value: 0.95 },
+    { from: 0, to: H(6, 40), value: 0.918 },
     { from: H(6, 40), to: H(21), value: 1.05 },
-    { from: H(21), to: H(21, 40), value: 0.95 },
-    { from: H(21, 40), to: Infinity, value: 0.43 },
+    { from: H(21), to: H(21, 40), value: 0.918 },
+    { from: H(21, 40), to: Infinity, value: 0.418 },
   ],
 };
 const RUN_BANDS: Record<DayType, ClockBand[]> = {
@@ -3475,9 +3476,11 @@ function restoreCancelledHomes(ctx: PlanContext, plan: Plan, now: number) {
   const retained = plan.blocks.filter(b => cancelled(b) && b.start.kind === 'stable').map(b => b.start);
   const fitMove = (depot: number, station: number, dir: TrackDir, earliest: number, end: Block['end']) => {
     const ex = exitStation(topo, depot, dir);
-    if (dir === 'DN' ? ex >= station : ex <= station) return null;
+    if (!ahead(dir, ex, station)) return null;
     // (the plan does not change while one move is fitted)
     const ledger = depotLedger(topo,plan);
+    const turns = [...terminalOccupancy(plan).values()].flat();
+    const plannedMoves = depotMoves(plan.blocks, trips, ctx);
     for (let offset = 0; earliest + offset < OPENING.dayStart + 86400 - 15*60; offset += 10) {
       const stops = buildStops(ctx, dir, ex, station, earliest + offset, false, t => dwellFactorAt(ctx.dayType, t), () => true);
       if (stops.at(-1)!.arr >= OPENING.dayStart + 86400 - 15*60) break;
@@ -3491,6 +3494,20 @@ function restoreCancelledHomes(ctx: PlanContext, plan: Plan, now: number) {
         if (sharedLead(topo, end.depot) && plan.blocks.some(b => b.start.kind === 'depot' && b.start.depot === end.depot && !cancelled(b)
           && (([x,y]) => x < z && y > a)(outboundWindow(ctx, end.depot, trips[b.trips.find(id => !trips[id].cancelled)!])))) continue;
       }
+      // Stock-restoring empty moves use the same lead reservations as a
+      // passenger duty: an otherwise clear return may still cut across a
+      // train waiting to leave its turnback. Fit that resource before adding
+      // the move, including any alternative berth chosen for the existing turn.
+      const candidate: Trip = { id: trips.length, no: '', block: plan.blocks.length, dir, kind: 'empty', from: ex, to: station, stops, revenue: false };
+      const proposedTrips = [...trips, candidate];
+      const duty: Block = { id: candidate.block, svc: '', start: { kind: 'depot', depot, time: start }, end, trips: [candidate.id] };
+      const moves = [...plannedMoves, ...depotMoves([duty], proposedTrips, ctx)];
+      if (turns.some(hold => {
+        const arrival = trips[hold.arrival!], departure = trips[hold.departure!];
+        const berth = dutyTurnBerths(topo, { ...plan, trips: proposedTrips }, plan.blocks[hold.block], arrival, departure, moves)[0];
+        return berth !== undefined && moves.some(move => move.block !== hold.block
+          && turnLeadConflict(topo, move, proposedTrips, arrival, departure, berth));
+      })) continue;
       const events = sortDepotMoves([...ledger.events.map(e=>({...e})),{time:start,depot,delta:-1,block:-1},
         ...(end.kind==='depot'?[{time:stops.at(-1)!.arr+DEPOT_ENTRY_CLEAR,depot:end.depot,delta:1,block:-1}]:[])]);
       const balance = ledger.initial.slice();

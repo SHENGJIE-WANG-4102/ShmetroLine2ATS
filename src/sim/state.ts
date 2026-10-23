@@ -40,8 +40,9 @@ export const SCALARS = [
   'nextCallId', 'autoRadio', 'autoDispatch', 'atoLine', 'scenarioFired', 'holidayFired', 'runLevel', 'randomLevel', 'nextRandomAt', 'nextBookmarkId', 'planRev',
 ] as const;
 
-/** Train-owned state (doors, reverser, retreat, recent path, CM advisory, ATO buttons, DMI sequence) carries
- * with trains; their clocks are shifted by carryTrain, without Sim top-level fields. */
+/** Train-owned state (doors, reverser, retreat, recent path, CM advisory, ATO buttons, DMI sequence,
+ * departureDisplay.at/readyAt) is carry: cloneTrain saves it with the vehicle and carryTrain shifts its clocks.
+ * DAY_STATE below lists Sim-owned fields only; no duplicate top-level display clock is needed. */
 /** Every checkpoint field must explicitly declare its operating-day ownership. */
 export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number], 'carry' | 'daily'> = {
   sw: 'carry',
