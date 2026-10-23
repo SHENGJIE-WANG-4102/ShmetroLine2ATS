@@ -23,3 +23,8 @@ __pycache__/
 /src-tauri/icons/*.icns
 /src-tauri/icons/Square*.png
 /src-tauri/icons/StoreLogo.png
+
+# 14号线现场原始素材（用户拍摄），不入库
+reference/line14/field/
+# 14号线外部调研资料包，用户未同意入库
+reference/line14/research/
