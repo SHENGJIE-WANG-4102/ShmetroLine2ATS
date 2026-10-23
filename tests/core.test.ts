@@ -671,13 +671,15 @@ describe('occupied-route rescue',()=>{
     expect(ar.released[0]).toBe(false);expect(sim.sec[route.sections[0]].lockRoute).toBe(route.id);
     expect(scanAhead(sim,rescuer,-1).maCode).toBe('RESCUE');
     let approachMax=0;
-    let coupled=false;
+    let coupled=false,reversed=false;
     for(let i=0;i<6000;i++){
       sim.step();if(sim.trains.has(failed.id))approachMax=Math.max(approachMax,rescuer.v);
       else if(!coupled){coupled=true;expect(sim.routes.get(route.id)?.owner).toBe(rescuer.id);}
+      if(coupled&&rescuer.phase==='reversing')reversed=true;
     }
     expect(approachMax).toBeLessThanOrEqual(3/3.6+.1);expect(sim.trains.has(failed.id)).toBe(false);
     expect(rescuer.coupledLen).toBe(186);expect(rescuer.len).toBe(373);
+    if(route.end<0)expect(reversed).toBe(true);
     if(preset)expect(sim.sec[route.sections[0]].preset).toBe(false);
     expect(sim.integrity.violations.map(v=>({kind:v.kind,detail:v.detail}))).toEqual([]);
   });
@@ -1242,7 +1244,8 @@ describe('standby trains (D45)', () => {
     advance(sim, Math.max(...sb.trips.slice(0, 2).map(id => sim.plan.trips[id].stops[0].dep)) - sim.t);
     expect(sb.train).toBeDefined();
     expect(sim.integrity.violations, JSON.stringify(sim.integrity.violations)).toHaveLength(0);
-  });
+    // Follow the real yard exit through the first inherited departure.
+  }, 180_000);
   it('without the automatic dispatcher a withdrawal does not call a standby', () => {
     const sim = live(); sim.autoDispatch = false;
     const tr = sim.trainList.find(t => t.inService && t.block >= 0)!;
@@ -1256,30 +1259,33 @@ describe('standby trains (D45)', () => {
     const candidates = sim.trainList.filter(t => t.inService && t.block >= 0 && t.tasks.some(x => x.k === 'stop' && x.trip === t.tripId && x.dep === null)
       && sim.plan.blocks[t.block].trips.indexOf(t.tripId) < sim.plan.blocks[t.block].trips.length - 3)
       .sort((a, b) => sim.plan.trips[a.tripId].stops.at(-1)!.arr - sim.plan.trips[b.tripId].stops.at(-1)!.arr);
-    // At the real 07:10 peak not every duty has a reachable spare. Select
-    // an incident that can be relieved, keeping the same physical checks.
+    // Select a spare that takes the very next trip. A later takeover can
+    // retain several more trips and turn this case into five hours of running.
     const incident=capture(sim),nBlocks=sim.plan.blocks.length;
-    let tr=candidates[0],r={ok:false,msg:'no reachable candidate'};
+    let tr=candidates[0],lateness=0,r={ok:false,msg:'no reachable candidate'};
     for(const candidate of candidates) {
       restore(sim,incident);tr=sim.trains.get(candidate.id)!;tr.delay=1200;
+      lateness=predictedLateness(sim,tr);
       r=sim.command({c:'standby',train:tr.id});
-      if(r.ok) break;
+      const end=tr.tasks.at(-1);
+      if(r.ok&&end?.k==='stop'&&end.trip===tr.tripId) break;
     }
-    expect(predictedLateness(sim, tr)).toBeGreaterThan(RELIEF_DELAY);
+    // The accepted command removes the next own departure from its tasks.
+    expect(lateness).toBeGreaterThan(RELIEF_DELAY);
     const current = tr.tripId;
     expect(r.ok, r.msg).toBe(true);
     expect(tr.relievedBy).toBe(sim.plan.blocks[nBlocks].svc);
     // the late train keeps no stop of a trip it handed over
     const taken = new Set(sim.plan.blocks[nBlocks].trips);
     expect(tr.tasks.some(t => t.k === 'stop' && taken.has(t.trip))).toBe(false);
-    expect(tr.tasks.at(-1)).toMatchObject({ k: 'stop', dep: null });
+    expect(tr.tasks.at(-1)).toMatchObject({ k: 'stop', trip: current, dep: null });
     expect(sim.plan.trips.filter(t => taken.has(t.id)).every(t => !t.cancelled)).toBe(true);
     expect(sim.command({ c: 'standby', train: tr.id }).ok).toBe(false);
     const end = tr.tasks.at(-1)!; advance(sim, (end.k === 'stop' && end.arr !== null ? end.arr : sim.t) - sim.t + 600);
     expect(sim.plan.trips[current].cancelled).toBeUndefined();
     expect(tr.withdrawn || !sim.trains.has(tr.id)).toBe(true);
     expect(sim.integrity.violations).toHaveLength(0);
-  }, 240_000);
+  }, 120_000);
 });
 
 describe('shared depot admission',()=>{

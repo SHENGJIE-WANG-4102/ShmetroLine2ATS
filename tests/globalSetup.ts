@@ -7,7 +7,7 @@ import { startupGroupId } from '../src/data/startup';
 /** Warm-ups the test files share (dayType-startTime-seed): each takes tens of
  * seconds of simulation, so they run once, in parallel, before the tests, and
  * are reused until the simulator source changes. */
-export const WARMUPS = ['weekday-28800-7', 'weekday-32400-7', 'weekday-35700-5', 'weekday-27600-13'];
+export const WARMUPS = ['weekday-25200-7-noPossessions', 'weekday-28800-7', 'weekday-32400-7', 'weekday-35700-5', 'weekday-27600-13'];
 
 function sourceHash(): string {
   const hash = createHash('sha256');

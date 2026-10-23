@@ -101,7 +101,7 @@ def read_table(path):
 def manual_difference(station, direction, values):
     if direction != "UP" or station not in ("虹桥2号航站楼", "张江高科"):
         return []
-    source = (ROOT / "reference/timetable-gaode.md").read_text(encoding="utf-8")
+    source = (ROOT / "reference/line2/timetable-gaode.md").read_text(encoding="utf-8")
     section = re.search(r"^## " + re.escape(station) + r" 往西[^\n]*\n(.*?)(?=^## |\Z)", source, re.M | re.S)
     if not section:
         return []
@@ -257,7 +257,7 @@ def report(paths):
 
 def update_summary():
     """只替换带标记的自动汇总区，原手录内容保留供差异复核。"""
-    target = ROOT / "reference/timetable-gaode.md"
+    target = ROOT / "reference/line2/timetable-gaode.md"
     source = target.read_text(encoding="utf-8")
     if not list(OUT.glob("*.txt")):
         raise RuntimeError("没有正式采集文本，保留现有汇总")

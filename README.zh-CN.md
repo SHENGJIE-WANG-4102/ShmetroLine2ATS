@@ -68,11 +68,11 @@ python scripts/audio/test-field-calibration.py
 
 1. [官方首末班、末班后定点班车及运行间隔](src/data/firstlast.ts)。
 2. [用户录音和PIS实拍](docs/field/README.md)：用于运行、停站时分与车速观察；PIS倒计时是预测，不是实到。
-3. [高德采集](reference/timetable-gaode.md)：只参考可信列每15分钟车数，不拿整分钟读数定区间时分、停站或等级。
+3. [高德采集](reference/line2/timetable-gaode.md)：只参考可信列每15分钟车数，不拿整分钟读数定区间时分、停站或等级。
 
 拓扑、纵坡、车辆性能、客流和运营流程仍有注明的近似，不构成真实铁路运营系统。随机运行仍会遇到回段等待环；D128小批对照未新增类型，但在既有环处提前停止，未跑到第二天，不能据此声称整日安全回归全绿。
 
-[自下而上的时分分析](docs/field/bottom-up-runtime-2026-10.md)中，60个方向区间有40个具备完整门声候选，22个有较强证据；其中富余和停站规则只是建议，没有改现行运行图参数。详见[设计决定](docs/design-decisions.md)、[配线建模](docs/layout-pdf.md)、[信号模型](docs/signalling-model.md)和[线路/车辆研究](reference/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md)。
+[自下而上的时分分析](docs/field/bottom-up-runtime-2026-10.md)中，60个方向区间有40个具备完整门声候选，22个有较强证据；其中富余和停站规则只是建议，没有改现行运行图参数。详见[设计决定](docs/design-decisions.md)、[配线建模](docs/layout-pdf.md)、[信号模型](docs/signalling-model.md)和[线路/车辆研究](reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md)。
 
 ## 定向验证
 

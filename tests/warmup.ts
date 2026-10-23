@@ -7,8 +7,8 @@ import type { DayType } from '../src/sim/model';
 import { capture } from '../src/sim/state';
 
 const [key, file] = process.argv.slice(2);
-const [dayType, until, seed] = key.split('-');
-const sim = new Sim({ dayType: dayType as DayType, dateLabel: 'test', startTime: Number(until), seed: Number(seed) });
+const [dayType, until, seed, ...flags] = key.split('-');
+const sim = new Sim({ dayType: dayType as DayType, dateLabel: 'test', startTime: Number(until), seed: Number(seed), noPossessions: flags.includes('noPossessions') });
 while (sim.t < Number(until)) sim.step();
 writeFileSync(`${file}.tmp`, serialize(capture(sim)));
 renameSync(`${file}.tmp`, file);

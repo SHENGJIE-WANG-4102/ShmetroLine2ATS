@@ -10,14 +10,15 @@ import { SCENARIOS } from '../src/sim/scenario';
 // (made once per run by tests/globalSetup.ts, or here on first use); each test
 // still gets its own simulator and mutable state. The configuration only
 // takes effect from `until` (autoRadio, scenario), so it does not change the
-// warm-up — except a scenario's own fixed-time trains, which change the plan.
+// warm-up — except a scenario's own fixed-time trains and noPossessions,
+// which must have separate checkpoints.
 const warmups = new Map<string, Checkpoint>();
 
 export function makeSim(dayType: DayType = 'weekday', until = 8 * 3600, config: Partial<SimConfig> = {}): Sim {
   const seed = config.seed ?? 7;
   const sim = new Sim({ dayType, dateLabel: 'test', startTime: until, seed, ...config });
   const own = config.scenario && SCENARIOS.find((x) => x.id === config.scenario)?.fixedRuns;
-  const key = `${dayType}-${until}-${seed}${own ? `-${config.scenario}` : ''}`;
+  const key = `${dayType}-${until}-${seed}${config.noPossessions ? '-noPossessions' : ''}${own ? `-${config.scenario}` : ''}`;
   let cp = warmups.get(key);
   const file = process.env.ATSSIM_WARMUPS && join(process.env.ATSSIM_WARMUPS, `${key}.bin`);
   if (!cp && file && existsSync(file)) warmups.set(key, cp = deserialize(readFileSync(file)) as Checkpoint);

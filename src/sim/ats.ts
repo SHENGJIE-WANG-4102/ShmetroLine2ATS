@@ -435,14 +435,16 @@ function resolveDepot(sim: Sim, tr: Train): boolean {
 function resolveChoice(sim: Sim, tr: Train, task0: Task): Task {
   let task = task0;
   if (task.k === 'reverse') {
-    // Beyond the scissors the occupied physical tail fixes the choice. A
+    // Beyond the scissors the occupied physical track fixes the choice. A
     // rescue may have entered it under the failed train's existing route;
     // a reservation on the parallel tail cannot move it across afterwards.
     const link = sim.topo.links[tr.link];
-    if (sim.topo.sections[link.section].kind === 'tail') {
+    const kind = sim.topo.sections[link.section].kind;
+    if (kind === 'tail' || kind === 'siding') {
       const physical = sim.topo.stations[task.station].turnbackBerths.find(id => {
         const berth = sim.topo.berths[id];
-        return berth.kind === 'tail' && berth.dir === tr.dir && sim.topo.links[berth.link].track === link.track;
+        return berth.dir === tr.dir && (berth.link === tr.link
+          || kind === 'tail' && berth.kind === 'tail' && sim.topo.links[berth.link].track === link.track);
       });
       if (physical !== undefined && physical !== task.chosen) {
         if (sim.berthRes.get(task.chosen) === tr.id) sim.berthRes.delete(task.chosen);

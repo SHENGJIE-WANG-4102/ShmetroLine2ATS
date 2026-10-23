@@ -10,6 +10,6 @@
 |[门声与调速对照](field-calibration-2026-10.md)|2026-10-22|D126/D127门声表、调速前后受控探针与验收历史；更晚的证据质量审计看下一页|
 |[自下而上时分分析](bottom-up-runtime-2026-10.md)|2026-10-22|当前60格覆盖、全部候选/站次、一级物理最短、条件富余、停站规则、首末班与15分钟敏感性；仅分析未实施|
 
-[录音分析入口](../../scripts/audio/README-field.md) · [设计决定D125–D129](../design-decisions.md) · [线路及车辆资料](../../reference/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md)
+[录音分析入口](../../scripts/audio/README-field.md) · [设计决定D125–D129](../design-decisions.md) · [线路及车辆资料](../../reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md)
 
 当前结论：完整候选覆盖40/60方向区间，较强证据覆盖22/60；视频只新增威宁路→北新泾UP，北新泾→淞虹路仍截断。已知钟点没有真正平峰10:00–17:00样本；白天统一富余未识别，夜间约19.31%是45秒停站/一级物理基线下的条件解。D128另完成司机试玩修复，不改变这里的运行图参数。

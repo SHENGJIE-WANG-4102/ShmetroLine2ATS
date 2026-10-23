@@ -52,7 +52,7 @@ python -m unittest discover -s scripts/gaode -p test_scrape.py
 Python 接口 `capture()` 是单次读取，供既有调用方使用；双遍发布使用 `verified_capture()`。
 `Device.connected()` 持有进程间手机会话锁，避免新采集进程同时切站；已在运行的旧版进程
 无法补加这把锁，仍须按用户安排顺序使用手机。
-每份通过的表自动更新 `reference/timetable-gaode.md` 中带标记的汇总区，保留原手录
+每份通过的表自动更新 `reference/line2/timetable-gaode.md` 中带标记的汇总区，保留原手录
 用于差异复核。每遍原始 XML、逐屏计数和诊断 JSON 写入已忽略的
 `work/gaode-scrape/runs/<站点-方向-日型-时间>/`，不再只留最后一屏。
 脚本本身不生成截图；排障截图也只能存 `work/` 并在完成后删除。
@@ -130,7 +130,7 @@ python -m unittest discover -s scripts/gaode -p 'test_*.py'
 当作现实认证参数。另检验单折返站台、前车开出至后车到达留0/1 min的数量上限，不能只看时刻能配。
 广兰路、创新中路分别检验“本站实测到发”、“终到不刊载，按众数
 推算到达”和“始终发均不刊载，两端均由相邻采样站推算”三种替代口径；各口径不能
-相加，也不能用时间能配对就宣称同一车底。结论及置信度见 `reference/timetable-gaode.md`。
+相加，也不能用时间能配对就宣称同一车底。结论及置信度见 `reference/line2/timetable-gaode.md`。
 
 若广兰路—创新中路的始终发都不刊载，短交路中间只剩唐镇一个采样点。
 唐镇单点在总分类中仍属未定，仅在上述明确的端点未刊载假设中纳入折返检验，

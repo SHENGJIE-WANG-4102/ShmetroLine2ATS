@@ -68,11 +68,11 @@ Timetable evidence follows D125:
 
 1. [Official first/last trains, fixed late services and headways](src/data/firstlast.ts).
 2. [User field recordings and photographed PIS](docs/field/README.md) for running/dwell times and speed observations. PIS countdowns are predictions, not actual arrivals.
-3. [Gaode captures](reference/timetable-gaode.md), only for train counts per 15 minutes in the accepted columns. Minute readings do not define section timing, dwell or running level.
+3. [Gaode captures](reference/line2/timetable-gaode.md), only for train counts per 15 minutes in the accepted columns. Minute readings do not define section timing, dwell or running level.
 
 Topology, gradients, vehicle performance, demand and operating procedures contain documented approximations; they do not constitute an operational railway system. Current random runs still expose depot-related waiting cycles. D128 found no new wait-cycle type in its small comparison batch, which stopped at existing cycles before day two; this is not a claim of a clean full-day safety regression.
 
-The [bottom-up timing analysis](docs/field/bottom-up-runtime-2026-10.md) has complete door-based candidates for 40/60 directional sections, with stronger evidence for 22. Its margins and dwell rules are proposals only; current timetable parameters remain unchanged. See [modelling decisions](docs/design-decisions.md), [layout](docs/layout-pdf.md), [signalling](docs/signalling-model.md) and [line/vehicle research](reference/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md).
+The [bottom-up timing analysis](docs/field/bottom-up-runtime-2026-10.md) has complete door-based candidates for 40/60 directional sections, with stronger evidence for 22. Its margins and dwell rules are proposals only; current timetable parameters remain unchanged. See [modelling decisions](docs/design-decisions.md), [layout](docs/layout-pdf.md), [signalling](docs/signalling-model.md) and [line/vehicle research](reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md).
 
 ## Focused checks
 

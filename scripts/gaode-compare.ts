@@ -7,7 +7,7 @@
  *
  * The check set leaves out the Gaode readings known to disagree with their
  * neighbours (虹桥2号航站楼 UP midday, 北新泾 DN 18–21, the inconsistent eastern cells;
- * reference/timetable-gaode.md). A bin fails when |Gaode − plan| ≥ 2.
+ * reference/line2/timetable-gaode.md). A bin fails when |Gaode − plan| ≥ 2.
  */
 import { readFileSync } from 'node:fs';
 import { Sim } from '../src/sim/engine';

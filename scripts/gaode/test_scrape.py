@@ -73,7 +73,8 @@ class ScrapeTest(unittest.TestCase):
             root = Path(temp)
             out = root / "reference/timetable-gaode"
             out.mkdir(parents=True)
-            target = root / "reference/timetable-gaode.md"
+            target = root / "reference/line2/timetable-gaode.md"
+            target.parent.mkdir(parents=True)
             target.write_text("# 时刻表\n\n原来源说明\n\n## 原手录\n\n05:55\n", encoding="utf-8")
             (out / "北新泾-UP-weekday.txt").write_text("# 测试来源\n05:55\n23:49\n", encoding="utf-8")
             with patch.object(scrape, "ROOT", root), patch.object(scrape, "OUT", out), \
@@ -90,8 +91,8 @@ class ScrapeTest(unittest.TestCase):
     def test_manual_comparison_excludes_unrecorded_midday(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            (root / "reference").mkdir()
-            (root / "reference/timetable-gaode.md").write_text(
+            (root / "reference/line2").mkdir(parents=True)
+            (root / "reference/line2/timetable-gaode.md").write_text(
                 "## 张江高科 往西（往蟠祥路）\n| 05 | 05:33 05:39 |\n| 22 | 22:03 23:07 |\n", encoding="utf-8")
             with patch.object(scrape, "ROOT", root):
                 result = scrape.manual_difference("张江高科", "UP", ["05:33", "05:35", "12:00", "22:03", "23:07"])

@@ -173,7 +173,9 @@ describe('driver doors and the acceleration limit', () => {
     ps.psd='closed';updateTrainTasks(sim,tr);expect(tr.phase).toBe(tr.manual?'run':'dwell');
   });
   const dwellingDN = (sim: Sim) => {
-    const find = () => sim.trainList.find((t) => t.phase === 'dwell' && t.inService && t.doorsOpen && dirOf(sim, t) === 'DN' && sim.trainChain(t) > 9000 && sim.trainChain(t) < 20000);
+    // Take over fully open doors. A closing sequence keeps doorsOpen true
+    // until the physical lock, and taking the cab does not cancel that sequence.
+    const find = () => sim.trainList.find((t) => t.phase === 'dwell' && t.inService && t.doorsOpen && !t.doorMotion && dirOf(sim, t) === 'DN' && sim.trainChain(t) > 9000 && sim.trainChain(t) < 20000);
     let tr = find();
     while (!tr) { runFor(sim, 5); tr = find(); }
     return tr;
@@ -349,7 +351,8 @@ describe('yards, PIS', () => {
     for (const no of sim.stabledPool) ids.add(no);
     for (const [no, v] of sim.vehicles) if (v.work) ids.add(no);
     expect(ids.size).toBe(LINE_INFO.fleet);
-  });
+    // Keep the full peak hour and per-step safety checks under parallel load.
+  }, 180_000);
 
   it('PIS lists the next trains with destinations at a busy station', () => {
     const sim = makeSim('weekday', H);
