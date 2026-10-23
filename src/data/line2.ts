@@ -470,6 +470,8 @@ export const SPEED_LIMITS: { from: number; to: number; kmh: number; reason: stri
   { from: 22500, to: 23400, kmh: 70, reason: '南京东路—陆家嘴（越江段）' },
   { from: 23400, to: 25600, kmh: 65, reason: '越江隧道及陆家嘴曲线' },
   { from: 30900, to: 31500, kmh: 65, reason: '龙阳路站曲线' },
+  // 用户确认（2026-10-23）：海天三路↔浦东1号2号航站楼双向60；站中心里程59653–61940m。
+  { from: 59653, to: 61940, kmh: 60, reason: '海天三路—机场（用户确认）' },
   { from: 61650, to: 63000, kmh: 55, reason: '终点站区域' },
 ];
 

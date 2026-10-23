@@ -9,6 +9,19 @@ import { buildStops, platformBerth, tripTasks } from '../src/sim/timetable';
 import { releaseRoute } from '../src/sim/interlocking';
 
 describe('field section measurement harness', () => {
+  it.each([['HTS','PDA','DN'],['PDA','HTS','UP']] as const)(
+    'keeps the user-confirmed airport speed restriction in data and live motion %s → %s', (from,to,dir) => {
+      const sim=createProbeWorld();
+      const a=sim.topo.stations.find(s=>s.id===from)!;
+      const b=sim.topo.stations.find(s=>s.id===to)!;
+      const lo=Math.min(a.chain,b.chain),hi=Math.max(a.chain,b.chain);
+      const links=sim.topo.links.filter(l=>l.track===dir&&(l.chainA+l.chainB)/2>=lo&&(l.chainA+l.chainB)/2<hi);
+      expect(links.length).toBeGreaterThan(0);
+      expect(links.every(l=>l.limit<=60)).toBe(true);
+      const row=probeSection(sim,a.index,b.index,dir,43200);
+      expect(row.completed).toBe(true);expect(row.violations).toEqual([]);
+      expect(row.peakKmh).toBeGreaterThan(40);expect(row.peakKmh).toBeLessThanOrEqual(60);
+    });
   it('CM advisory shares the ATO target, responds to the budget, and never controls manual effort or delay', () => {
     const sim=createProbeWorld();
     probeSection(sim,STATIONS.findIndex(s=>s.id==='YDD'),STATIONS.findIndex(s=>s.id==='HTS'),'DN',43200);
