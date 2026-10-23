@@ -13,7 +13,7 @@
  */
 import type { Sim } from './engine';
 import type { Train, StopTask } from './model';
-import { atoStartReady } from './ats';
+import { atoStartReady, simulatedAmDoorWork } from './ats';
 import { manualTractionHold } from './movement';
 import { STATIONS } from '../data/line2';
 
@@ -108,7 +108,7 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (tr.failed) return r('FAILED');
   if (tr.phase === 'coupling') return r('COUPLING');
   if (tr.phase === 'dwell') {
-    if (tr.atoDriver) {
+    if (tr.atoDriver || simulatedAmDoorWork(tr)) {
       const start = atoStartReady(sim, tr);
       return r(start.code, start.train, start.ready && tr.atoButtons?.f && tr.atoButtons?.g ? '等待列车起步' : start.detail, tr.dwellUntil);
     }

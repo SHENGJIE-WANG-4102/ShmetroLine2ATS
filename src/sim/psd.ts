@@ -22,6 +22,7 @@ import { callPsd } from './radio';
 import { DOOR_CLOSE_S } from './calibration';
 import { OPERATIONS } from '../data/line2';
 import { doorCloseHold } from './vehicle';
+import { simulatedAmDriver } from './onboard';
 
 /** PSL operation by station staff per open / close (s) 【假设】 */
 export const PSL_EXTRA = 15;
@@ -105,7 +106,10 @@ export function closeDoors(sim: Sim, tr: Train, p: number): number {
   tr.doorLockedAt = sim.t + DOOR_CLOSE_S + extra;
   if (!tr.manual && !tr.atoDriver) {
     const [lo, hi] = OPERATIONS.autoStartDelay;
-    tr.autoStartAt = tr.doorLockedAt + lo + sim.rng() * (hi - lo);
+    // Keep the DTO expression and its single random draw byte-for-byte in
+    // arithmetic order; the driver's confirmation extends that same sample.
+    const base=tr.doorLockedAt + lo + sim.rng() * (hi - lo);
+    tr.autoStartAt = base + (simulatedAmDriver(tr) ? OPERATIONS.atoDriverWork.postLockExtraS : 0);
   }
   tr.doorMotion = { kind: 'closing', platform: p, trainAt: tr.doorLockedAt,
     psdAt: tr.doorLockedAt - DOOR_STAGGER_S };

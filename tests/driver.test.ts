@@ -12,7 +12,7 @@ import {DOOR_CLOSE_S} from '../src/sim/calibration';
 import {sectionCruise,sectionPlan,computeRunTimes} from '../src/sim/dynamics';
 import {closeDoors} from '../src/sim/psd';
 import {OPERATIONS} from '../src/data/line2';
-import {setMode} from '../src/sim/onboard';
+import {setMode,turnbackDwell} from '../src/sim/onboard';
 import {checkSafety} from '../src/sim/invariants';
 import {driveOverrun,reverseToMark} from './helpers/driver-approach';
 import {stopError,advance} from '../src/sim/movement';
@@ -124,7 +124,7 @@ describe('driver controls and physical enable',()=>{
   const {s,t,b}=fixture();t.mode='DTO';t.manual=false;t.level='CBTC';t.phase='reversing';t.phaseSince=s.t-10;
   t.tasks=[{k:'reverse',station:b.station,berths:[b.id],chosen:b.id,minTime:40}];t.dwellUntil=t.phaseSince+40;
   expect(setMode(s,t,'AM','CBTC','')).toBe(true);
-  expect(t.dwellUntil).toBe(t.phaseSince+40+OPERATIONS.atoEndChange);
+  expect(t.dwellUntil).toBe(t.phaseSince+turnbackDwell('AM',40,'front',true));
   const ready=t.dwellUntil;s.t+=1;expect(setMode(s,t,'AM','CBTC','')).toBe(true);expect(t.dwellUntil).toBe(ready);
  });
  it.each(['CM','RM'] as const)('%s reopens without a second passenger exchange or wrong-door event',mode=>{
@@ -221,11 +221,12 @@ describe('driver controls and physical enable',()=>{
   expect(carried.dmiQueue?.map(m=>m.at)).toEqual([99915-DAY_S,99930-DAY_S]);next.t=99915-DAY_S;dmiTick(next);
   expect(carried.dmiLog.at(-1)).toMatchObject({t:99915-DAY_S,m:'定位已确认'});
  });
- it.each(['AM','DTO'] as const)('%s uses one seeded 1.5–3.5s delay after the recorded door lock, without stacking AM time',mode=>{
+ it.each(['AM','DTO'] as const)('%s uses the same seeded base after lock, with paper driver work only for AM',mode=>{
   const sample=()=>{const {s,t,side}=fixture();driverDoor(s,t,side);s.t+=.3;doorMotionTick(s);
    t.manual=false;t.mode=mode;t.doorSide='';t.doorsAwait=false;t.dwellUntil=s.t;t.depReadyAt=s.t;
    const began=s.t;updateTrainTasks(s,t);expect(t.doorLockedAt!-began).toBeCloseTo(DOOR_CLOSE_S);
-   const wait=t.autoStartAt!-t.doorLockedAt!;expect(wait).toBeGreaterThanOrEqual(1.5);expect(wait).toBeLessThanOrEqual(3.5);
+   const wait=t.autoStartAt!-t.doorLockedAt!,extra=mode==='AM'?OPERATIONS.atoDriverWork.postLockExtraS:0;
+   expect(wait-extra).toBeGreaterThanOrEqual(1.5);expect(wait-extra).toBeLessThanOrEqual(3.5);
    s.t=t.doorLockedAt!;doorMotionTick(s);updateTrainTasks(s,t);expect(t.phase).toBe('dwell');
    s.t=t.autoStartAt!-.01;updateTrainTasks(s,t);expect(t.phase).toBe('dwell');
    s.t=t.autoStartAt!;updateTrainTasks(s,t);expect(t.phase).toBe('run');return wait;};

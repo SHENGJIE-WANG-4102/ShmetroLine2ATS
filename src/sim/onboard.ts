@@ -13,7 +13,8 @@
  * switchover) and §3 (emergency brake).
  */
 import type { Sim } from './engine';
-import type { EbCause, ForceLevel, Level, Mode, Train } from './model';
+import type { EbCause, ForceLevel, Level, Mode, Train, ReverseTask } from './model';
+import type { Topology } from './topology';
 import { MODE, allowed, modeState, type ModeState } from './fsm';
 import { trainLabel } from './ats';
 import { openCall, unsafeAhead } from './radio';
@@ -56,9 +57,23 @@ export function autoMode(sim: Sim, tr: Train, level: Level): Mode {
   return level === 'CBTC' && dtoAllowed(sim, tr) ? 'DTO' : 'AM';
 }
 
-/** Existing turnback budget, including the driver's change of ends when required. */
-export function turnbackDwell(mode: Mode, minimum: number): number {
-  return minimum + (mode === 'DTO' ? 0 : OPERATIONS.atoEndChange);
+/** A simulated AM driver never takes over the player's F/G or manual handle. */
+export function simulatedAmDriver(tr: Pick<Train,'mode'|'manual'|'atoDriver'>): boolean {
+  return tr.mode === 'AM' && !tr.manual && !tr.atoDriver;
+}
+
+/** A platform reversal has the paper's front-turn work even when a middle
+ * platform is represented as a rear-turn berth in the routing topology. */
+export function driverTurnbackKind(topo: Topology, task: Pick<ReverseTask,'chosen'>): 'front'|'rear' {
+  return topo.berths[task.chosen]?.kind === 'platform' ? 'front' : 'rear';
+}
+
+/** The paper measures the complete turn, including its door departures.
+ * Deduct those shared driver confirmations from the change-of-ends increment. */
+export function turnbackDwell(mode: Mode, minimum: number, kind: 'front'|'rear' = 'rear', simulatedDriver = false): number {
+  const work=OPERATIONS.atoDriverWork;
+  const extra=simulatedDriver ? work.turnbackExtraS[kind]-work.turnbackDoorCycles[kind]*work.postLockExtraS : work.legacyEndChangeS;
+  return minimum + (mode === 'DTO' ? 0 : extra);
 }
 
 /**
@@ -66,6 +81,7 @@ export function turnbackDwell(mode: Mode, minimum: number): number {
  * it is not in the MODE table or its guard does not hold.
  */
 export function setMode(sim: Sim, tr: Train, mode: Mode, level: Level, why: string): boolean {
+  const wasSimulatedDriver = simulatedAmDriver(tr);
   const from = modeState(tr);
   const to = `${mode}-${LEVEL_C(level)}` as ModeState;
   if (from === to) return true;
@@ -75,11 +91,17 @@ export function setMode(sim: Sim, tr: Train, mode: Mode, level: Level, why: stri
   tr.mode = mode;
   tr.level = level;
   tr.modeSince = sim.t;
+  if (tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.manual && !tr.atoDriver) {
+    const delta=(Number(simulatedAmDriver(tr))-Number(wasSimulatedDriver))*OPERATIONS.atoDriverWork.postLockExtraS;
+    const previous=tr.autoStartAt;
+    tr.autoStartAt+=delta;
+    if(tr.dwellUntil<=previous)tr.dwellUntil=Math.max(tr.doorLockedAt??0,tr.autoStartAt);
+  }
   // ATS may enter reversal before this tick's DTO→AM conversion. Complete the
   // same driver budget used at reversal entry, without adding it twice.
   const task = tr.tasks[0];
   if (tr.phase === 'reversing' && task?.k === 'reverse')
-    tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(mode, task.minTime));
+    tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(mode, task.minTime,driverTurnbackKind(sim.topo,task),simulatedAmDriver(tr)));
   if (mode !== 'RM') { tr.rmAuth = 0; tr.rmSig = -1; tr.rmReason = ''; }
   // A sighting scan is not an ATP authority. Mode/level changes can happen
   // after the second's ZC refresh, so validate the new protection immediately.
@@ -288,15 +310,29 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
     if (tr.doorSide && !tr.doorsOpen) return { ok: false, msg: '非站台侧车门未关闭' };
     const level: Level = cbtcAvailable(sim, tr) ? 'CBTC' : tr.level === 'CBTC' && !tr.comm ? 'CBTC' : 'TBTC';
     if (level === 'CBTC' && !tr.comm) return { ok: false, msg: '车地通信中断，不能以CBTC自动驾驶' };
-    const priorDriver = tr.atoDriver;
+    const priorDriver = tr.atoDriver, priorManual = tr.manual;
     tr.atoDriver = false;
+    // The mode transition must see the returned automatic cab, so it restores
+    // an existing post-lock AM confirmation sample through the same delta.
+    tr.manual = false;
     if (!setMode(sim, tr, autoMode(sim, tr, level), level, '恢复自动驾驶')) {
       tr.atoDriver = priorDriver;
+      tr.manual = priorManual;
       return { ok: false, msg: '当前条件下不能转换（见状态机条件）' };
     }
     tr.atoButtons = { f: false, g: false };
-    tr.manual = false;
     tr.notch = 0;
+    // Player/manual closing has no automatic start sample. Handing the cab
+    // back to AM must retain the remaining driver work from physical lock,
+    // including AM→AM handback which does not pass through a mode change.
+    if (simulatedAmDriver(tr) && tr.phase === 'dwell' && tr.autoStartAt === undefined
+      && (tr.doorLockedAt ?? 0) > 0 && tr.doorLockedAt! >= tr.arrivedAt) {
+      // 【假设】No DTO sample exists here: use its midpoint, without consuming
+      // another random draw or changing the player's own F/G procedure.
+      const [lo,hi]=OPERATIONS.autoStartDelay;
+      tr.autoStartAt=tr.doorLockedAt!+(lo+hi)/2+OPERATIONS.atoDriverWork.postLockExtraS;
+      tr.dwellUntil=Math.max(tr.dwellUntil,tr.autoStartAt);
+    }
     return { ok: true, msg: `列车 ${trainLabel(tr)} 恢复 ${modeLabel(tr.mode, tr.level)} 自动驾驶` };
   }
   if (mode === 'AM') {
@@ -305,6 +341,11 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
     if (tr.doorSide || tr.doorMotion?.kind === 'closing') return { ok: false, msg: '请先完成车门操作' };
     if (!setMode(sim, tr, 'AM', tr.level, '司机接管ATO')) return { ok: false, msg: '当前条件不能转AM' };
     tr.manual = false; tr.atoDriver = true; tr.reverser = 1; tr.notch = 0;
+    // Player takeover retains the original cab-change budget, including an
+    // AM→AM takeover that did not require a mode transition.
+    const task = tr.tasks[0];
+    if (tr.phase === 'reversing' && task?.k === 'reverse')
+      tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(tr.mode, task.minTime));
     tr.atoButtons = { f: false, g: false };
     // A takeover during automatic post-lock waiting goes straight to F/G.
     if (tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen) {

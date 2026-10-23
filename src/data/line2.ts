@@ -584,13 +584,18 @@ export const OPERATIONS = {
   /** 【假设】改造后录音短封锁窗约62–64km/h再次通电，未识别真实下限；取60，不是 ATP 下限。 */
   sectionCoastMinKmh: 60,
   passRunMargin: 0.16, // 通过站速度仍45km/h，沿用通过走行余量
-  /** 【用户观察】锁闭后起步，AM自动确认与DTO共用，不叠加延时。 */
+  /** DTO锁闭后起步；保留同一份种子采样，AM司机作业在它之上增加。 */
   autoStartDelay: [1.5, 3.5] as const,
-  /** ATO with a driver (DTO degraded / ATO operation): change of ends at a
-   *  turnback, on top of the unattended DTO reversal (s) 【假设】 */
-  atoEndChange: 45,
-  /** ATO with a driver: departure after the doors close waits for the driver's
-   *  ATO start button (s) 【假设】 */
+  /** 用户决定（2026-10-23），孟锦程/袁月2026论文，D138：AM非玩家
+   * 司机锁门后确认比DTO多约20s；折返到站→下班发出总差取论文中值。
+   * 物理关门5.7s另计，折返总差包含清客/发车门作业，不能再重复叠加。
+   * doorCycles为现有任务组成；legacy保留CM/RM及玩家换端原流程【假设】。 */
+  atoDriverWork: {
+    postLockExtraS: 20,
+    turnbackExtraS: { rear: 67.5, front: 30 },
+    turnbackDoorCycles: { rear: 2, front: 1 },
+    legacyEndChangeS: 45,
+  },
 
 };
 

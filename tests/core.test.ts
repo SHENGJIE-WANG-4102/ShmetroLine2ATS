@@ -975,7 +975,7 @@ describe('paper-based turnback and depot procedures', () => {
     const platform = sim.topo.berths.find(b => b.station === 0 && b.kind === 'platform' && b.dir === 1)!;
     tr.link = berth.link; tr.off = berth.offset; tr.dir = berth.dir; tr.hist = [{ link: berth.link, dir: berth.dir }];
     // This fixture starts after the driver's change of ends; it exercises the signal/RM procedure.
-    tr.v = 0; tr.phase = 'reversing'; tr.phaseSince = sim.t - OPERATIONS.atoEndChange; tr.dwellUntil = sim.t; tr.tbStage = 'arrive';
+    tr.v = 0; tr.phase = 'reversing'; tr.phaseSince = sim.t - OPERATIONS.atoDriverWork.legacyEndChangeS; tr.dwellUntil = sim.t; tr.tbStage = 'arrive';
     tr.forceLevel = 'TBTC'; tr.block = -1; tr.tripId = -1;
     tr.tasks = [{ k: 'reverse', berths: [berth.id], chosen: berth.id, station: 0, minTime: 0 },
       { k: 'stop', berth: platform.id, station: 0, trip: -1, arr: null, dep: sim.t + 300, doors: false, revenue: false }];
@@ -1516,7 +1516,13 @@ describe('ATO with a driver under CBTC (D52)', () => {
       sim.step();
       for (const t of sim.trainList) if (t.phase === 'reversing' && t.phaseSince === sim.t) {
         const task = t.tasks[0];
-        if (task?.k === 'reverse' && t.mode === 'AM') { reversals++; expect(t.dwellUntil - sim.t).toBeCloseTo(task.minTime + OPERATIONS.atoEndChange, 6); }
+        if (task?.k === 'reverse' && t.mode === 'AM') {
+          reversals++;
+          // Paper whole-turn increments include one/two 20s door departures:
+          // front 30-20=10s, rear 67.5-40=27.5s at the reversal itself.
+          const increment = sim.topo.berths[task.chosen].kind === 'platform' ? 10 : 27.5;
+          expect(t.dwellUntil - sim.t).toBeCloseTo(task.minTime + increment, 6);
+        }
       }
     }
     expect(reversals).toBeGreaterThan(0);

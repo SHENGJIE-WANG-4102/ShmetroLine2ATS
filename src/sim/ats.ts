@@ -13,7 +13,7 @@ import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute
 import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission } from './movement';
 import { takeVehicle, putVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
-import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell } from './onboard';
+import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell, simulatedAmDriver, driverTurnbackKind } from './onboard';
 import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
 import { blockTasks, tripTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/line2';
@@ -842,6 +842,13 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     if (tr.doorsOpen && !tr.manual && sim.t >= closeAt) {
       // a car door that does not close (vehicle.ts)
       if (st.doors && doorCloseHold(sim, tr)) return;
+      // A simulated AM driver operates the same guarded door control as a
+      // human. Internal deterministic work is not replayed as a second user
+      // command; dispatcher/player actions still enter through sim.command.
+      if(simulatedAmDoorWork(tr)) {
+        driverDoor(sim,tr,platformSide(sim,tr,p));
+        return;
+      }
       const extra = closeDoors(sim, tr, p);
       if (extra < 0) return;
       tr.dwellUntil = Math.max(sim.t + DOOR_CLOSE_S + extra, tr.autoStartAt ?? 0);
@@ -859,7 +866,12 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     }
     // a brake that does not release, a door being dealt with (vehicle.ts)
     if (departureHold(sim, tr)) return;
-    if (tr.atoDriver && (!atoStartReady(sim, tr).ready || !tr.atoButtons?.f || !tr.atoButtons?.g)) return;
+    const simulatedDeparture = simulatedAmDoorWork(tr);
+    if (simulatedDeparture && atoStartReady(sim,tr).ready) {
+      if(!tr.atoButtons?.f)atoButton(sim,tr,'f',true);
+      if(!tr.atoButtons?.g)atoButton(sim,tr,'g',true);
+    }
+    if ((tr.atoDriver || simulatedDeparture) && (!atoStartReady(sim, tr).ready || !tr.atoButtons?.f || !tr.atoButtons?.g)) return;
     // depart
     tr.atoButtons = { f: false, g: false };
     tr.intervalWait = undefined;
@@ -955,7 +967,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     tr.phase = 'reversing';
     tr.phaseSince = sim.t;
     // DTO reverses unattended; with a driver (ATO / TBTC backup) the driver changes ends
-    tr.dwellUntil = sim.t + turnbackDwell(tr.mode, task.minTime);
+    tr.dwellUntil = sim.t + turnbackDwell(tr.mode, task.minTime,driverTurnbackKind(topo,task),simulatedAmDriver(tr));
     tr.lastStation = task.station;
     // reversed at a platform track: the next departure here leaves from it
     // (set now: the pull-out route is taken from tasks[1] while reversing)
@@ -1014,12 +1026,22 @@ function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
   setTripFromTasks(sim, tr);
   arriveAtBerth(sim, tr, tr.tasks[0]);
   // no departure before the driver is in the other cab
-  tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + turnbackDwell(tr.mode, rev.minTime));
+  tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + turnbackDwell(tr.mode, rev.minTime,driverTurnbackKind(sim.topo,rev),simulatedAmDriver(tr)));
 }
 
 /** the stop has a door cycle: passengers, or a clear-out (清客) */
 function stopNeedsDoors(tr: Train, task: StopTask): boolean {
   return task.doors || (!task.revenue && tr.load > 0);
+}
+
+/** Driver departure work follows an actual door cycle, not a closed-door
+ * intermediate task such as a depot exit's in-place change of ends.
+ * Clearing passengers sets load to zero while its door cycle is still real. */
+export function simulatedAmDoorWork(tr: Train): boolean {
+  const task = tr.tasks[0];
+  if (!simulatedAmDriver(tr) || tr.phase !== 'dwell' || task?.k !== 'stop') return false;
+  return stopNeedsDoors(tr, task) || tr.doorsOpen || tr.doorsAwait || !!tr.doorMotion
+    || ((tr.doorLockedAt ?? 0) > 0 && tr.doorLockedAt! >= tr.arrivedAt);
 }
 
 /**
@@ -1110,7 +1132,7 @@ export function doorEnable(sim: Sim, tr: Train): { L: boolean; R: boolean; depot
  * Buttons themselves are not part of readiness: early presses never latch. */
 export function atoStartReady(sim: Sim, tr: Train): { ready: boolean; code: HaltCode; train: number; detail: string } {
   const no = (code: HaltCode, detail: string, train = -1) => ({ ready: false, code, detail, train });
-  if (!tr.atoDriver || tr.mode !== 'AM' || tr.phase !== 'dwell') return no('MANUAL', '未接管AM停站列车');
+  if ((!tr.atoDriver && !simulatedAmDriver(tr)) || tr.mode !== 'AM' || tr.phase !== 'dwell') return no('MANUAL', '未接管AM停站列车');
   if (tr.failed) return no('FAILED', '列车故障');
   if (tr.eb) return no('EB', tr.ebReason || '紧急制动未缓解');
   if (tr.pendingMode) return no('MODE_CHANGE', '等待驾驶模式转换');
@@ -1123,6 +1145,7 @@ export function atoStartReady(sim: Sim, tr: Train): { ready: boolean; code: Halt
   if (tr.doorsAwait) return no('DWELL', '等待开门办理客运');
   if (tr.doorsOpen || tr.doorSide || tr.doorMotion || sim.t < (tr.doorLockedAt ?? 0)) return no('DWELL', '等待车门关闭锁闭');
   if (!psdSafe(ps)) return no('PSD_FAULT', '等待站台门关闭锁闭');
+  if (simulatedAmDriver(tr) && sim.t < (tr.autoStartAt ?? 0)) return no('DWELL', '等待司机锁门确认及ATO发车作业');
   if (sim.t < tr.dwellUntil) return no('DWELL', '停站作业尚未完成');
   const interval = intervalDepartureHold(sim, tr, st);
   if (interval) return no('INTERVAL_LIMIT', interval.detail, interval.train);
@@ -1135,7 +1158,7 @@ export function atoStartReady(sim: Sim, tr: Train): { ready: boolean; code: Halt
     return no(w?.code ?? (tr.maCode === 'NONE' ? 'ROUTE_WAIT' : tr.maCode),
       w?.detail || tr.maReason || '等待有效发车授权', w?.train ?? tr.maTrain);
   }
-  return { ready: true, code: 'MANUAL', train: -1, detail: '等待司机按 ATO 启动' };
+  return { ready: true, code: simulatedAmDriver(tr)?'DWELL':'MANUAL', train: -1, detail: '等待司机按 ATO 启动' };
 }
 
 /** Buttons are sampled through commands; pressing before readiness never latches. */
@@ -1155,7 +1178,7 @@ export function atoButton(sim: Sim, tr: Train, button: 'f' | 'g', down: boolean)
  * station staff work the PSD from the PSL 【假设】.
  */
 export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean; msg: string } {
-  if (!tr.manual) return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
+  if (!tr.manual && !simulatedAmDriver(tr)) return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
   if (tr.v > 0.05) return { ok: false, msg: '列车未停稳，不能操作车门' };
   if (tr.doorMotion?.kind === 'closing') return { ok: false, msg: '车门正在关闭并等待锁闭确认' };
   const word = (x: 'L' | 'R') => (x === 'L' ? '左侧' : '右侧');
@@ -1170,7 +1193,7 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
     if (st?.doors && doorCloseHold(sim, tr)) return { ok: false, msg: '列车车门无法关闭，等待处置' };
     const extra = closeDoors(sim, tr, p);
     if (extra < 0) return { ok: false, msg: '站台门无法关闭锁紧，等待车站处理（互锁解除）' };
-    tr.dwellUntil = sim.t + DOOR_CLOSE_S + extra;
+    tr.dwellUntil = Math.max(sim.t + DOOR_CLOSE_S + extra,simulatedAmDriver(tr)?tr.autoStartAt??0:0);
     return { ok: true, msg: `${word(side)}车门开始关闭${extra ? '，站台门由站务人员确认关闭' : ''}` };
   }
   if (tr.doorSide) return { ok: false, msg: `${word(tr.doorSide)}车门未关闭` };
