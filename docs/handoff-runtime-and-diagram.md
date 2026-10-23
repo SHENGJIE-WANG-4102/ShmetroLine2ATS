@@ -245,6 +245,56 @@ D136 已经证明，高架慢的原因不在惰行阻力：阻力从 0.03 扫到
 
 做完停下汇报。下一步不是第二部分，是 `docs/handoff-multiline.md`（选线骨架），第二部分排在它之后。
 
+## 定稿审查与收尾（2026-10-23）
+
+**36 对放行。** 比上限 35 多出的这一对，和已经查明的问题是同一个原因：回库分配把车次换了位，09:45–10:05 的缺班挪了个位置。用户的决定是「缺班留给第二部分」，这一对在这个决定范围内，35 只是我定的机械上限。第二部分的基线仍然是改停站前的正式值：早高峰淞虹路—广兰路下行 30 对，其他时段下行 12 对。
+
+**补丁我已经打进主工作区，还没提交。** `work/dwell-ato-final/proposed-source.patch` 已经应用在 `calibration.ts`、`timetable.ts` 上，不要还原。我复核过：
+- `tsc` 通过；
+- `validate-plan` 工作日 679 趟、双休日 474 趟，都是 0 issue；
+- 高德不合格格 9。
+
+### 要做的
+
+1. **测试失败逐条分类。** 我跑了三个测试文件：
+   - **基线（0b0fb8b，已提交）本来就有 8 条失败：**
+     - `calibration.test.ts` 3 条，已知，留给第二部分；
+     - `timetable.test.ts` 5 条：
+       - `shared depot lead turnbacks > weekday: keeps depot return windows and the published fleet feasible`
+       - `D73 calibrated service anchors` 两条（末班始发、首末班分钟）
+       - `D79–D81 Gaode service distribution > leaves at most eleven two-train misses…`
+       - `timetable validator > uses the independent SHR lead, and still rejects a turn forced across the return route`
+   - **打上补丁后：**
+     - 新增 2 条失败：
+       - `timetable validator > fits complete overlay circulations after fault cancellations open larger gaps`
+       - `timetable validator > protects planned depot exits from an added return on the shared conversion track`
+     - 高德那条从失败变成通过。
+
+   对每一条：
+   - 先查出是哪个提交开始失败的；
+   - 再判断是时分改动后预期值过期了，还是真有问题：
+     - 预期值过期的，就改预期，逐条写理由；
+     - 真问题就修根因；
+     - 属于第二部分的，标明它属于第二部分，并保留失败。
+   - 不许放宽检查，不许 skip。
+
+   新增的 2 条要特别查清，它们管的是故障取消后的补位和出段保护，是运行中的行为，不只是排图。
+2. **压测。** 我在补丁版上跑了两例：
+   - 13812（双休日，风 3）：第一天 18:08:51 在远东大道死锁。063 回段等入段泊位（`BERTH_WAIT`），088 出段又被 063 的进路锁住（`ROUTE_CONFLICT`）。现场在 `work/fuzz-dwell-final/`。基线复跑的结果见下面「审查补记」。如果基线上不死锁，就是补丁带出来的，要查清；如果基线上也死锁，就归到 `docs/handoff-fuzz-roots.md` 的预约死锁那一类，并把现场补进去。
+   - 13811（工作日，风 2）：结果见下面「审查补记」。
+3. **DMI 发车倒计时（用户确认，2026-10-23）。** 现在 CM 或玩家 ATO 下，司机一关门，倒计时就跳到约 6 s。原因是 `driverDoor` 关门时把 `dwellUntil` 改成了「现在 + 5.7 s 锁闭」，而 DMI 停站时的倒计时直接显示 `dwellUntil`。
+   - 现实是这样的：倒计时照走，显示原计划的发车时刻；但司机可以提前发车。
+   - 要做的是把「倒计时显示的时刻」和「什么时候允许发车」拆成两个量：
+     - 关门不改显示的时刻；
+     - 门锁闭、有移动授权就能按 F+G，或者开走，和现在一样。
+   - ATS 扣车、调整停站时，显示的时刻要跟着变，这一点和现在一样。
+   - 新增状态字段按 AGENTS.md 坑 5 处理：归入 `DAY_STATE`，跨日减一天，进存档。
+   - 测试要覆盖两件事：
+     - CM 和玩家 AM 提前关门后，倒计时继续走，可以提前发车；
+     - 超过计划时刻才关门，显示和现在一样。
+
+全部做完停下汇报，我审完一起提交。再下一步是选线骨架。
+
 ---
 
 # 第二部分：车底运用原型——全天版
