@@ -111,3 +111,15 @@ AGENTS.md 的硬规矩照常适用。另外：
    - 但其中「停站基础交换时间随客流缩放」要改 `calibration.ts` 的停站模型。14号线如果复用这个停站公式，会跟着变。
 
 每一项落地，`docs/design-decisions.md` 都会有 D 条目，提交说明里写明动了哪些公共文件。
+
+## 7. 已定的公共接口口径（2026-10-24，答复 14号线对话）
+
+| 事项 | 口径 |
+|---|---|
+| UTO 入口 | `LineData` 加必填字段 `unattended: { doorClose, turnback, wakeSleep, depotMoves }`，2号线和测试线全部显式填 false。`current.ts` 加 `unattended(task)` 判据，只认这一个；`automation` 只当显示标签。UTO 流程写成独立函数，在少数几个调用点按判据分流。 |
+| 不停车的站 | `StationData.opened?: boolean`，默认 true，表示「建成未开通」。在 timetable 生成停站的地方集中判断一次，PIS、客流、线路图都读这个结果；通过速度用现有的 `OPERATIONS.platformPassKmh`。 |
+| 首末班字段 | 暂时不改名。West 是站表第一站那一端，East 是最后一站那一端；`lastBig*`、`lastLate*` 填全程末班。改成按终点的通用表，等第二部分落地后单独做一次公共重构，2号线哈希不变。 |
+| 出入段和存车 | 列车状态机（唤醒、休眠、自动出库）现在就可以做。`ats.ts` 里出入段的进路和资源仲裁，等 F2/F3/F4 落地。正线过夜先写成 `OPERATIONS.overnightStabling` 数据，交给现有的 `overnightPlaces`、`overnightHolds`。 |
+| DMI、PIS 样式 | 样式键按样式命名，不按线路命名；用一张表对应到各自的渲染模块。`src/sim/dmi.ts` 的模型新增量写成通用字段，2号线取值不变。 |
+| 无后备时的降级 | `signalling.onLoss: 'fallback' \| 'restrictedManual' \| 'wait'`：2号线填 fallback（TBTC），测试线填 wait，14号线填 restrictedManual。restrictedManual 复用 RM 模式和 `PERF.vRM`。「随车人员限速驾驶」是【假设】，由 14号线对话向用户确认。 |
+| 脚本和测试 | `gaode-compare` 加 `--line`，默认仍是 2号线、输出不变；`line-data.test` 扩到所有登记的线路。 |
