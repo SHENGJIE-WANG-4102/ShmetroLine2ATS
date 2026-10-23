@@ -125,7 +125,14 @@ describe('automatic dwell and ATO regulation',()=>{
   const paired=RIDE_LOG.filter(r=>r.recording==='ride-east'&&r.stop!==null&&r.start!==null&&r.evidence.stop?.confidence!=='low');
   expect(paired).toHaveLength(7);
   const actual=paired.reduce((sum,r)=>sum+r.start!-r.stop!,0)/paired.length;
-  const model=paired.reduce((sum,r)=>sum+plannedDwell('weekday',STATIONS.findIndex(s=>s.name===r.station),'DN',20*3600,dwellFactorAt('weekday',20*3600)),0)/paired.length;
+  // 用户2026-10-23更正：10/14这段19:50以后起录，18:00假设作废。
+  // 按补充二审查要求，以用户确认下界19:50作起录情景；确切钟点仍未知。
+  // 各站加原文件停稳秒数，不能把整段每站都当成19:50；20:00敏感度见D138。
+  const recordingStart=19*3600+50*60;
+  const model=paired.reduce((sum,r)=>{
+   const at=recordingStart+r.stop!;
+   return sum+plannedDwell('weekday',STATIONS.findIndex(s=>s.name===r.station),'DN',at,dwellFactorAt('weekday',at));
+  },0)/paired.length;
   expect(Math.abs(model-actual)).toBeLessThanOrEqual(3);
   expect(dwellFactorAt('weekday',20*3600)).toBeGreaterThan(dwellFactorAt('weekday',8*3600));
   expect(dwellFactorAt('weekday',20*3600)).toBeGreaterThan(dwellFactorAt('weekday',23*3600));

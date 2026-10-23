@@ -2,7 +2,8 @@
  * User's local Line 2 recordings, supplied on 2026-10-14 and 2026-10-16.
  * Source files live in ignored work/recordings/; no audio or passenger
  * transcript is distributed. Filename door references are car-door numbers:
- * westbound 4-1, eastbound 5-5. 10-14 clock starts are unknown; 10-16
+ * westbound 4-1, eastbound 5-5. Exact 10-14 clock starts are unknown;
+ * the user places ride-east after 19:50. 10-16
  * filenames provide approximate minutes only. Copy times are not clocks.
  *
  * Method: local speech recognition locates station announcements; 8 kHz
@@ -15,8 +16,9 @@
  * Speech timestamps are not door times;
  * "门灯闪烁时，请勿上下车" is also part of arrival announcements.
  *
- * 10-14 user decision: +/-3 s, closing-warning/start candidates, no opening
- * measurements. Keep those rows unchanged. 10-16 includes opening and a
+ * Keep the legacy 10-14 motor/closing-warning rows as independent evidence.
+ * Later clip reviews live in USER_DOOR_REVIEWS and feed the door-derived
+ * analysis without rewriting those motor measurements. 10-16 includes opening and a
  * separate mechanical closingMotion estimate (D85 and the task A notes).
  * Low-confidence events never enter means. Windows are analysis bounds.
  * Confidence thresholds and frequency templates are assumptions 【假设】;
@@ -34,6 +36,8 @@ export interface RecordingSource {
   kind: 'ride' | 'platform';
   durationS: number;
   clockStart: string | null;
+  /** User-confirmed lower bound; never substitute it for an exact start. */
+  clockStartNotBefore?: string;
   clockStartPrecision?: 'minute';
   recordedDate?: string;
   /** User label, not an interpretation of stock type or vehicle identity. */
@@ -50,7 +54,9 @@ export interface RecordingSource {
 
 export const RECORDING_SOURCES: RecordingSource[] = [
   { id: 'ride-east', filename: '2号线江苏路~广兰路 终点站广兰路小交路02A05 020897.wav',
-    kind: 'ride', durationS: 2311.66, clockStart: null, from: '江苏路', to: '广兰路', directions: ['DN'] },
+    kind: 'ride', durationS: 2311.66, clockStart: null, clockStartNotBefore: '19:50', recordedDate: '2026-10-14',
+    from: '江苏路', to: '广兰路', directions: ['DN'],
+    note: '用户2026-10-23更正：19:50以后开始录制，确切起录钟点未知；此前18:00比较假设作废。' },
   { id: 'ride-west', filename: '广兰路~金科路小交路.wav',
     kind: 'ride', durationS: 148.2, clockStart: null, from: '广兰路', to: '金科路', directions: ['UP'] },
   { id: 'platform-01', filename: '江苏路2号线SNAI 02A01 4-1 PVG 02A05 5-5.wav',
@@ -210,6 +216,58 @@ for (const marker of USER_RIDE_MARKERS) {
   row.evidence[marker.event] = { ...row.evidence[marker.event], confidence: 'high', method: 'user-marker',
     ...(automatic === null ? {} : { autoAt: automatic }), note: 'User-provided recording timestamp.' };
 }
+
+export interface RecordingDoorReview {
+  recording: RecordingId;
+  station: string;
+  reviewedOn: string;
+  /** Original-file seconds. The reply below uses seconds within this clip. */
+  clipWindowS: [number, number];
+  reply: string;
+  note?: string;
+  /** No opening audible in this window; not evidence that the doors stayed shut. */
+  openingNotHeard?: boolean;
+  events?: Partial<Record<'open' | 'close' | 'closingMotion' | 'locked', {
+    at: number;
+    confidence: RideConfidence;
+    method: 'user-marker' | 'opening-band-step';
+    /** User-reported timing range, not a statistical confidence interval. */
+    rangeS?: [number, number];
+    presenceConfirmed?: boolean;
+    timingConfirmed?: boolean;
+    edgeLimited?: boolean;
+    note?: string;
+  }>>;
+}
+
+/** User review on 2026-10-23. All adopted event timestamps use original-file seconds. */
+export const USER_DOOR_REVIEWS: RecordingDoorReview[] = [
+  { recording: 'ride-east', station: '南京东路', reviewedOn: '2026-10-23', clipWindowS: [649, 696],
+    reply: '开门8.7~9，关门45',
+    note: '片内45秒对应原件694秒；关门未区分提示音/机械动作，保留原文，不覆盖已确认提示音693.28秒。',
+    events: { open: { at: 657.85, rangeS: [657.7, 658], confidence: 'high', method: 'user-marker',
+      presenceConfirmed: true, timingConfirmed: true, note: '采用用户范围中点；小数位不表示百分之一秒精度。' } } },
+  { recording: 'ride-east', station: '浦东南路', reviewedOn: '2026-10-23', clipWindowS: [1002, 1031],
+    reply: '开门6~7.2',
+    events: { open: { at: 1008.6, rangeS: [1008, 1009.2], confidence: 'high', method: 'user-marker',
+      presenceConfirmed: true, timingConfirmed: true, note: '采用用户范围中点，保留1.2秒范围。' } } },
+  { recording: 'ride-east', station: '张江高科', reviewedOn: '2026-10-23', clipWindowS: [1946, 1975],
+    reply: '开门7.9',
+    events: { open: { at: 1953.9, confidence: 'high', method: 'user-marker',
+      presenceConfirmed: true, timingConfirmed: true, note: '用户片内近似秒数；未提供误差范围。' } } },
+  { recording: 'ride-east', station: '金科路', reviewedOn: '2026-10-23', clipWindowS: [2124, 2147],
+    reply: '没听到开门声，我确定；14s关门提示音,17s关门,20s关门完成', openingNotHeard: true,
+    events: {
+      close: { at: 2138, confidence: 'high', method: 'user-marker', note: '片内14秒，关门提示开始，近似秒数。' },
+      closingMotion: { at: 2141, confidence: 'high', method: 'user-marker', note: '片内17秒，机械关门开始，近似秒数。' },
+      locked: { at: 2144, confidence: 'high', method: 'user-marker', note: '片内20秒，用户确认关门完成，作为声学完成节点；不是电气锁闭反馈。' },
+    } },
+  { recording: 'ride-east', station: '广兰路', reviewedOn: '2026-10-23', clipWindowS: [2295, 2311.66],
+    reply: '听到了确定',
+    events: { open: { at: 2310.82, confidence: 'low', method: 'opening-band-step',
+      presenceConfirmed: true, timingConfirmed: false, edgeLimited: true,
+      note: '用户只确认开门声已录到；2310.82秒沿用先前声学候选，距文件尾0.84秒，定时保持低置信，不入主均值。' } } },
+];
 
 /** Additional user door observations, including the corrected lock timestamp. */
 export const USER_DOOR_REFERENCES = {

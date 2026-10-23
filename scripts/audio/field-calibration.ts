@@ -7,7 +7,7 @@ import { STATIONS, OPERATIONS } from '../../src/data/line2';
 import { DOOR_CLOSE_S } from '../../src/sim/calibration';
 import { DOOR_TAKES } from '../../src/data/doorbank';
 import { FIRST_LAST, OFFICIAL_HEADWAYS } from '../../src/data/firstlast';
-import { RIDE_LOG, RECORDING_SOURCES } from '../../src/data/ridelog';
+import { RIDE_LOG, RECORDING_SOURCES, USER_DOOR_REVIEWS } from '../../src/data/ridelog';
 import { FIELD_1021_ORIGINALS } from '../../src/data/onboardfield1021';
 import { ahead } from '../../src/sim/topology';
 import { capture, restore } from '../../src/sim/state';
@@ -28,6 +28,7 @@ const existing = args.includes('--existing');
 const sources = RECORDING_SOURCES.filter(s => s.kind === 'ride').map(s => ({ ...s,
   path: resolve('work/recordings', s.filename),
   events: RIDE_LOG.filter(r => r.recording === s.id), mode: 'adopted-events',
+  doorReviews: USER_DOOR_REVIEWS.filter(r => r.recording === s.id),
 }));
 for (const [id, clock, name, from] of [
   ['ride-1021-east', '19:56', '19.56广兰路~PVG.wav', '广兰路'],

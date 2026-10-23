@@ -7,6 +7,7 @@ under ignored work/. Confidence labels describe acoustic evidence, not CIs.
 import argparse
 from difflib import SequenceMatcher
 from collections import Counter, defaultdict
+from copy import deepcopy
 import hashlib
 import importlib.util
 import json
@@ -56,6 +57,22 @@ def clock_seconds(value):
     if len(bits) not in (2, 3) or not 0 <= bits[0] <= 27 or not 0 <= bits[1] < 60 or (len(bits) == 3 and not 0 <= bits[2] < 60):
         raise ValueError('Clock must be HH:MM[:SS], with operating-day hours 00..27')
     return bits[0] * 3600 + bits[1] * 60 + (bits[2] if len(bits) == 3 else 0)
+
+
+def measurement_clock(source, start):
+    """Choose a model scenario without turning a clock bound into a time."""
+    if source.get('clockStart'):
+        clock = clock_seconds(source['clockStart']) + (start or 0)
+        return dict(modelClock=round(clock), period=period(clock), clockReliable=False,
+                    clockBasis='filename minute only' if source.get('clockStartPrecision') == 'minute'
+                    else 'provided clock scenario; exact start unknown')
+    if source.get('clockStartNotBefore'):
+        lower = source['clockStartNotBefore']
+        return dict(modelClock=round(clock_seconds(lower) + (start or 0)),
+                    period=f'钟点下界情景；{lower}', clockReliable=False,
+                    clockBasis='user-confirmed lower bound scenario; exact start unknown')
+    return dict(modelClock=round(22 * 3600 + (start or 0)), period='钟点未知；22:00情景', clockReliable=False,
+                clockBasis='【假设】22:00 model scenario; original wall clock unknown')
 
 
 HEADWAY_BANDS = []  # Filled from OFFICIAL_HEADWAYS by the TypeScript entry.
@@ -280,7 +297,11 @@ def automatic_events(audio, source, folder, duration):
 
 
 def infer_door_events(events, timing):
-    """Door-derived proxies. Motor timestamps remain independent cross-checks."""
+    """Door-derived proxies; uncertaintyS covers delay ranges, not all error.
+
+    User acoustic ranges/edge limits stay in acoustic, independently of the
+    delay half-width. Motor timestamps remain independent cross-checks.
+    """
     opening_delay = statistics.mean(timing['openDelay'])
     starting_delay = statistics.mean(timing['startDelay'])
     open_half = (max(timing['openDelay']) - min(timing['openDelay'])) / 2
@@ -311,15 +332,38 @@ def infer_door_events(events, timing):
     return events
 
 
+def outside_review_window(window, excluded):
+    """Search only unreviewed portions; rejection is local to the clip."""
+    if not excluded or window[1] < excluded[0] or window[0] > excluded[1]:
+        return [window]
+    return [part for part in [[window[0], min(window[1], excluded[0])],
+                             [max(window[0], excluded[1]), window[1]]]
+            if part[1] > part[0]]
+
+
 def measure_doors(audio, source, events, timing):
     candidates = tones.detect_tones(audio)
     duration = len(audio) / 8000
     for event in events:
         old_stop, old_start = event.get('stop'), event.get('start')
+        reviews = [review for review in source.get('doorReviews', [])
+                   if review['recording'] == source['id'] and review['station'] == event['station']]
+        review = sorted(reviews, key=lambda row: row['reviewedOn'])[-1] if reviews else None
+        if review:
+            event['reviewPriorEvents'] = deepcopy({key: event.get(key) for key in
+                                                  ['open', 'close', 'closingMotion', 'locked', 'stop', 'start']})
+            event['doorReview'] = deepcopy(review)
         reference = next((take for take in timing['referenceTakes'] if source['id'] == 'ride-east' and take['station'] == event['station']), None)
         if reference:
             event['open'] = dict(at=reference['open'][0], confidence=reference['confidence'], method='reviewed-door-motion')
             event['locked'] = dict(at=reference['lockedAt'], confidence=reference['confidence'], method='reviewed-door-lock-impact')
+            if review:
+                event['reviewPriorEvents']['referenceEvents'] = deepcopy({key: event[key] for key in ['open', 'locked']})
+        if review:
+            event.update(deepcopy(review.get('events', {})))
+        excluded = review['clipWindowS'] if review and review.get('openingNotHeard') else None
+        if excluded and event.get('open') and excluded[0] <= event['open']['at'] <= excluded[1]:
+            event['open'] = None
         if not event.get('close') and old_start:
             lower = old_stop['at'] + 5 if old_stop else source.get('offset', 0)
             possible = [tone for tone in candidates if lower <= tone['start'] <= old_start['at'] + 5]
@@ -329,13 +373,18 @@ def measure_doors(audio, source, events, timing):
         if not event.get('open') and old_stop:
             low = max(source.get('offset', 0), old_stop['at'] - 10)
             high = min(duration - .8, old_stop['at'] + 35, event['close']['at'] - 4 if event.get('close') else duration)
-            if high > low + 2:
-                left = max(0, low - 2)
-                clip = audio[round(left * 8000):round(min(duration, high + 2) * 8000)]
+            for window in outside_review_window([low, high], excluded):
+                if window[1] <= window[0] + 2:
+                    continue
+                left = max(0, window[0] - 2)
+                clip = audio[round(left * 8000):round(min(duration, window[1] + 2) * 8000)]
                 data = motion.features(clip)
-                opened = motion.opening_cue(data, [low - left, high - left])
+                opened = motion.opening_cue(data, [window[0] - left, window[1] - left])
                 if opened:
-                    event['open'] = {**opened, 'at': round(opened['at'] + left, 3), 'searchWindowS': [low, high]}
+                    at = round(opened['at'] + left, 3)
+                    if window[0] <= at <= window[1] and not (excluded and excluded[0] <= at <= excluded[1]):
+                        event['open'] = {**opened, 'at': at, 'searchWindowS': window}
+                        break
     return infer_door_events(events, timing)
 
 
@@ -367,7 +416,7 @@ def measure_source(source, out, timing):
     if source['mode'] == 'adopted-events':
         events = []
         for row in source['events']:
-            events.append(dict(station=row['station'], **{key: None if row[key] is None else {**row['evidence'].get(key, dict(confidence='low')), 'at': row[key]} for key in ['stop', 'start', 'close', 'open']}, provenance='reviewed src/data/ridelog.ts'))
+            events.append(dict(station=row['station'], **{key: None if row.get(key) is None else {**row['evidence'].get(key, dict(confidence='low')), 'at': row[key]} for key in ['stop', 'start', 'close', 'open', 'closingMotion', 'locked']}, provenance='reviewed src/data/ridelog.ts'))
     elif source['mode'] == 'pa-windows':
         events = events_from_announcements(audio, source, source['announcements'], duration)
     else:
@@ -388,7 +437,6 @@ def measure_source(source, out, timing):
         stop = b['stop']['at'] if b['stop'] else None
         run = stop - start if start is not None and stop is not None and stop >= start else None
         dwell = b['start']['at'] - stop if b['start'] and stop is not None and b['start']['at'] >= stop else None
-        clock = clock_seconds(source['clockStart']) + (start or 0) if source.get('clockStart') else 22 * 3600 + (start or 0)
         acoustic = pitch_platforms(audio, start, stop) if run is not None else dict(speedKmh=None, confidence='low', reason='run boundaries incomplete', plateaus=[])
         intervals.append(dict(recording=source['id'], fromStation=a['station'], toStation=b['station'], direction=source['directions'][0],
                               **{'from': a['station'], 'to': b['station']}, start=start, stop=stop, dwell=dwell, run=run,
@@ -396,8 +444,7 @@ def measure_source(source, out, timing):
                               runUncertaintyS=(a['start'].get('uncertaintyS', 0) or 0) + (b['stop'].get('uncertaintyS', 0) or 0) if a['start'] and b['stop'] and a['start'].get('uncertaintyS') is not None else None,
                               dwellUncertaintyS=(b['start'].get('uncertaintyS', 0) or 0) + (b['stop'].get('uncertaintyS', 0) or 0) if b['start'] and b['stop'] and b['start'].get('uncertaintyS') is not None else None,
                               dwellConfidence=confidence(b['start'].get('confidence') if b['start'] else None, b['stop'].get('confidence') if b['stop'] else None),
-                              period=period(clock) if source.get('clockStart') else '钟点未知；22:00情景', modelClock=round(clock),
-                              clockReliable=False, clockBasis='filename minute only' if source.get('clockStart') else '【假设】22:00 model scenario; original wall clock unknown', acoustic=acoustic))
+                              **measurement_clock(source, start), acoustic=acoustic))
     result = dict(source=source, duration=duration, events=events, intervals=intervals)
     save(cache_path, dict(fingerprint=fingerprint.hexdigest(), result=result))
     return result
