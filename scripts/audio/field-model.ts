@@ -1,12 +1,12 @@
 /** Read-only, isolated section probes using the production doors, ARS and ATO.
- * No controller override: sectionCruise and planned running levels stay active.
+ * No controller override: the production section plan and running levels stay active.
  */
 import { Sim } from '../../src/sim/engine';
 import { newTrain } from '../../src/sim/ats';
 import { buildStops, tripTasks, platformBerth, dwellFactorAt } from '../../src/sim/timetable';
 import { releaseRoute } from '../../src/sim/interlocking';
 import { computeBody, indexBodies, scanAhead, goalBerth, MA_NEAR } from '../../src/sim/movement';
-import { sectionCruise, PERF } from '../../src/sim/dynamics';
+import { PERF } from '../../src/sim/dynamics';
 import { sectionEta } from '../../src/sim/dynamics';
 import * as movement from '../../src/sim/movement';
 import { ahead } from '../../src/sim/topology';
@@ -63,10 +63,10 @@ export function probeSection(sim: Sim, from: number, to: number, dir: TrackDir, 
         const profile = budgetProfile?.(sim, tr);
         const ceiling = profile ? PERF.vMax - margin : Math.max(.1, scan.vBody - margin);
         const distance = profile?.distance ?? (budgetDistance ? budgetDistance(sim, tr) : scan.stopDist);
-        // Read-only sample of the same public section controller, at most one
-        // 0.1s physics step after the stored vTarget above. It sets no state.
+        // Read the plan actually issued to this train. Solving a new plan at
+        // every sample would report a hypothetical cutoff, not its live coast.
         if (task.arr !== null) {
-          const cruise = sectionCruise(distance, tr.v, task.arr - sim.t, ceiling, profile?.limits, margin) * 3.6;
+          const cruise = (tr.ato?.plan.cutoff ?? tr.vTarget) * 3.6;
           cruises.push(cruise); ceilings.push(ceiling * 3.6);
           if (!Number.isFinite(distance)) missingStopSamples++;
           if (cruise < 40) low40.push({ t: sim.t, cruiseKmh: cruise, distanceM: distance, budgetS: task.arr - sim.t,

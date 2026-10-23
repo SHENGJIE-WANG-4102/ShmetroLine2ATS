@@ -6,7 +6,7 @@
  */
 import { loadPref, savePref } from './layout';
 import { RECORDED_VOLUME_GAINS, type RecordedVolume } from '../data/onboardbank';
-import { VvvfSound, type VvvfMode } from './vvvf';
+import { VvvfSound, type VvvfMode, type VvvfIdentity } from './vvvf';
 import { StationAudio, type StationAudioFrame } from './stationaudio';
 import { OnboardAudio, type OnboardAudioFrame } from './onboardaudio';
 import { DoorAudio, type DoorAudioFrame } from './dooraudio';
@@ -15,7 +15,7 @@ export class Audio {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   muted = loadPref('muted', false);
-  /** the inverter sound of the selected train, switched on and off in 设置 › 走行音 */
+  /** the inverter sound of the selected train, switched on and off in 设置 › VVVF 电磁音, apart from the cabin rolling ambience */
   traction = loadPref('traction', true);
   stationSound = loadPref('stationSound', true);
   recordedVolume: RecordedVolume = (() => { const v = loadPref<string>('recordedVolume', 'medium'); return v in RECORDED_VOLUME_GAINS ? v as RecordedVolume : 'medium'; })();
@@ -199,8 +199,8 @@ export class Audio {
   }
 
   /** the inverter sound of the train listened to (see vvvf.ts) */
-  setTraction(mode: VvvfMode, v: number, level: number) {
-    this.vvvf?.set(this.muted || !this.traction ? 'off' : mode, v, level);
+  setTraction(mode: VvvfMode, v: number, level: number, identity: VvvfIdentity) {
+    this.vvvf?.set(this.muted || !this.traction ? 'off' : mode, v, level, identity);
   }
 
   click() {

@@ -5,6 +5,7 @@
 import type { Dir } from './topology';
 import type { HaltCode, Halt, ArsWait } from './halt';
 import type { TurnbackState, DepotState, PsdState, FaultState } from './fsm';
+import type { AtoState, SectionPlan } from './dynamics';
 
 export type DayType = 'weekday' | 'weekend';
 export type Level = 'CBTC' | 'TBTC';
@@ -288,6 +289,13 @@ export interface Train {
   overrun: number;
   /** ATO coasting in its run-level band (energy.ts) */
   coast: boolean;
+  /** Train-owned section controller; arrival is shifted at operating-day rollover.
+   * Geometry and phase survive checkpoints; changing the stop or driving mode
+   * replaces the plan instead of carrying a previous section's coasting latch. */
+  ato?: { state: AtoState; plan: SectionPlan; berth: number; arrival: number | null;
+    level: number; ceiling: number; manual: boolean; distance: number; obstructed: boolean };
+  /** The same phase latch for moves without a scheduled arrival budget. */
+  atoMove?: AtoState;
   /** train status flags */
   failed: boolean;
   failRecoverAt: number;
@@ -689,6 +697,9 @@ export interface TrainSnap {
   vTarget: number;
   /** CM advisory in m/s; absent for automatic and restricted manual modes. */
   vRecommended?: number;
+  /** Physical controller phase and run start, used by deterministic local audio. */
+  atoPhase?: AtoState['phase'];
+  runStartedAt: number;
   tgtV: number;
   tgtD: number;
   tgtReason: string;

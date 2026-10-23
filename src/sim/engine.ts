@@ -769,6 +769,7 @@ export class Sim {
         rm: tr.mode === 'RM',
         vTarget: tr.vTarget, tgtV: tr.tgtV, tgtD: Number.isFinite(tr.tgtD) ? tr.tgtD : -1, tgtReason: tr.tgtReason,
         vRecommended: tr.manual && tr.mode === 'CM' ? tr.vRecommended ?? 0 : undefined,
+        atoPhase: (tr.ato?.state ?? tr.atoMove)?.phase, runStartedAt: tr.phaseSince,
         grade: gradePermille(this.topo, tr.link, tr.off, tr.dir), slip: tr.slip,
         stopDist: Number.isFinite(tr.stopDist) ? tr.stopDist : -1, a: tr.a, manual: tr.manual, notch: tr.notch, atoDriver: tr.atoDriver, reverser: tr.reverser ?? 1, doorEnable: doorEnable(this, tr),
         dwellLeft: tr.phase === 'dwell' || tr.phase === 'reversing' ? Math.max(0, tr.dwellUntil - this.t) : 0,

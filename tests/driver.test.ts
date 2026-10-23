@@ -9,10 +9,11 @@ import {carryWorld,nextOperatingConfig,DAY_S} from '../src/sim/operatingDay';
 import {dmiTick,availableMode} from '../src/sim/dmi';
 import {classify} from '../src/sim/halt';
 import {DOOR_CLOSE_S} from '../src/sim/calibration';
-import {sectionCruise,sectionEta,computeRunTimes} from '../src/sim/dynamics';
+import {sectionCruise,sectionPlan,computeRunTimes} from '../src/sim/dynamics';
 import {closeDoors} from '../src/sim/psd';
 import {OPERATIONS} from '../src/data/line2';
 import {setMode} from '../src/sim/onboard';
+import {checkSafety} from '../src/sim/invariants';
 import {driveOverrun,reverseToMark} from './helpers/driver-approach';
 import {stopError,advance} from '../src/sim/movement';
 const make=()=>new Sim({dayType:'weekday',date:'2026-10-22',dateLabel:'driver',startTime:14400,seed:7,noPossessions:true,autoRadio:false});
@@ -238,21 +239,46 @@ describe('driver controls and physical enable',()=>{
   expect(s.command({c:'atoButton',train:t.id,button:'g',down:true}).ok).toBe(true);updateTrainTasks(s,t);expect(t.phase).toBe('run');
  });
  it('spends the diagram running budget in the section, retaining the precision braking curve',()=>{
-  const v=sectionCruise(1000,0,100,80/3.6);expect(v).toBeLessThan(80/3.6);expect(sectionEta(1000,0,v)).toBeCloseTo(100,0);
+  const plan=sectionPlan(1000,0,100,80/3.6);expect(plan.cutoff).toBeLessThanOrEqual(80/3.6);expect(plan.eta).toBeCloseTo(100,0);
+  expect(plan.completed).toBe(true);expect(plan.coastValid).toBe(true);
   expect(sectionCruise(1000,0,20,80/3.6)).toBe(80/3.6);
   expect(sectionCruise(20,10,50,80/3.6)).toBe(80/3.6);
-  const slower=sectionCruise(1000,15,110,80/3.6);
-  expect(slower).toBeLessThan(15);expect(sectionEta(1000,15,slower)).toBeCloseTo(110,0);
+  const slower=sectionPlan(1000,15,110,80/3.6);
+  expect(slower.cutoff).toBeLessThan(15);expect(slower.eta).toBeCloseTo(110,0);expect(slower.completed).toBe(true);
   expect(sectionCruise(1000,15,10000,80/3.6)).toBeCloseTo(OPERATIONS.sectionCruiseMinKmh/3.6,2);
   expect(sectionCruise(1000,0,10000,5/3.6)).toBe(5/3.6);
   const s=make(),minimum=computeRunTimes(s.topo,186,Infinity,1,true);
   const capped=computeRunTimes(s.topo,186,50,1,true);
-  expect(capped.dn.reduce((a,b)=>a+b,0)-minimum.dn.reduce((a,b)=>a+b,0)).toBeCloseTo(141.5, 1);
+  expect(capped.dn.reduce((a,b)=>a+b,0)-minimum.dn.reduce((a,b)=>a+b,0)).toBeCloseTo(142.9, 1);
   expect(OPERATIONS.platformPassKmh).toBe(45);expect(OPERATIONS.platformStopKmh).toBe(Infinity);
  });
  it('RM retains the TBTC AM offer when CBTC is unavailable',()=>{
   const {s,t}=fixture();t.mode='RM';t.comm=false;
   expect(availableMode(s,t)).toEqual({mode:'AM',level:'TBTC'});
+ });
+ it('uses the normal stop shape when the depot boundary authority extends beyond its berth',()=>{
+  const s=make(),base=capture(s);
+  for(const b of s.topo.berths.filter(b=>b.kind==='depot'&&b.name.includes('入段'))){
+   const route=s.topo.routes.find(r=>r.steps.some(st=>st.link===b.link&&st.dir===b.dir))!;
+   const history=route.steps.slice(0,route.steps.findIndex(st=>st.link===b.link)+1);
+   for(const initial of [{off:b.dir===1?0:s.topo.links[b.link].len,v:0},{off:b.offset-65*b.dir,v:4}]){
+   restore(s,base);const t=s.trainList[0],id=t.id;
+   for(const other of [...s.trainList])if(other!==t)s.removeTrain(other);
+   for(const block of s.plan.blocks)s.blockDone.add(block.id);
+   Object.assign(t,{link:b.link,off:initial.off,dir:b.dir,hist:history.map(st=>({...st})),
+    v:initial.v,a:0,phase:'run',manual:false,mode:'DTO',level:'CBTC',inService:false,eb:false,failed:false,
+    hold:false,stopUntil:0,block:-1,tripId:-1,ato:undefined,atoMove:undefined,lastMa:Infinity,lastDs:0,
+    depotStage:'none',tbStage:'none',tasks:[{k:'depot',depot:b.depot,berth:b.id}]});
+   computeBody(s,t);indexBodies(s);
+   updateTrainMotion(s,t,.1);indexBodies(s); // Populate real ATP curves for this moving fixture.
+   checkSafety(s); // Seed the constructed normal state before observing none → in.
+   const end=s.t+80;let emergency=t.eb;
+   while(s.trains.has(id)&&s.t<end){s.step();emergency ||= t.eb;}
+   expect(s.trains.has(id),b.name).toBe(false);
+   expect(emergency,b.name).toBe(false);
+   expect(s.integrity.violations,b.name).toEqual([]);
+   }
+  }
  });
 
  it('taking AM after automatic lock removes simulated confirmation delay; a refused handback retains the driver',()=>{

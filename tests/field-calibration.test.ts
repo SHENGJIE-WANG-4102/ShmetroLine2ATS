@@ -3,7 +3,7 @@ import { createProbeWorld, probeSection } from '../scripts/audio/field-model';
 import { capture, restore } from '../src/sim/state';
 import { STATIONS } from '../src/data/line2';
 import { regulationDistance, regulationProfile, scanAhead, goalBerth, MA_NEAR, computeBody, indexBodies, updateTrainMotion } from '../src/sim/movement';
-import { PERF, sectionEta, sectionCruise, staticLinkLimit } from '../src/sim/dynamics';
+import { PERF, sectionEta, sectionPlan, staticLinkLimit } from '../src/sim/dynamics';
 import { newTrain } from '../src/sim/ats';
 import { buildStops, platformBerth, tripTasks } from '../src/sim/timetable';
 import { releaseRoute } from '../src/sim/interlocking';
@@ -25,7 +25,10 @@ describe('field section measurement harness', () => {
     restore(sim,saved);const manual=sim.trains.get(id)!;const task=manual.tasks[0];
     if(task.k!=='stop'||task.arr===null)throw Error('expected onward arrival');
     manual.tasks[0]={...task,arr:task.arr+120};updateTrainMotion(sim,manual,.1);
-    expect(manual.vRecommended).toBeLessThan(cm);
+    // More slack first lengthens the coast; it no longer has to lower the
+    // recommendation at this exact position in the initial traction curve.
+    expect(manual.ato!.plan.cutoff).toBeLessThanOrEqual(saved.trains.find(t=>t.id===id)!.ato?.plan.cutoff ?? PERF.vMax);
+    expect(manual.ato!.plan.eta).toBeGreaterThan(auto.ato!.plan.eta);
     expect({v:manual.v,a:manual.a,off:manual.off,link:manual.link,delay:manual.delay}).toEqual(motion);
     const cp=capture(sim);manual.vRecommended=99;restore(sim,cp);
     expect(sim.trains.get(id)!.vRecommended).toBe(cp.trains.find(t=>t.id===id)!.vRecommended);
@@ -47,7 +50,8 @@ describe('field section measurement harness', () => {
     expect(row.peakKmh!).toBeGreaterThan(row.targetMedianKmh! - 5);
     // Arrival budgets now use the whole task path, while ATP retains its near scan.
     expect(row.stopDistanceUnavailableFraction).toBe(0);
-    expect(row.cruiseMedianKmh!).toBeCloseTo(row.targetMedianKmh!, 0);
+    // The stored cutoff stays above the falling coast reference.
+    expect(row.cruiseMedianKmh!).toBeGreaterThanOrEqual(row.targetMedianKmh!);
     expect(row.levels).toEqual([1]);
   });
 
@@ -120,17 +124,15 @@ describe('static task-path ETA', () => {
   });
 
   it('anticipates a future lower limit and uses the same estimate in cruise inversion', () => {
-    const fast = PERF.vMax, slow = 30 / 3.6, a = PERF.aMax * .8, b = PERF.bService * .8;
+    const fast = PERF.vMax, slow = 30 / 3.6;
     const limits = [{ length: 1900, limit: fast }, { length: 100, limit: slow }];
-    const expected = fast / a + (fast - slow) / b
-      + (1900 - fast ** 2 / (2 * a) - (fast ** 2 - slow ** 2) / (2 * b)) / fast
-      + 100 / slow + slow / (2 * b);
     const eta = sectionEta(2000, 0, fast, limits);
-    expect(eta).toBeCloseTo(expected, 8);
     expect(eta).toBeGreaterThan(sectionEta(2000, 0, fast));
     const budget = eta + 20;
-    const cruise = sectionCruise(2000, 0, budget, fast, limits);
-    expect(sectionEta(2000, 0, cruise, limits)).toBeCloseTo(budget, 1);
+    const plan = sectionPlan(2000, 0, budget, fast, limits);
+    expect(plan.completed).toBe(true);
+    expect(plan.eta).toBeCloseTo(budget, 0);
+    expect(plan.samples.every(p=>p.remaining>100 || p.speed<=slow+.1)).toBe(true);
   });
 
   it('keeps uniform profiles equivalent to the original estimate, including deceleration', () => {

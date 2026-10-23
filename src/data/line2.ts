@@ -576,9 +576,11 @@ export const OPERATIONS = {
   /** 【假设】库线未建模，以各段出段信号前5米、±1米代替试验库线。 */
   depotDoorTests: { BZL: { beforeSignal: 5 }, LYD: { beforeSignal: 5 }, CSD: { beforeSignal: 5 } } as Record<string, { beforeSignal: number }>,
   /** planned run time margin over the minimum ATO run between stations */
-  runMargin: 0.20,
+  runMargin: 0.1760, // D135候选：全线同一富余；首末班仍有超限，未通过±30秒验收。
   // 【假设】沿用原ATS试探规则的12km/h，避免用极低速消耗富余；非ATP最低速度。
   sectionCruiseMinKmh: 12,
+  /** 【假设】改造后录音短封锁窗约62–64km/h再次通电，未识别真实下限；取60，不是 ATP 下限。 */
+  sectionCoastMinKmh: 60,
   passRunMargin: 0.16, // 通过站速度仍45km/h，沿用通过走行余量
   /** 【用户观察】锁闭后起步，AM自动确认与DTO共用，不叠加延时。 */
   autoStartDelay: [1.5, 3.5] as const,

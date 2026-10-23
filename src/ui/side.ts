@@ -13,7 +13,7 @@ import { SCENARIOS, RANDOM_LEVELS } from '../sim/scenario';
 import { STATIONS, LINE_INFO, WEATHER_RULES } from '../data/line2';
 import type { FaultKind, RadioCall, SimEvent } from '../sim/model';
 import type { Audio } from './audio';
-import type { VvvfMode } from './vvvf';
+import { inverterMode, type VvvfMode } from './vvvf';
 import { PERF, tractionAccel } from '../sim/dynamics';
 import { stationFrame, audioTrain, VVVF_MAX_RATE } from './stationaudio';
 import { onboardFrame } from './onboardaudio';
@@ -181,23 +181,20 @@ export class SidePanel {
     // the manual cab: warning above the permitted speed (RM 25 km/h), before the EB
     const cab = snap.trains.find((t) => t.manual);
     this.audio.setOverspeed(!!cab && cab.phase === 'run' && !cab.eb && cab.v > cab.vPermit + 0.05);
-    // the inverter of the selected train (02A05 recordings for every train until other stock is recorded)
+    // Local 02A05 recordings only follow matching stock and actual motor effort.
     const sel = this.store.selection;
     const heard = sel?.kind === 'train' ? snap.trains.find((t) => t.id === sel.id) : undefined;
     let mode: VvvfMode = 'off', level = 0;
     if (heard && !snap.paused && snap.speed <= VVVF_MAX_RATE && heard.phase === 'run' && !heard.eb && !heard.failed) {
-      // ATO holding its target speed keeps the inverter on at low torque, through its small pulses of power
-      if (!heard.manual && heard.v > 1 && heard.v >= heard.vTarget - 0.4 && heard.a > -0.05) {
-        mode = 'cruise'; level = 0.45 + 0.55 * Math.max(0, heard.a) / tractionAccel(heard.v);
-      } else if (heard.a > 0.03) { mode = 'power'; level = heard.a / tractionAccel(heard.v); }
-      // the electric brake holds down to a stand (the stop recording runs to 0 Hz)
-      else if (heard.a < -0.05 && heard.v > 0) { mode = 'brake'; level = -heard.a / PERF.bService; }
+      mode = inverterMode(heard);
+      level = mode === 'brake' ? -heard.a / PERF.bService : mode === 'cruise' ? .45 + .55 * Math.max(0, heard.a) / tractionAccel(heard.v) : Math.max(0, heard.a) / tractionAccel(heard.v);
     }
     // the inverter follows the wheels: spinning they run ahead of the train, sliding they fall behind,
     // and the anti-slip / WSP control makes the pitch hunt as it cycles
-    const hunt = Math.sin(performance.now() / 120);
+    const hunt = Math.sin(snap.t / .12);
     const wheel = heard?.slip === 'slip' ? 1.12 + 0.06 * hunt : heard?.slip === 'slide' ? 0.85 + 0.05 * hunt : 1;
-    this.audio.setTraction(mode, (heard?.v ?? 0) * wheel, level);
+    this.audio.setTraction(mode, (heard?.v ?? 0) * wheel, level,
+      { vehicle: heard?.vehicle ?? '', runStartedAt: heard?.runStartedAt ?? 0, t: snap.t });
     // a selected platform hears its own station
     const heardStation = sel?.kind === 'station' ? sel.id : sel?.kind === 'platform' ? this.store.topo.platforms[sel.id]?.station ?? null : null;
     const platformFrame = stationFrame(snap, heardStation, this.store.topo);

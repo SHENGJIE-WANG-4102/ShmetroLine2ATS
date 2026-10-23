@@ -11,7 +11,7 @@ import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
 import { levelAccel, trainLevel } from './energy';
 import { swPos } from './interlocking';
 import { TRACTION_UNITS } from './vehicle';
-import { PERF, brakingSpeed, jerkLimited, tractionAccel, sectionEta, sectionCruise, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
+import { PERF, brakingSpeed, jerkLimited, tractionAccel, atoTractionAccel, atoControl, atoStopApproachDistance, atoBrakeProfile, atoLimitSpeed, sectionPlan, sectionRecommended, sectionEta, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
 import { routeLeadsTo, distanceToBerthFrom, atoOverrun, type TaskPathVisitor } from './ats';
 import type { HaltCode } from './halt';
 import { applyEB } from './onboard';
@@ -608,17 +608,14 @@ function spad(sim: Sim, tr: Train, sigId: number) {
   applyEB(sim, tr, `冒进信号 ${name}`, 'spad');
 }
 
-/**
- * ATO command under the line's run level (energy.ts): level 1 is the plain
- * controller; at 2 and 3 a cruising train shuts off at its target, coasts
- * down the band and powers up again (level 3 also cruises lower). Braking
- * curves are never relaxed: coasting stops as soon as the train is above them.
- */
-function runLevelAccel(sim: Sim, tr: Train, vT: number, vCruise: number, stopAt: number, regulated: boolean): number {
+/** Unbudgeted moves still share the same continuous ATO level controller. */
+function runLevelAccel(sim: Sim, tr: Train, vT: number, vCruise: number, stopAt: number, regulated: boolean,
+  protection: { brakeRate: number; protecting: boolean; grade: number }): number {
   const trip = sim.plan.trips[tr.tripId];
   const plannedEmpty = !tr.manual && (tr.mode === 'DTO' || tr.mode === 'AM') && trip && !trip.revenue
     && tr.tasks[0]?.k === 'stop' && sim.topo.links[tr.link].track === trip.dir;
-  return levelAccel(tr, regulated || plannedEmpty ? trainLevel(sim, tr) : 1, vT, vCruise, stopAt);
+  tr.atoMove ??= { phase: 'traction', recovered: false, neutral: 0 };
+  return levelAccel(tr, regulated || plannedEmpty ? trainLevel(sim, tr) : 1, vT, vCruise, stopAt, tr.atoMove, protection);
 }
 
 /** Full swept footprint on the train's actual recent path, never a new route.
@@ -710,6 +707,9 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   if (tr.failed && tr.phase === 'run' && tr.v <= 0.01) tr.phase = 'failed';
   const moving = tr.phase === 'run';
   if (!moving) {
+    tr.ato = undefined;
+    tr.atoMove = undefined;
+    tr.coast = false;
     tr.lastDs = 0;
     // standing (dwell, turnback, stabled, failed): authority, next signal and the
     // permitted speed come from the 1 Hz refresh
@@ -792,14 +792,23 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   for (let i = 0; i < scan.constraints.length; i += 2) {
     const d = scan.constraints[i];
     const v = scan.constraints[i + 1];
-    vT = Math.min(vT, brakingSpeed(d - 3, v - (rm ? 0.2 : atoMargin), bPlan));
+    vT = Math.min(vT, atoLimitSpeed(d - 3, v - (rm ? 0.2 : atoMargin), tr.v, tr.a, bPlan));
     const dh = rise(d);
     vPerm = Math.min(vPerm, brakingSpeedH(d, v, PERF.bPermit, dh));
     vEbi = Math.min(vEbi, brakingSpeedH(d, v, PERF.bEbGuaranteed, dh) + PERF.atpTolerance);
     if (v < scan.vBody - 0.1) consider(d, v, '限速');
   }
   vT = Math.min(vT, brakingSpeed(scan.maDist - 1, 0, bPlan));
-  if (scan.stopDist !== Infinity) vT = Math.min(vT, brakingSpeed(scan.stopDist - 0.2, 0, bPlan));
+  if (scan.stopDist !== Infinity) {
+    // Only the ATO station-stop shape changes. Wet-rail precautions, authority
+    // and ATP curves retain their independently supervised braking rates.
+    const state = tr.ato && tr.ato.berth === goalBerth(tr) ? tr.ato.state : tr.atoMove;
+    const entry = state?.brakeEntrySpeed;
+    const stopping = lowAdh ? brakingSpeed(scan.stopDist - .2, 0, bPlan)
+      : entry !== undefined ? atoBrakeProfile(entry, scan.stopDist, state?.brakeEntryDistance, state?.brakeEntryGrade).speed
+        : scan.stopDist <= atoStopApproachDistance(tr.v, tr.a, aG) ? atoBrakeProfile(tr.v, scan.stopDist, undefined, aG).speed : Infinity;
+    vT = Math.min(vT, stopping);
+  }
   if (!(tr.manual && rm)) {
     const dh = rise(scan.maDist);
     vPerm = Math.min(vPerm, brakingSpeedH(scan.maDist, 0, PERF.bPermit, dh));
@@ -808,9 +817,33 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   }
   consider(tr.maDist, 0, tr.maReason || 'MA终点');
   if (scan.stopDist !== Infinity && scan.stopDist <= scan.maDist) consider(scan.stopDist, 0, '停车点');
-  if (targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null) {
-    vT = Math.min(vT, sectionCruise(budgetDistance, tr.v, nextStop.arr - sim.t, PERF.vMax - atoMargin, budgetProfile?.limits, atoMargin));
-  }
+  // A section has one physical plan, rather than a new cruise target at every
+  // 100 ms tick. Only a changed task, budget, level or driver mode replaces it.
+  // No route/traffic/ATP constraint is cached in this unhindered plan.
+  const level = targetRegulated ? trainLevel(sim, tr, targetDelay) : 1;
+  if (targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance) && budgetDistance > 0) {
+    const ceiling = PERF.vMax - atoMargin;
+    const old = tr.ato;
+    const obstructed = tr.hold || standStill || scan.maDist < budgetDistance - 1
+      && scan.maDist < tr.v * tr.v / (2 * bPlan) + 60;
+    if (!old || old.berth !== nextStop.berth || old.arrival !== nextStop.arr || old.level !== level
+      || old.ceiling !== ceiling || old.manual && !tr.manual || old.obstructed && !obstructed
+      || Math.abs(budgetDistance - ((old?.distance ?? budgetDistance) - tr.lastDs)) > 2) {
+      // Switching between the ordinary and late speed margin must not erase a
+      // completed coast/recovery. A changed task or a real obstruction release
+      // still starts a fresh trajectory from the train's physical state.
+      const state = old && old.berth === nextStop.berth && old.arrival === nextStop.arr
+        && old.manual === tr.manual && old.level === level && !old.obstructed && old.ceiling !== ceiling
+        && Math.abs(budgetDistance - (old.distance - tr.lastDs)) <= 2
+        ? { ...old.state } : { phase: 'traction' as const, recovered: false, neutral: 0 };
+      tr.ato = { state,
+        plan: sectionPlan(budgetDistance, tr.v, nextStop.arr - sim.t, ceiling, budgetProfile?.limits, atoMargin, tr.a, level),
+        berth: nextStop.berth, arrival: nextStop.arr, level, ceiling, manual: tr.manual, distance: budgetDistance, obstructed };
+    }
+    tr.ato!.distance = budgetDistance;
+    tr.ato!.obstructed = obstructed;
+    tr.ato!.manual = tr.manual;
+  } else tr.ato = undefined;
   vT = Math.min(vT, vPerm, tr.vCap);
   // standing a few metres short of a signal at stop: ATO does not start into
   // so short an authority (it could not ease off in time under the jerk limit)
@@ -818,9 +851,10 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   if (tr.hold && tr.v < 0.1) vT = 0;
   if (standStill) vT = 0;
   vT = Math.max(0, vT);
-  if (recommend) tr.vRecommended = tr.eb ? 0 : Math.max(0,
-    levelTarget(targetRegulated ? trainLevel(sim, tr, targetDelay) : 1, vT, scan.vBody - atoMargin, tr.v));
-  tr.vTarget = vT;
+  const recommendation = tr.ato ? Math.min(vT, sectionRecommended(tr.ato.plan, budgetDistance - Math.max(.5, tr.v * .5)))
+    : levelTarget(level, vT, scan.vBody - atoMargin, tr.v);
+  if (recommend) tr.vRecommended = tr.eb ? 0 : Math.max(0, recommendation);
+  tr.vTarget = Math.max(0, recommendation);
   tr.vPermit = Math.max(0, vPerm);
   tr.vEbi = rm ? PERF.vRM + PERF.atpTolerance : vEbi;
   tr.tgtV = tgtV;
@@ -852,7 +886,15 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     if (manualTractionHold(sim, tr) && a > 0) a = 0;
     trackApproach(tr);
   } else {
-    let c = runLevelAccel(sim, tr, vT, scan.vBody - atoMargin, stopAt, regulated);
+    let c: number;
+    if (tr.ato) {
+      c = atoControl(tr.ato.state, { v: tr.v, a: tr.a, target: vT, cruise: tr.ato.plan.cutoff,
+        stopDist: stopAt, remaining: budgetDistance, plan: tr.ato.plan, dt, grade: aG, brakeRate: bPlan,
+        protecting: tr.ato.obstructed || tr.v >= vPerm - .1 });
+      tr.coast = tr.ato.state.phase === 'coast';
+    } else c = runLevelAccel(sim, tr, vT, scan.vBody - atoMargin, stopAt, regulated,
+      { brakeRate: bPlan, grade: aG, protecting: tr.v >= vPerm - .1
+        || scan.maDist < scan.stopDist - 1 && scan.maDist < tr.v * tr.v / (2 * bPlan) + 60 });
     // slid past the stopping point on wet rail: brake to a stand (ats.ts then decides)
     if (adh.brake < Infinity && tr.v > 0 && tr.tasks[0]?.k === 'stop' && stopError(sim, tr) < -0.3) c = -PERF.bService;
     // in traction a falling grade is a bonus, not something to brake off
@@ -860,7 +902,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     a = tr.coast && c === -PERF.resist ? c : c > 0 ? Math.max(c - aG, c) : c - aG;
     // standing with nothing asked for: the brakes hold it against the grade
     if (tr.v === 0 && vT <= 0.01) a = 0;
-    a = Math.max(-PERF.bService, Math.min(tractionAccel(tr.v) * (lowAdh ? LOW_ADH_TRACTION : 1), a));
+    a = Math.max(-PERF.bService, Math.min(atoTractionAccel(tr.v) * (lowAdh ? LOW_ADH_TRACTION : 1), a));
   }
   // inverters cut out (vehicle.ts): less traction, braking blended out by the friction brake
   if (tr.tractionCut > 0 && a > 0) a = Math.min(a, tractionAccel(tr.v) * (1 - tr.tractionCut / TRACTION_UNITS));

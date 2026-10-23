@@ -127,7 +127,7 @@ export class Header {
         item('放大', () => this.stepScale(1), { key: 'Ctrl +' }), item('缩小', () => this.stepScale(-1), { key: 'Ctrl −' })),
       sub('声音', muted ? '静音' : '开启',
         item('开启', () => this.hooks.setMuted(false), { on: !muted, key: 'M' }), item('静音', () => this.hooks.setMuted(true), { on: muted, key: 'M' })),
-      sub('走行音', traction ? '开启' : '关闭',
+      sub('VVVF 电磁音', traction ? '开启' : '关闭',
         item('开启', () => { this.hooks.setTraction(true); this.refreshScale(); }, { on: traction }),
         item('关闭', () => { this.hooks.setTraction(false); this.refreshScale(); }, { on: !traction })),
       sub('车站音效', stationSound ? '开启' : '关闭',

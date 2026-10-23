@@ -10,23 +10,25 @@ import {computeBody,indexBodies} from '../src/sim/movement';
 import {classify} from '../src/sim/halt';
 import {computeDmi} from '../src/sim/dmi';
 import {trainLevel,LEVEL_LATE,levelAccel,levelBand} from '../src/sim/energy';
-import {PERF} from '../src/sim/dynamics';
+import {PERF,type AtoState} from '../src/sim/dynamics';
 import {capture,restore} from '../src/sim/state';
 
 const advance=(s:Sim,t:number)=>{const end=s.t+t;while(s.t<end-1e-6)s.step();};
 
 describe('D74 diagram ATO levels',()=>{
  const make=()=>new Sim({dayType:'weekday',dateLabel:'night levels',startTime:14400,seed:1,noPossessions:true});
- it('retains the former slow-grade whole-line diagram time without the platform stop cap',()=>{
+ it('keeps the recalibrated continuous night-grade tables and unchanged level data',()=>{
   const s=make();
-  // Measured with the former 50km/h cap, D74 coasting parameters and uniform 0.16 margin.
-  for(const [level,dn,up] of [[3,4723.7,4720.3],[4,4863.6,4859.7]]){
+  // D135: capped automatic traction, shaped stops and the one .1760 margin.
+  // The former D121 totals belonged to the old pulsed controller and .20 margin.
+  for(const [level,dn,up] of [[3,4758.4,4760.3],[4,4909.7,4912.1]]){
    const rt=s.rt.byLevel![level];
    expect(Math.abs(rt.dn.reduce((a,b)=>a+b,0)-dn),`level ${level} DN`).toBeLessThanOrEqual(10);
    expect(Math.abs(rt.up.reduce((a,b)=>a+b,0)-up),`level ${level} UP`).toBeLessThanOrEqual(10);
   }
   expect(levelBand(1)).toEqual({band:0,lower:0});expect(levelBand(2)).toEqual({band:5/3.6,lower:0});
-  expect(OPERATIONS.runMargin).toBe(.20);
+  expect(levelBand(3)).toEqual({band:10/3.6,lower:6.5/3.6});expect(levelBand(4)).toEqual({band:10/3.6,lower:9.5/3.6});
+  expect(OPERATIONS.runMargin).toBe(.1760);
  });
  it('chooses levels at interval departure, including a trip crossing into the night band',()=>{
   const s=make(),departure=21*3600+39*60+55;
@@ -69,7 +71,11 @@ describe('D74 diagram ATO levels',()=>{
   expect(s.rt.byLevel![4].passDn[28]).toBeGreaterThan(s.rt.passDn[28]);
   expect(s.rt.byLevel![4].passDn[29]).toBeGreaterThan(100);
   const state={v:15,a:0,coast:true};
-  expect(levelAccel(state,4,5,20,100)).toBeLessThan(-PERF.resist); // braking target cancels motor-off coasting
+  const phase:AtoState={phase:'traction',recovered:false,neutral:0};
+  expect(levelAccel(state,4,5,20,100,phase)).toBe(-PERF.resist);
+  expect(phase.phase).toBe('coast'); // normal braking first releases traction
+  phase.neutral=PERF.atoNeutralS;
+  expect(levelAccel(state,4,5,20,100,phase)).toBeLessThan(-PERF.resist);
  });
  it('runs the first two night intervals on the slow grade without inventing lateness',()=>{
   const s=make();advance(s,.2);

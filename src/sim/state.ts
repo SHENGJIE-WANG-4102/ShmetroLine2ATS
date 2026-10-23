@@ -118,6 +118,8 @@ function cloneTrain(tr: Train): Train {
     recentBody: tr.recentBody?.map(b => ({ ...b })),
     retreat: tr.retreat && { ...tr.retreat },
     atoButtons: tr.atoButtons && { ...tr.atoButtons },
+    ato: tr.ato && structuredClone(tr.ato),
+    atoMove: tr.atoMove && { ...tr.atoMove },
     dmiQueue: tr.dmiQueue?.map(m => ({ ...m })),
     dmiContext: tr.dmiContext && { ...tr.dmiContext },
     skipStations: new Set(tr.skipStations),

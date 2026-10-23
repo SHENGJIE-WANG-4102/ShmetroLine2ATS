@@ -1,7 +1,7 @@
 import {beforeAll,describe,expect,it} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {capture,restore,fingerprint} from '../src/sim/state';
-import {nextOperatingConfig,unfinishedAtRollover} from '../src/sim/operatingDay';
+import {nextOperatingConfig,unfinishedAtRollover,carryTrains,DAY_S} from '../src/sim/operatingDay';
 import {preparePlan} from '../src/sim/planning';
 import {OPERATING_DAY} from '../src/sim/dayRandom';
 import {scheduleInstructorEvents} from '../src/sim/scenario';
@@ -36,6 +36,25 @@ describe('operating day boundaries and replay',()=>{
   expect(sim.trainList).toHaveLength(8);
   expect(unfinishedAtRollover(sim)).toEqual([]);
  });
+ it('copies a section phase through checkpoints and carries its arrival clock into the next day',()=>{
+  const saved=capture(sim),tr=sim.trainList[0];
+  tr.ato={state:{phase:'coast',recovered:false,neutral:2},plan:{cutoff:20,coastAt:800,coastFloor:15,
+   eta:100,samples:[{remaining:1000,speed:20},{remaining:0,speed:0}]},berth:0,arrival:sim.t+200,
+   level:1,ceiling:20,manual:false,distance:700,obstructed:false};
+  const cp=capture(sim);
+  tr.ato.plan.samples[0].speed=99;tr.ato.state.phase='brake';
+  restore(sim,cp);
+  const restored=sim.trains.get(tr.id)!;
+  expect(restored.ato!.state.phase).toBe('coast');
+  expect(restored.ato!.plan.samples[0].speed).toBe(20);
+  const next=new Sim(nextOperatingConfig(sim));carryTrains(next,sim);
+  const carried=next.trains.get(tr.id)!;
+  expect(carried.ato!.arrival).toBe(restored.ato!.arrival!-DAY_S);
+  expect(carried.ato!.state).toEqual(restored.ato!.state);
+  carried.ato!.plan.samples[0].speed=10;
+  expect(restored.ato!.plan.samples[0].speed).toBe(20);
+  restore(sim,saved);
+ },60000);
  it('identifies a moving train in the interval with its vehicle, location and task',()=>{
   const cp=capture(sim),train=sim.trainList[0];
   const interval=sim.topo.links.find(l=>l.track==='DN'&&l.platform<0&&l.len>300)!;

@@ -174,6 +174,8 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     autoOpenAt: tr.autoOpenAt === undefined ? undefined : tr.autoOpenAt - DAY_S,
     recentBody: tr.recentBody?.map(b => ({ ...b })),
     retreat: tr.retreat && { ...tr.retreat }, atoButtons: tr.atoButtons && { ...tr.atoButtons },
+    ato: tr.ato && { ...structuredClone(tr.ato), arrival: tr.ato.arrival === null ? null : tr.ato.arrival - DAY_S },
+    atoMove: tr.atoMove && { ...tr.atoMove },
     dmiQueue: tr.dmiQueue?.map(m => ({ ...m, at: m.at - DAY_S })),
     dmiContext: tr.dmiContext && { ...tr.dmiContext },
     trace: [], dmiLog: tr.dmiLog.map(m => ({ ...m, t: m.t - DAY_S })), dmiPrev: tr.dmiPrev && { ...tr.dmiPrev },

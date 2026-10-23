@@ -1,55 +1,47 @@
-/**
- * The 02A05 inverter sound of the selected train, played from the
- * recordings by speed: short overlapping grains are read from where the
- * recording runs at the train's stator frequency (src/data/vvvf.ts), so the
- * pitch, and the steps between PWM modes, follow the train's speed rather
- * than the recording's clock. Under power the start recording, in electric
- * braking the stop recording down to a stand; holding speed (ATO cruise, the
- * inverter on at low torque) the steady stretch before the brake, which
- * sounds unlike a start at the same speed. Coasting is silent (the inverter is
- * off), as is a stand and the EB (friction brake only). Missing recordings
- * (they are not in the repository) leave it silent. Every train sounds like
- * an 02A05 for now; other stock needs its own recordings.
- */
-import { VVVF_BRAKE, VVVF_HZ_PER_MS, VVVF_TRACTION } from '../data/vvvf';
+/** Local-only 02A05 inverter takes, read by measured stator frequency. */
+import { VVVF_HZ_PER_MS, VVVF_TAKES, type VvvfClip, type VvvfTake } from '../data/vvvf';
+import { fleetEntry } from '../data/line2';
+import type { TrainSnap } from '../sim/model';
 
 export type VvvfMode = 'power' | 'brake' | 'cruise' | 'off';
 type Clip = 'power' | 'brake';
+export interface VvvfIdentity { vehicle: string; runStartedAt: number; t: number }
+const GRAIN = .12, HOP = GRAIN / 2, LOOKAHEAD = .12, JITTER = .025, IDLE = .8;
+// D71: full-power grains retain about 9 dB below the cabin PA.
+const VOLUME = .45, CRUISE_HIGH = 64, CRUISE_LOW = 54, BRAKE_TAIL = 8;
 
-/** grain length and spacing (s): triangular windows overlapping by half sum to a constant */
-const GRAIN = 0.12;
-const HOP = GRAIN / 2;
-const LOOKAHEAD = 0.12;
-/** random offset of each grain, so a held position does not buzz at the grain rate */
-const JITTER = 0.025;
-// D71 cabin reference: ride startup -23.65 vs PA -14.61 LUFS.
-// 【假设】 full-power grains (-18.09 LUFS) use .45 gain to retain ~9 dB below PA.
-const VOLUME = .45;
-/** stop scheduling grains this long after the sound faded out (s) */
-const IDLE = 0.8;
+function hash(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
 
-/**
- * Steady stretches (s in the clip) and their f₁ (Hz), read back and forth.
- * Their harmonics are fixed multiples of f₁ (synchronous modulation: 5th,
- * 7th, 11th, 13th…), so away from their own f₁ they are resampled by the
- * ratio. 'power' ends the start (≈70 km/h); 'steady' opens the stop
- * recording, cruising before the brake — the same sound as p01 93–99 s.
- */
-const PLATEAU: Record<'power' | 'steady', { clip: Clip; t: [number, number]; f: number }> = {
-  power: { clip: 'power', t: [28.8, 33.1], f: 93.4 },
-  steady: { clip: 'brake', t: [0.6, 7.9], f: 80.7 },
-};
-/** cruise below this f₁ blends into the start recording at the same f₁ (Hz), fully below CRUISE_LOW */
-const CRUISE_HIGH = 64;
-const CRUISE_LOW = 54;
-/** the electric brake fades out in the last km/h of the recording: lift it below this f₁ (Hz) */
-const BRAKE_TAIL = 8;
+function identityKey(identity: VvvfIdentity): string {
+  // carryWorld subtracts a day from both run start and sim time; keep the same take.
+  const dayMs = 86400000, start = ((Math.round(identity.runStartedAt * 1000) % dayMs) + dayMs) % dayMs;
+  return `${identity.vehicle}|${start}`;
+}
 
-/** time in a recording where it runs at f₁, by linear interpolation of its table; NaN beyond its steady end */
-function timeAt(table: [number, number][], f: number): number {
+/** Same train/start and available files always choose the same take, including after a seek. */
+export function chooseVvvfTake(identity: VvvfIdentity, clip: Clip, takes: readonly VvvfTake[] = VVVF_TAKES): VvvfTake | undefined {
+  const available = takes.filter(t => t.vehicleType === fleetEntry(identity.vehicle)?.type);
+  return available[hash(`${identityKey(identity)}|${clip}`) % available.length];
+}
+
+/** Snapshot acceleration is motor effort: safety braking wins over planned phase. */
+export function inverterMode(train: Pick<TrainSnap, 'vehicle' | 'v' | 'a' | 'manual' | 'atoPhase' | 'eb' | 'failed' | 'phase'>): VvvfMode {
+  if (fleetEntry(train.vehicle)?.type !== '02A05' || train.eb || train.failed || train.phase !== 'run' || train.v <= 0) return 'off';
+  if (train.a < -.05) return 'brake';
+  if (train.manual) return train.a > .03 ? 'power' : 'off';
+  if (train.atoPhase === 'hold') return 'cruise';
+  if (train.a > .03 || train.atoPhase === 'traction') return 'power';
+  return 'off';
+}
+
+/** Time at f1; a steady endpoint instead uses synchronous resampling. */
+export function vvvfTimeAt(table: [number, number][], f: number): number {
   const rising = table[table.length - 1][1] > table[0][1];
-  const steady = rising ? table[table.length - 1][1] : table[0][1];
-  if (f >= steady) return NaN;
+  if (f >= (rising ? table[table.length - 1][1] : table[0][1])) return NaN;
   if (f <= 0) return rising ? table[0][0] : table[table.length - 1][0];
   for (let i = 1; i < table.length; i++) {
     const [t0, f0] = table[i - 1], [t1, f1] = table[i];
@@ -58,95 +50,81 @@ function timeAt(table: [number, number][], f: number): number {
   return NaN;
 }
 
-interface Grain { clip: Clip; pos: number; rate: number }
+interface Grain { clip: VvvfClip; pos: number; rate: number }
 
 export class VvvfSound {
-  private buf: Partial<Record<Clip, AudioBuffer>> = {};
+  private buf = new Map<string, AudioBuffer>();
+  private ready = false;
   private out: GainNode;
   private timer = 0;
   private next = 0;
   private lastOn = 0;
-  /** what is being played (kept while the sound fades out) */
   private voice: Exclude<VvvfMode, 'off'> = 'power';
   private f = 0;
   private volumeScale = 1;
+  private identity: VvvfIdentity = { vehicle: '', runStartedAt: 0, t: 0 };
+  private power?: VvvfTake;
+  private brake?: VvvfTake;
+  private grainNo = 0;
+  private seed = '';
 
   constructor(private ctx: AudioContext, dest: AudioNode) {
-    this.out = ctx.createGain();
-    this.out.gain.value = 0;
-    this.out.connect(dest);
+    this.out = ctx.createGain(); this.out.gain.value = 0; this.out.connect(dest);
     const base = import.meta.env.BASE_URL;
-    for (const [k, file] of [['power', 'traction'], ['brake', 'brake']] as const) {
-      fetch(`${base}sounds/vvvf/${file}.mp3`)
-        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
-        .then((b) => ctx.decodeAudioData(b))
-        .then((a) => { this.buf[k] = a; })
-        .catch(() => { /* no recording: silent */ });
-    }
+    const files = [...new Set(VVVF_TAKES.flatMap(t => [t.power.file, t.brake.file]))];
+    void Promise.all(files.map(file => fetch(`${base}sounds/vvvf/${file}.mp3`)
+      .then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status))))
+      .then(b => ctx.decodeAudioData(b)).then(a => { this.buf.set(file, a); })
+      .catch(() => { /* missing local-only recording: silent */ })))
+      .then(() => { this.ready = true; });
   }
 
   setVolume(gain: number) { this.volumeScale = Math.max(0, gain); }
 
-  /** the train listened to: what its inverter does, its speed (m/s) and how hard it pulls or brakes (0–1) */
-  set(mode: VvvfMode, v: number, level: number) {
+  set(mode: VvvfMode, v: number, level: number, identity: VvvfIdentity) {
     const now = this.ctx.currentTime;
+    this.identity = identity;
+    this.power = chooseVvvfTake(identity, 'power', VVVF_TAKES.filter(t => this.buf.has(t.power.file)));
+    this.brake = chooseVvvfTake(identity, 'brake', VVVF_TAKES.filter(t => this.buf.has(t.brake.file)));
+    const enabled = this.ready && (mode === 'brake' ? this.brake : this.power);
+    let target = mode === 'off' || !enabled ? 0 : VOLUME * this.volumeScale * (.35 + .65 * Math.min(1, Math.max(0, level)));
     const f = v * VVVF_HZ_PER_MS;
-    let target = mode === 'off' ? 0 : VOLUME * this.volumeScale * (0.35 + 0.65 * Math.min(1, Math.max(0, level)));
     if (mode === 'brake' && f < BRAKE_TAIL) target *= 2 - f / BRAKE_TAIL;
-    this.out.gain.setTargetAtTime(target, now, 0.12);
-    if (mode === 'off') return;
-    this.voice = mode;
-    this.f = f;
-    this.lastOn = now;
-    if (!this.timer && this.buf.power && this.buf.brake) {
-      this.next = now + 0.02;
-      this.timer = window.setInterval(() => this.pump(), 30);
-    }
+    this.out.gain.setTargetAtTime(target, now, .12);
+    if (mode === 'off' || !enabled) return;
+    const seed = `${identityKey(identity)}|${mode}`;
+    if (seed !== this.seed) { this.seed = seed; this.grainNo = 0; }
+    this.voice = mode; this.f = f; this.lastOn = now;
+    if (!this.timer) { this.next = now + .02; this.timer = window.setInterval(() => this.pump(), 30); }
   }
 
-  /** a steady stretch wandered over at the recording's own pace, resampled to f₁ */
-  private plateau(which: keyof typeof PLATEAU): Grain {
-    const p = PLATEAU[which];
-    const span = Math.min(p.t[1], this.buf[p.clip]!.duration) - p.t[0];
-    const u = this.ctx.currentTime % (2 * span);
-    return { clip: p.clip, pos: p.t[0] + (u < span ? u : 2 * span - u), rate: Math.max(0.3, this.f / p.f) };
+  private plateau(clip: VvvfClip, n: number): Grain {
+    const [begin, end, frequency] = clip.plateau;
+    const span = Math.min(end, this.buf.get(clip.file)!.duration) - begin;
+    const u = ((this.identity.t - this.identity.runStartedAt + n * HOP) % (2 * span) + 2 * span) % (2 * span);
+    return { clip, pos: begin + (u < span ? u : 2 * span - u), rate: Math.max(.3, this.f / frequency) };
   }
 
-  private grain(): Grain {
-    const f = this.f;
-    if (this.voice === 'cruise') {
-      const w = (f - CRUISE_LOW) / (CRUISE_HIGH - CRUISE_LOW);
-      if (Math.random() < w) return this.plateau('steady');
-    }
-    if (this.voice === 'brake') {
-      const t = timeAt(VVVF_BRAKE, f);
-      return Number.isNaN(t) ? this.plateau('steady') : { clip: 'brake', pos: t, rate: 1 };
-    }
-    const t = timeAt(VVVF_TRACTION, f);
-    return Number.isNaN(t) ? this.plateau('power') : { clip: 'power', pos: t, rate: 1 };
+  private grain(n: number): Grain {
+    const f = this.f, power = this.power?.power, brake = this.brake?.brake;
+    if (this.voice === 'cruise' && brake && hash(`${this.seed}|blend|${n}`) / 4294967296 < (f - CRUISE_LOW) / (CRUISE_HIGH - CRUISE_LOW)) return this.plateau(brake, n);
+    const clip = (this.voice === 'brake' ? brake : power)!;
+    const t = vvvfTimeAt(clip.table, f);
+    return Number.isNaN(t) ? this.plateau(clip, n) : { clip, pos: t, rate: 1 };
   }
 
   private pump() {
     const ctx = this.ctx;
     if (ctx.currentTime - this.lastOn > IDLE) { clearInterval(this.timer); this.timer = 0; return; }
+    if (this.voice === 'brake' ? !this.brake : !this.power) return;
     if (this.next < ctx.currentTime) this.next = ctx.currentTime;
     while (this.next < ctx.currentTime + LOOKAHEAD) {
-      const at = this.next;
-      const gr = this.grain();
-      const buf = this.buf[gr.clip]!;
-      const len = GRAIN * gr.rate;
-      const pos = Math.min(buf.duration - len, Math.max(0, gr.pos - len / 2 + (Math.random() * 2 - 1) * JITTER));
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.playbackRate.value = gr.rate;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0, at);
-      g.gain.linearRampToValueAtTime(1, at + GRAIN / 2);
-      g.gain.linearRampToValueAtTime(0, at + GRAIN);
-      src.connect(g).connect(this.out);
-      src.start(at, pos);
-      src.stop(at + GRAIN);
-      this.next += HOP;
+      const at = this.next, n = this.grainNo++, gr = this.grain(n), buf = this.buf.get(gr.clip.file)!;
+      const len = GRAIN * gr.rate, jitter = (hash(`${this.seed}|jitter|${n}`) / 4294967296 * 2 - 1) * JITTER;
+      const pos = Math.min(buf.duration - len, Math.max(0, gr.pos - len / 2 + jitter));
+      const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = gr.rate;
+      const g = ctx.createGain(); g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(1, at + GRAIN / 2); g.gain.linearRampToValueAtTime(0, at + GRAIN);
+      src.connect(g).connect(this.out); src.start(at, pos); src.stop(at + GRAIN); this.next += HOP;
     }
   }
 }
