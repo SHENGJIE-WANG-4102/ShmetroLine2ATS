@@ -3,7 +3,7 @@ import { newTrain } from '../../src/sim/ats';
 import { buildStops, tripTasks, platformBerth, dwellFactorAt } from '../../src/sim/timetable';
 import { computeBody, indexBodies, stopError } from '../../src/sim/movement';
 import { releaseRoute } from '../../src/sim/interlocking';
-import { STATIONS } from '../../src/data/line2';
+import { STATIONS } from '../../src/data/current';
 
 /** Full physical airport → Haitian approach; no head-position edits after spawning.
  * edgeMark is an explicit boundary fixture, not a real-world stopping mark. */

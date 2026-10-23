@@ -6,9 +6,9 @@
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { SOUND_BANK, SOUNDBANK_DIRECTORY, SOURCE_GAIN_REFERENCES } from '../../src/data/soundbank';
-import { VOICE_PARTS, VOICE_CROSSFADE_S, VOICE_SOURCES } from '../../src/data/onboardbank';
-import { RECORDING_SOURCES } from '../../src/data/ridelog';
+import { SOUND_BANK, SOUNDBANK_DIRECTORY, SOURCE_GAIN_REFERENCES } from '../../src/data/audio/soundbank';
+import { VOICE_PARTS, VOICE_CROSSFADE_S, VOICE_SOURCES } from '../../src/data/audio/onboardbank';
+import { RECORDING_SOURCES } from '../../src/data/audio/ridelog';
 
 const sourceRoot = resolve(process.argv[2] ?? 'work/recordings');
 const out = resolve('public', SOUNDBANK_DIRECTORY);

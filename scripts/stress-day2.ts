@@ -9,6 +9,7 @@ import {
   mkdirSync,
   existsSync,
   readdirSync,
+  statSync,
   renameSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -16,6 +17,7 @@ import { serialize, deserialize } from "node:v8";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Sim } from "../src/sim/engine";
+import { currentScope } from "../src/data/scope";
 import type { Command, SimConfig } from "../src/sim/model";
 import { nextOperatingConfig, standsAt } from "../src/sim/operatingDay";
 import { stationsAhead } from "../src/sim/ats";
@@ -40,13 +42,15 @@ export function options(args: string[]) {
 }
 export function modelHash() {
   const hash = createHash("sha256");
-  for (const dir of ["src/sim", "src/data"])
-    for (const f of readdirSync(dir)
-      .filter((f) => f.endsWith(".ts"))
-      .sort()) {
-      hash.update(`${dir}/${f}\n`);
-      hash.update(readFileSync(join(dir, f)));
+  const walk = (dir: string) => {
+    for (const file of readdirSync(dir).sort()) {
+      const path = join(dir, file);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (file.endsWith('.ts')) { hash.update(`${path}\n`); hash.update(readFileSync(path)); }
     }
+  };
+  hash.update(JSON.stringify(currentScope()));
+  walk('src/sim'); walk('src/data');
   return hash.digest("hex").slice(0, 16);
 }
 export function fleetNumbers(sim: Sim) {

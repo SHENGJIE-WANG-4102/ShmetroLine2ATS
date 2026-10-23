@@ -2,7 +2,7 @@
 """高德 2 号线到站表。依赖 Python >=3.10 标准库、Android SDK adb。
 
 只在高德内操作；原始 XML 放 work/，不保存截图。先在手机打开 2 号线页面。
-用法见同目录 README.md。UP=往西，DN=往东，与 src/data/line2.ts 一致。
+用法见同目录 README.md。UP=往西，DN=往东，与 src/data/current.ts 一致。
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def arrivals(root):
 
 
 def official_rows():
-    source = (ROOT / "src/data/firstlast.ts").read_text(encoding="utf-8")
+    source = (ROOT / "src/data/lines/line2/firstlast.ts").read_text(encoding="utf-8")
     rows = re.findall(r"\['([^']+)', '([^']*)', '([^']*)', '([^']*)', '([^']*)', '([^']*)'\]", source)
     if not rows:
         raise ValueError("读不到 firstlast.ts 表，不允许跳过首末班校验")

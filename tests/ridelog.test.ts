@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest';
 import {RIDE_LOG,RECORDING_SOURCES,LEGACY_RECORDING_IDS,FIELD_1016_RECORDING_IDS,
-  summarizeRideLog,type RideStop,type RecordingId} from '../src/data/ridelog';
+  summarizeRideLog,type RideStop,type RecordingId} from '../src/data/audio/ridelog';
 
 const row=(station:string,stop:number|null,start:number|null,recording:RecordingId='ride-1016-east-night'):RideStop=>({
   recording,station,direction:'DN',stop,open:null,close:null,start,analysisWindowS:null,candidates:{},

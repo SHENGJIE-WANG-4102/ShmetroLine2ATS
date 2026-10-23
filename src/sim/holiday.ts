@@ -16,12 +16,11 @@
  */
 import type { Sim } from './engine';
 import { injectFault } from './faults';
-import { STATIONS, type FixedRun } from '../data/line2';
-import { HQ_LATE_RUN } from '../data/firstlast';
+import { STATIONS, SIMULATION, type FixedRun } from '../data/current';
+const RULES = SIMULATION.holiday;
 import { holidayOf, type HolidayDay } from './calendar';
 export { holidayOf, type HolidayDay };
 
-const H = (h: number, m = 0) => h * 3600 + m * 60;
 const stationIdx = (id: string) => STATIONS.findIndex((s) => s.id === id);
 
 /** a holiday day proper (the eve runs the working-day timetable) */
@@ -30,9 +29,7 @@ export const isHolidayDay = (h: HolidayDay | null) => !!h && h.day >= 1;
 const isReturnDay = (h: HolidayDay) => h.day >= h.days - 1;
 
 /** 虹桥火车站 → 龙阳路 fixed-time trains on the return nights, the last at 00:30 */
-export const NATIONAL_RETURN_RUNS: FixedRun[] = [
-  { ...HQ_LATE_RUN, departures: [H(23, 4), H(23, 30), H(23, 50), H(24, 10), H(24, 30)] },
-];
+export const NATIONAL_RETURN_RUNS: FixedRun[] = RULES.returnRuns;
 
 /** fixed-time trains of the day (undefined: the regular ones) */
 export function holidayFixedRuns(h: HolidayDay | null): FixedRun[] | undefined {
@@ -40,7 +37,7 @@ export function holidayFixedRuns(h: HolidayDay | null): FixedRun[] | undefined {
 }
 
 /** 外滩 crowd control: 南京东路 closed from this time to the end of service */
-export const njdClosureFrom = (h: HolidayDay) => (h.day === 0 ? H(20) : H(16));
+export const njdClosureFrom = (h: HolidayDay) => (h.day === 0 ? RULES.closure?.eve : RULES.closure?.day) ?? Infinity;
 
 interface HolidayEvent { at: number; run: (sim: Sim) => void }
 
@@ -55,26 +52,17 @@ const surge = (id: string, from: number, to: number, m: number): HolidayEvent =>
 
 /** the planned measures of the day, in time order */
 export function holidayEvents(h: HolidayDay): HolidayEvent[] {
-  const from = njdClosureFrom(h);
-  const ev: HolidayEvent[] = [
-    { at: from - 20 * 60, run: (sim) => { sim.log('B', '客流', `外滩地区客流管控：${hm(from)} 起至运营结束南京东路站封站，列车跳站通过，ATS 按计划设置跳停`); } },
-    { at: from, run: (sim) => { closeStation(sim, 'NJD', true); sim.log('B', '客流', '南京东路站封站：上、下行站台跳停（计划）'); } },
-    // the diverted crowds, heaviest in the evening
-    surge('RMG', from, H(22, 30), h.day === 0 ? 1.8 : 2.5),
-    surge('LJZ', from, H(22, 30), h.day === 0 ? 1.8 : 2.5),
-  ];
-  if (isHolidayDay(h)) {
-    ev.push(
-      surge('NJD', H(12), from, 2),
-      surge('KJG', H(10), H(16), 1.6),
-    );
-    if (isReturnDay(h)) {
-      ev.push(
-        surge('HQZ', H(19, 30), H(24, 15), 4),
-        surge('HQ2', H(20), H(24), 3),
-        surge('PDA', H(20, 30), H(23, 20), 3.5),
-      );
-    }
+  const from = njdClosureFrom(h), closure = RULES.closure;
+  const ev: HolidayEvent[] = [];
+  if (closure) ev.push(
+    { at: from - 20 * 60, run: sim => { sim.log('B', '客流', closure.notice.replace('{time}', hm(from))); } },
+    { at: from, run: sim => { closeStation(sim, closure.station, true); sim.log('B', '客流', closure.activeNotice); } },
+  );
+  for (const rule of RULES.surges) {
+    if (rule.when !== 'always' && !isHolidayDay(h)) continue;
+    if (rule.when === 'return' && !isReturnDay(h)) continue;
+    const clock = (value: number | 'closure') => value === 'closure' ? from : value;
+    ev.push(surge(rule.station, clock(rule.from), clock(rule.to), h.day === 0 ? rule.eveMagnitude ?? rule.magnitude : rule.magnitude));
   }
   return ev.sort((a, b) => a.at - b.at);
 }

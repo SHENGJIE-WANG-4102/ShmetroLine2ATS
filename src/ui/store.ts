@@ -1,3 +1,5 @@
+import { GROUP } from '../data/current';
+import { assertScope, currentScope } from '../data/scope';
 import {archiveDiagnostics,previousDiagnostics,downloadDiagnostics} from './diagnosticFiles';
 import {toast} from './confirm';
 /**
@@ -69,6 +71,8 @@ export class Store {
   }
 
   start(config: SimConfig) {
+    if (config.scope) assertScope(config.scope);
+    config = { ...config, scope: currentScope() };
     this.showTrainGroup(null, true);
     this.progress=null;
     this.config = config;
@@ -85,7 +89,7 @@ export class Store {
   async exportPreviousDiagnostics() {
     const previous=await previousDiagnostics();
     if(!previous){toast('还没有归档的运营日诊断',false);return;}
-    try {await downloadDiagnostics(previous.json,`line2-diagnostics-${previous.date}.json`);}catch(e){toast(`诊断导出失败：${String(e)}`,false);}
+    try {await downloadDiagnostics(previous.json,`line${GROUP.id}-diagnostics-${previous.date}.json`);}catch(e){toast(`诊断导出失败：${String(e)}`,false);}
   }
 
   command(cmd: Command): Promise<{ ok: boolean; msg: string }> {
@@ -168,7 +172,7 @@ export class Store {
         break;
       }
       case 'diagnostics':
-        void downloadDiagnostics(m.json,`line2-diagnostics-${Math.round(this.snap?.t??0)}.json`).catch(e=>toast(`诊断导出失败：${String(e)}`,false));
+        void downloadDiagnostics(m.json,`line${GROUP.id}-diagnostics-${Math.round(this.snap?.t??0)}.json`).catch(e=>toast(`诊断导出失败：${String(e)}`,false));
         break;
       case 'dayArchive':
         void archiveDiagnostics(m).then(saved=>{if(!saved)toast('上一运营日诊断已暂存；持久保存失败，请在关闭前导出。',false);});

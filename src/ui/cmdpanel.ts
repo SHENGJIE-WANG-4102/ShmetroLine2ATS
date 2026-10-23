@@ -8,7 +8,7 @@ import { timePick } from './timepick';
 import { h, clear } from './dom';
 import type { Store } from './store';
 import { confirmAndSend, type CmdSpec } from './confirm';
-import { STATIONS, LINE_INFO } from '../data/line2';
+import { LINE, STATIONS, LINE_INFO, supportsSignalSystem } from '../data/current';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT, type TrackDir, type TrainSnap } from '../sim/model';
 import { turnbackAt, exitStation, OVERLAY_PRESETS } from '../sim/timetable';
 import { fmtTime, fmtDelay } from './theme';
@@ -432,11 +432,11 @@ export class CommandPanel {
       zbox.append(h('div', { style: `display:flex;align-items:center;gap:12px;font-size:24px;${zone === i ? 'outline:2px solid var(--accent);' : ''}padding:4px` },
         h('span', { style: 'flex:1' }, z.name),
         h('span', { class: `chip ${st === 'CBTC' ? 'ok' : st === 'TBTC' ? 'warn' : 'bad'}` }, st === 'ZCFAIL' ? 'ZC故障' : st),
-        this.btn('切TBTC', { title: `${z.name} 切换至 TBTC 后备系统`, cmd: { c: 'zoneLevel', zones: [i], level: 'TBTC' }, critical: true, detail: '区域内列车停稳后经司机确认转为TBTC级别运行（固定闭塞，区段占用防护）。' }, 'danger'),
-        this.btn('恢复CBTC', { title: `${z.name} 恢复 CBTC`, cmd: { c: 'zoneLevel', zones: [i], level: 'CBTC' }, critical: true }, 'danger'),
+        ...(supportsSignalSystem('TBTC') ? [this.btn('切TBTC', { title: `${z.name} 切换至 TBTC 后备系统`, cmd: { c: 'zoneLevel', zones: [i], level: 'TBTC' }, critical: true, detail: '区域内列车停稳后经司机确认转为TBTC级别运行（固定闭塞，区段占用防护）。' }, 'danger')] : []),
+        ...(supportsSignalSystem('CBTC') ? [this.btn('恢复CBTC', { title: `${z.name} 恢复 CBTC`, cmd: { c: 'zoneLevel', zones: [i], level: 'CBTC' }, critical: true }, 'danger')] : []),
       ));
     });
-    this.el.append(h('div', { class: 'sect-title' }, 'CBTC / TBTC 系统切换'), zbox);
+    this.el.append(h('div', { class: 'sect-title' }, `${[LINE.signalling.primary, ...LINE.signalling.fallback].join(' / ')} 系统切换`), zbox);
     this.el.append(h('div', { class: 'sect-title' }, `运营驾驶模式：${snap.atoLine ? 'ATO（DTO兼容模式，司机驾驶）' : 'DTO'}`));
     this.el.append(h('div', { class: 'cmdgrid' },
       snap.atoLine
@@ -444,8 +444,8 @@ export class CommandPanel {
         : this.btn('全线转ATO运营', { title: '全线转 ATO 运营（DTO兼容模式）', cmd: { c: 'lineAto', on: true }, critical: true, detail: '仍为CBTC移动闭塞，各列车在下一站停站时由司机转AM驾驶；终点站折返司机换端约多45秒、发车需司机按钮。运行图不变，终点站折返余量吸收换端时间；高峰折返紧张时可能晚点。新运营日也可在“运营日设置”中直接选择ATO运营。' }, 'warn'),
     ));
     this.el.append(h('div', { class: 'cmdgrid' },
-      this.btn('全线切换TBTC', { title: '全线切换至 TBTC 后备系统', cmd: { c: 'zoneLevel', zones: topo.zones.map((z) => z.id), level: 'TBTC' }, critical: true }),
-      this.btn('全线恢复CBTC', { title: '全线恢复 CBTC', cmd: { c: 'zoneLevel', zones: topo.zones.map((z) => z.id), level: 'CBTC' }, critical: true }),
+      ...(supportsSignalSystem('TBTC') ? [this.btn('全线切换TBTC', { title: '全线切换至 TBTC 后备系统', cmd: { c: 'zoneLevel', zones: topo.zones.map((z) => z.id), level: 'TBTC' }, critical: true })] : []),
+      ...(supportsSignalSystem('CBTC') ? [this.btn('全线恢复CBTC', { title: '全线恢复 CBTC', cmd: { c: 'zoneLevel', zones: topo.zones.map((z) => z.id), level: 'CBTC' }, critical: true })] : []),
     ));
     this.addTrainForm();
     // overlays

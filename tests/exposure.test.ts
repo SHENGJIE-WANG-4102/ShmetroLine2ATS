@@ -1,4 +1,4 @@
-import {describe,it,expect} from 'vitest';import {Sim} from '../src/sim/engine';import {buildTopology} from '../src/sim/topology';import {exposureOf,setWeather} from '../src/sim/env';import {EXPOSED} from '../src/data/line2';
+import {describe,it,expect} from 'vitest';import {Sim} from '../src/sim/engine';import {buildTopology} from '../src/sim/topology';import {exposureOf,setWeather} from '../src/sim/env';import {EXPOSED} from '../src/data/current';
 describe('surface boundaries from the track diagram',()=>{
  it('keeps Jinke Road through Lingkong Road underground and both portals between stations',()=>{
   const topo=buildTopology(),exposure=exposureOf({topo});const st=(id:string)=>topo.stations.find(s=>s.id===id)!;

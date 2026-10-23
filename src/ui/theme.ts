@@ -5,6 +5,8 @@
  * abnormal states (delay, TSR, hold, degraded trains) use amber, orange,
  * yellow and violet; red is reserved for faults and alarms.
  */
+import { LINE } from '../data/current';
+
 export const C = {
   bg: 0x05080c,
   panel: 0x0a1018,
@@ -15,7 +17,7 @@ export const C = {
   textDim: 0x7d8fa1,
   textMuted: 0x5d6e80,
   textBright: 0xffffff,
-  line: 0x8cc220,
+  line: Number.parseInt(LINE.branding.color.replace('#', ''), 16),
 
   // track states
   trackFree: 0x3a4c60,

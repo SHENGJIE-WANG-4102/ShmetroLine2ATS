@@ -12,24 +12,14 @@ import { CanvasTextMetrics, Container, Graphics, Text, type FederatedPointerEven
 import type { Topology } from '../sim/topology';
 import type { Snapshot, TrainSnap } from '../sim/model';
 import { SEC, SW, PLT, SIG_ASPECT } from '../sim/model';
-import { STATIONS, LINE_INFO } from '../data/line2';
+import { LINE, STATIONS, LINE_INFO } from '../data/current';
 import type { Store, Selection } from './store';
 import { C, FONT_CN, FONT_MONO, delayColor, loadColor } from './theme';
 import { Geometry, type P } from './geometry';
 import { placeTrainWindows, trainWindowWidth, LabelIndex, textWidth, lateText, type Rect } from './labels';
 
-const LINE_COLORS: Record<string, number> = {
-  '1': 0xe3002b, '2': 0x8cc220, '3': 0xfcd600, '4': 0x461d84, '6': 0xd40068, '7': 0xed6f00, '8': 0x0094d8,
-  '9': 0x87caed, '10': 0xc6afd4, '11': 0x871c2b, '12': 0x007a61, '13': 0xe999c0, '14': 0x626020, '15': 0xbca886,
-  '16': 0x98d1c0, '17': 0xbc796f, '18': 0xc4984f, '磁浮': 0x009090, '机场联络线': 0x00618b, '国铁': 0x5a6b7a,
-};
-const LONG_NAMES: Record<string, [string, string]> = {
-  '蟠祥路·国家会计学院': ['蟠祥路·', '国家会计学院'],
-  '浦东1号2号航站楼': ['浦东1号2号', '航站楼'],
-  '虹桥2号航站楼': ['虹桥2号', '航站楼'],
-  '国家会展中心': ['国家会展', '中心'],
-  '上海科技馆': ['上海', '科技馆'],
-};
+const LINE_COLORS = LINE.ui.transferColors;
+const LONG_NAMES = LINE.ui.stationNameLines;
 
 interface SegHit { x1: number; y1: number; x2: number; y2: number }
 class SegmentsHitArea {

@@ -28,7 +28,7 @@ import { holidayOf, isoDate, parseTime } from '../sim/calendar';
 export { parseTime };
 export const newOperatingSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
 import { INSTRUCTOR_EVENTS, SCENARIOS, instructorEventIds } from '../sim/scenario';
-import { WEATHER_RULES } from '../data/line2';
+import { LINE, WEATHER_RULES } from '../data/current';
 
 /** default UI scale: 100 % on a 4K canvas, larger on smaller windows so text stays readable (A+/A− go up to 200 %) */
 function defaultScale(): number {
@@ -46,7 +46,7 @@ function defaultScale(): number {
  */
 function overviewParams(topo: Topology, vw: number, vh: number): GeomParams {
   const [a, b] = lineWindow(topo);
-  const NEED = 7800; // world width the whole line needs for readable station names
+  const NEED = LINE.ui.overviewWidth; // world width the whole line needs for readable station names
   const BASE = 500; // minimum row height
   const PAD = 80; // room for the first row's windows / last row's names when zoomed out
   let rows = 1;
@@ -739,9 +739,10 @@ export class App {
     const holHint = h('div', { class: 'hint', style: 'margin-top:10px;color:var(--warn, #d9a400)' });
     const showHol = () => {
       const hd = holidayOf(dateIn.iso());
-      holHint.textContent = !hd ? ''
-        : hd.day === 0 ? '国庆前夜：20:00 起南京东路站封站跳停至运营结束，人民广场、陆家嘴客流增加。'
-        : `国庆第${hd.day}天（节假日运行图）：16:00 起南京东路站封站跳停至运营结束，人民广场、陆家嘴、南京东路、上海科技馆客流增加${hd.day >= hd.days - 1 ? '；返程日晚间虹桥枢纽、浦东机场到达客流集中，虹桥火车站往龙阳路定点加班车至 00:30' : ''}。全天按计划自动执行，故障按随机故障设置。`;
+      const note = LINE.ui.holidayNotice;
+      holHint.textContent = !hd || !note.day ? ''
+        : hd.day === 0 ? note.eve
+        : `国庆第${hd.day}${note.day}${hd.day >= hd.days - 1 ? note.returning : ''}${note.suffix}`;
     };
     showHol();
     const back = h('div', { class: 'modal-back' });

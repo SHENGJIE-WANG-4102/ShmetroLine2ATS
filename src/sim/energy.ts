@@ -17,19 +17,20 @@
 import type { Sim } from './engine';
 import type { Train } from './model';
 import { PERF } from './dynamics';
+import { SIMULATION } from '../data/current';
 export { levelBand, levelAccel } from './dynamics';
 import { linkChain } from './topology';
 
 /** empty 8-car A-type train (kg) and a passenger */
-const MASS0 = 290e3;
-const PAX = 60;
+const MASS0 = SIMULATION.energy.mass;
+const PAX = SIMULATION.energy.passengerMass;
 /** pantograph → wheel in traction, wheel → pantograph in electric braking */
-const ETA_TRAC = 0.85;
-const ETA_REGEN = 0.8;
+const ETA_TRAC = SIMULATION.energy.tractionEfficiency;
+const ETA_REGEN = SIMULATION.energy.regenEfficiency;
 /** power sections (traction substation spacing, m) */
-const SECTION = 2500;
+const SECTION = SIMULATION.energy.sectionLength;
 /** a train this late (s) runs level 1 whatever the line's level */
-export const LEVEL_LATE = 20;
+export const LEVEL_LATE = SIMULATION.energy.levelLate;
 
 export interface EnergyState {
   /** drawn from the substations for traction (J) */

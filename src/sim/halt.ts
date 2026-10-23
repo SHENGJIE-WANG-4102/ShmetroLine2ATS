@@ -15,7 +15,7 @@ import type { Sim } from './engine';
 import type { Train, StopTask } from './model';
 import { atoStartReady, simulatedAmDoorWork } from './ats';
 import { manualTractionHold } from './movement';
-import { STATIONS } from '../data/line2';
+import { STATIONS } from '../data/current';
 
 export type HaltCode =
   | 'NONE'

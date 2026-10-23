@@ -2,7 +2,7 @@
 import type { Sim } from './engine';
 import type { Command } from './model';
 import { FAULT_LABELS, SURGE_MAX } from './faults';
-import { WEATHER_RULES } from '../data/line2';
+import { WEATHER_RULES } from '../data/current';
 
 // Exhaustive against Command: missing a discriminator is a compile error.
 const COMMANDS: Record<Command['c'], true> = {

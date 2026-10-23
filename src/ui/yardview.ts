@@ -5,7 +5,7 @@
  */
 import { h, clear } from './dom';
 import type { Store } from './store';
-import { STATIONS } from '../data/line2';
+import { STATIONS } from '../data/current';
 import { fmtTime } from './theme';
 import { chooseVehicle, dayNumber } from '../sim/yard';
 import type { VehicleRecord } from '../sim/model';

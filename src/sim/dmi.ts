@@ -5,7 +5,7 @@
  */
 import type { Sim } from './engine';
 import type { DmiData, DmiMsg, Level, Mode, Train, StopTask } from './model';
-import { STATIONS, fleetEntry } from '../data/line2';
+import { STATIONS, fleetEntry } from '../data/current';
 import { stopError } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
 import { serviceEnd } from './timetable';

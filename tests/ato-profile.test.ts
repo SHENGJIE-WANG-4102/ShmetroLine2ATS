@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PERF, atoBrakeDistance, atoBrakeProfile, atoControl, atoLimitSpeed, atoStopApproachDistance, atoTractionAccel, jerkLimited, levelAccel, levelCruise, sectionEta, sectionPlan, sectionRecommended, tractionAccel, type AtoState } from '../src/sim/dynamics';
 import {createProbeWorld,probeSection}from'../scripts/audio/field-model';
-import {STATIONS}from'../src/data/line2';
+import {STATIONS}from'../src/data/current';
 import {capture,restore}from'../src/sim/state';
 
 describe('section ATO trajectory', () => {

@@ -3,7 +3,7 @@ import {INSTRUCTOR_EVENTS,scheduleInstructorEvents,scheduleRandomFaults,randomTi
 import {drawDailyRidership,RIDERSHIP_RANGE} from '../src/sim/calibration';
 import {Sim} from '../src/sim/engine';
 import {capture,restore} from '../src/sim/state';
-import {OPERATIONS} from '../src/data/line2';
+import {OPERATIONS} from '../src/data/current';
 
 describe('daily random-fault budgets',()=>{
  const make=()=>new Sim({dayType:'weekday',dateLabel:'daily fault budget',startTime:14400,seed:17,noPossessions:true});

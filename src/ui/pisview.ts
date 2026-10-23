@@ -14,10 +14,11 @@
  */
 import { h, clear } from './dom';
 import type { PisData, PisRow, TrackDir } from '../sim/model';
-import { STATIONS, STATION_EN, DIRECTIONS } from '../data/line2';
+import { LINE, STATIONS, STATION_EN, DIRECTIONS } from '../data/current';
 import { advancePisCycle, formatPisCountdown, selectPisFirstLast, PIS_TIMING, type PisCycleState, type PisFirstLast } from '../sim/pis';
 import metroLogo from './assets/metro-logo.png';
-import lineBadge from './assets/line2-badge.png';
+import { stationRange, downstreamTerminal } from '../sim/topology';
+import { lineBadge } from './branding';
 
 const ORD = ['1st', '2nd', '3rd'];
 const ORD_CN = ['第一班列车', '第二班列车', '第三班列车'];
@@ -257,24 +258,22 @@ function build(station: number, track: TrackDir): Board {
   const s = STATIONS[station];
   const towards = DIRECTIONS[track].towards;
   // the stations still ahead in this direction
-  const step = track === 'DN' ? 1 : -1;
-  const ahead: number[] = [];
-  for (let i = station; i >= 0 && i < STATIONS.length && ahead.length < 7; i += step) ahead.push(i);
+  const ahead = stationRange(track, station, downstreamTerminal(track)).slice(0, 7);
   const strip = h('div', { class: 'pm-strip' }, ...ahead.map((i, n) => h('div', { class: `pm-stop${n === 0 ? ' here' : ''}` },
     h('i'), h('span', {}, STATIONS[i].name))));
   const load = h('div', { class: 'pm-load' });
   const media = h('div', { class: 'pis-media' },
-    h('div', { class: 'pm-head' }, h('img', { src: metroLogo, alt: '' }), h('img', { src: lineBadge, alt: '2号线' }), h('span', {}, `${track === 'DN' ? '下行' : '上行'}站台`)),
+    h('div', { class: 'pm-head' }, h('img', { src: metroLogo, alt: '' }), lineBadge(), h('span', {}, `${track === 'DN' ? '下行' : '上行'}站台`)),
     h('div', { class: 'pm-name' }, s.name), h('div', { class: 'pm-towards' }, towards), strip, load);
   const ticker = h('div', { class: 'pis-ticker' });
-  const bar = h('div', { class: 'pis-bar' }, h('img', { src: lineBadge, alt: '' }), ticker);
+  const bar = h('div', { class: 'pis-bar' }, lineBadge(), ticker);
   const b1 = mkBox(), b2 = mkBox();
   const b3 = h('div', { class: 'pb pb-info' });
   const wide = s.pisLayout === 'wide';
   const schedule = wide ? mkBox() : undefined;
   if (schedule) schedule.el.classList.add('pb-schedule');
   const root = wide ? h('div', { class: 'pis2 pis-wide' }, media, bar, b3,
-    h('div', { class: 'pw-line' }, '2号线', h('small', {}, 'Line 2')),
+    h('div', { class: 'pw-line' }, LINE.branding.shortName, h('small', {}, LINE.ui.lineNameEn)),
     h('div', { class: 'pw-station' }, s.name, h('small', {}, STATION_EN[s.id] ?? '')),
     schedule!.el, b2.el, b1.el) : h('div', { class: 'pis2' }, media, bar, h('div', { class: 'pis-side' }, b1.el, b2.el, b3));
   b1.el.classList.add('pb-first'); b2.el.classList.add('pb-next');

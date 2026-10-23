@@ -3,23 +3,21 @@
  * Requires ffmpeg and the repository's existing TypeScript dependency.
  * Reads the real bank so filenames, durations and anchors stay identical.
  */
-import { readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import ts from 'typescript';
-import Module, { createRequire } from 'node:module';
+import { createServer } from 'vite';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-// Tool-only loader for the numeric catalogue and its relative TS data imports.
-const require = createRequire(import.meta.url), oldLoader = Module._extensions['.ts'];
-Module._extensions['.ts'] = (module, filename) => {
-  if (!filename.startsWith(join(root, 'src', 'data') + '/'.replace('/', process.platform === 'win32' ? '\\' : '/'))) throw new Error('Catalogue imports must remain under src/data');
-  module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
-};
+// Use the same ESM transform as the app so selected catalogues may import shared helpers.
+const loader = await createServer({ configFile: false, root, server: { middlewareMode: true, watch: null }, appType: 'custom' });
 let bank;
-try { bank = { ...require(join(root, 'src/data/soundbank.ts')), fixed: require(join(root, 'src/data/onboardbank.ts')).VOICE_PARTS.filter(p => p.file) }; }
-finally { if (oldLoader) Module._extensions['.ts'] = oldLoader; else delete Module._extensions['.ts']; }
+try {
+  const sounds = await loader.ssrLoadModule('/src/data/audio/soundbank.ts');
+  const onboard = await loader.ssrLoadModule('/src/data/audio/onboardbank.ts');
+  bank = { ...sounds, fixed: onboard.VOICE_PARTS.filter(p => p.file) };
+} finally { await loader.close(); }
 const { SOUND_BANK, SOUNDBANK_DIRECTORY, clipDuration } = bank;
 const out = join(root, 'public', SOUNDBANK_DIRECTORY);
 mkdirSync(out, { recursive: true });

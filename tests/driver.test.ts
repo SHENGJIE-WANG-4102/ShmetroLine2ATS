@@ -11,7 +11,7 @@ import {classify} from '../src/sim/halt';
 import {DOOR_CLOSE_S} from '../src/sim/calibration';
 import {sectionCruise,sectionPlan,computeRunTimes} from '../src/sim/dynamics';
 import {closeDoors} from '../src/sim/psd';
-import {OPERATIONS} from '../src/data/line2';
+import {OPERATIONS} from '../src/data/current';
 import {setMode,turnbackDwell} from '../src/sim/onboard';
 import {checkSafety} from '../src/sim/invariants';
 import {driveOverrun,reverseToMark} from './helpers/driver-approach';

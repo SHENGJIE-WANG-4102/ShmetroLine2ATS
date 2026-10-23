@@ -4,7 +4,7 @@ import {dayNumber,chooseVehicle,takeVehicle,putVehicle,maintainFleet,initVehicle
 import {generatePlan,depotMoves,overnightPlaces,yardNeed,validatePlan} from '../src/sim/timetable';
 import {dayTypeOf,parseIso,isoDate} from '../src/sim/calendar';
 import {capture,restore} from '../src/sim/state';
-import {OPERATIONS} from '../src/data/line2';
+import {OPERATIONS} from '../src/data/current';
 import type {Block,VehicleRecord} from '../src/sim/model';
 
 const make=()=>new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'fleet',startTime:14400,seed:3,noPossessions:true});

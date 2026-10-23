@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SOUND_BANK, clipDuration, ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S,
-  ONBOARD_HOLD_CLIP, ONBOARD_HOLD_DELAY_S, ONBOARD_HOLD_REPEAT_S } from '../src/data/soundbank';
+  ONBOARD_HOLD_CLIP, ONBOARD_HOLD_DELAY_S, ONBOARD_HOLD_REPEAT_S } from '../src/data/audio/soundbank';
 import { StationAudio, StationSoundPlanner, compatibleBoth, platformAnnouncement, predictStationStop, stationFrame, stationSoundEnabled,
   isUndergroundStation, RecordedSoundPlayer, type StationAudioFrame, type StationTrain, type StationSoundCommand } from '../src/ui/stationaudio';
 import { OnboardAudio, OnboardSoundPlanner, cabinVolumes, onboardFrame, type OnboardAudioFrame } from '../src/ui/onboardaudio';
 import { VOICE_PARTS, ORIGINAL_ONBOARD, ONBOARD_DESTINATIONS, onboardAnnouncement, onboardDoorSide, VOICE_CROSSFADE_S, RECORDED_VOLUME_GAINS,
-  FIELD_1016_VOICE_PARTS, FIELD_1016_TERMINAL_CLIP, compatibleVoiceRecipe, RECORDED_ONBOARD, ADDITIONAL_ONBOARD_ROUTES } from '../src/data/onboardbank';
+  FIELD_1016_VOICE_PARTS, FIELD_1016_TERMINAL_CLIP, compatibleVoiceRecipe, RECORDED_ONBOARD, ADDITIONAL_ONBOARD_ROUTES } from '../src/data/audio/onboardbank';
 import { Audio } from '../src/ui/audio';
 import { DoorAudio, DoorSoundPlanner, doorCycleSplit, type DoorAudioFrame } from '../src/ui/dooraudio';
-import { DOOR_TAKES } from '../src/data/doorbank';
-import type { OnboardAnnouncement, SoundClip } from '../src/data/soundbank';
-import { STATIONS } from '../src/data/line2';
+import { DOOR_TAKES } from '../src/data/audio/doorbank';
+import type { OnboardAnnouncement, SoundClip } from '../src/data/audio/soundbank';
+import { STATIONS } from '../src/data/current';
 import type { Snapshot, PisData, TrainSnap, Plan } from '../src/sim/model';
 import { ahead, type Topology } from '../src/sim/topology';
 

@@ -1,3 +1,5 @@
+import type { FirstLastRow, OfficialHeadway } from '../../types';
+export type { FirstLastRow, OfficialHeadway } from '../../types';
 import type { FixedRun } from './line2';
 
 /**
@@ -16,13 +18,7 @@ import type { FixedRun } from './line2';
  * the first / last-train plan (task: run-time recalibration).
  */
 
-export interface FirstLastRow {
-  station: string;
-  /** first train towards 浦东1号2号航站楼 / 蟠祥路·国家会计学院 */
-  firstE: string; firstW: string;
-  /** last train towards 浦东1号2号航站楼 / 蟠祥路·国家会计学院 / 广兰路 */
-  lastE: string; lastW: string; lastG: string;
-}
+
 
 const T: [string, string, string, string, string, string][] = [
   ['蟠祥路·国家会计学院', '05:25', '06:12', '21:57', '24:05', '22:42'],
@@ -81,11 +77,7 @@ export const FIXED_LATE_TRAINS: FixedRun[] = [HQ_LATE_RUN];
  * times 'HH:MM'; null = 其他时段 (all hours outside the named periods).
  * Sections are station-to-station stretches of the line.
  */
-export interface OfficialHeadway {
-  name: string;
-  from: string | null; to: string | null;
-  sections: [string, string, number | readonly [number, number]][];
-}
+
 
 const WHOLE = ['蟠祥路·国家会计学院', '浦东1号2号航站楼'] as const;
 const OTHER = [300, 600] as const;

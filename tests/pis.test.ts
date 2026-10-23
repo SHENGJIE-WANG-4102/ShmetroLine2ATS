@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { advancePisCycle, computePis, formatPisCountdown, PIS_TIMING, selectPisFirstLast, timeToStop } from '../src/sim/pis';
 import { PERF } from '../src/sim/dynamics';
-import { STATIONS, STATION_EN } from '../src/data/line2';
+import { STATIONS, STATION_EN } from '../src/data/current';
 import type { PisRow, TrackDir } from '../src/sim/model';
 import type { Sim } from '../src/sim/engine';
 

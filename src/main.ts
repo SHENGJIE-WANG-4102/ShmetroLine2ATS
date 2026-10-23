@@ -12,20 +12,30 @@ import { dayTypeOf, dateLabel } from './ui/header';
 import { isoDate } from './sim/calendar';
 import { C, fmtTime } from './ui/theme';
 import type { SimConfig } from './sim/model';
+import { LINE, GROUP } from './data/current';
+import { currentScope } from './data/scope';
+import workerScriptUrl from './sim/worker.ts?worker&url';
 
 const bootMsg = document.getElementById('boot-msg')!;
 const bootBar = document.getElementById('boot-progress')!;
 
 async function main() {
+  document.title = LINE.ui.documentTitle;
+  document.documentElement.style.setProperty('--line', LINE.branding.color);
+  document.documentElement.style.setProperty('--pis-line', LINE.ui.pisColorCss);
+  document.querySelector('.boot-title')!.textContent = LINE.ui.bootTitle;
   if(isDesktop()) {
     document.documentElement.classList.add('desktop');
-    document.querySelector('.boot-title')!.textContent='上海地铁2号线 ATS 模拟器';
+    document.querySelector('.boot-title')!.textContent=LINE.ui.desktopTitle;
     bootMsg.textContent='准备运营日设置…';
     await import('pixi.js/unsafe-eval');
   }
   await document.fonts.load('600 20px "JetBrains Mono"').catch(() => undefined);
   const topo = buildTopology();
-  const worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' });
+  // The URL fixes the worker's data imports before its first init message.
+  const workerUrl = new URL(workerScriptUrl, location.href);
+  workerUrl.searchParams.set('line', GROUP.id);
+  const worker = new Worker(workerUrl, { type: 'module' });
   const store = new Store(topo, worker);
 
   const pixi = new Application();
@@ -65,7 +75,7 @@ async function main() {
   // an unreadable or out-of-day ?t= falls back to the default start
   const start = Number.isFinite(parsed) && parsed <= 27.7 * 3600 ? parsed : 7 * 3600 + 40 * 60;
   const holiday = params.get('holiday') === '1';
-  const cfg: SimConfig = { dayType: dayTypeOf(d, holiday), dateLabel: dateLabel(d, holiday), date: isoDate(d), startTime: start, seed: newOperatingSeed() };
+  const cfg: SimConfig = { scope: currentScope(), dayType: dayTypeOf(d, holiday), dateLabel: dateLabel(d, holiday), date: isoDate(d), startTime: start, seed: newOperatingSeed() };
   bootMsg.textContent = `生成 ${cfg.dateLabel} 运行图并推演至 ${fmtTime(start)}…`;
   if(isDesktop()) {
     document.getElementById('boot')!.style.display='none';

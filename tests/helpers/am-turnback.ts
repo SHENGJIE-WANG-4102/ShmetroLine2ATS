@@ -1,5 +1,5 @@
 import {Sim}from'../../src/sim/engine';
-import {STATIONS}from'../../src/data/line2';
+import {STATIONS}from'../../src/data/current';
 import {platformBerth,addTurnback}from'../../src/sim/timetable';
 import {computeBody,indexBodies}from'../../src/sim/movement';
 import {ahead}from'../../src/sim/topology';

@@ -17,7 +17,7 @@ import type { HaltCode } from './halt';
 import { applyEB } from './onboard';
 import { psdSafe } from './psd';
 import type { EbCause } from './model';
-import { OPERATIONS } from '../data/line2';
+import { OPERATIONS } from '../data/current';
 import { SIGNAL_MARGIN, canAcceptRestriction } from './protection';
 
 /** speed limits / platform stops further than this do not influence the braking curves */

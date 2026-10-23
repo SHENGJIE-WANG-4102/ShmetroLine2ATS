@@ -4,8 +4,8 @@
  * A kinematic estimate cannot guarantee accuracy under a later signal change:
  * unstable predictions cancel the clip and are never restarted for that visit.
  */
-import { SOUND_BANK, SOUNDBANK_DIRECTORY, clipDuration, type SoundClip, type SoundKind } from '../data/soundbank';
-import { STATIONS, EXPOSED, stationChainages } from '../data/line2';
+import { SOUND_BANK, SOUNDBANK_DIRECTORY, clipDuration, type SoundClip, type SoundKind } from '../data/audio/soundbank';
+import { STATIONS, EXPOSED, stationChainages } from '../data/current';
 import { PERF } from '../sim/dynamics';
 import type { PisData, Snapshot, TrainSnap } from '../sim/model';
 import type { Topology } from '../sim/topology';

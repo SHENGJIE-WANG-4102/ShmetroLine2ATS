@@ -2,7 +2,7 @@
 # Cut the local 02A05 inverter takes used by src/ui/vvvf.ts from p02
 # (BV1VGZiBPEjt p2, 48 kHz WAV) and the optional source bank into
 # public/sounds/vvvf/. The recordings are third-party material and are not in
-# the repository; the time ranges match the tables in src/data/vvvf.ts.
+# the repository; the time ranges match the tables in src/data/audio/vvvf.ts.
 #   usage: scripts/vvvf-clips.sh path/to/p02.wav [work/recordings/bilibili]
 # Optional second directory holds post-p1.m4a / pre-1.m4a / pre-2.m4a.
 set -e

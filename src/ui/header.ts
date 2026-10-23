@@ -5,14 +5,15 @@
  * entries (UI scale, sound, the selected train's traction sound) plus 运营日 / 诊断导出 / 帮助.
  */
 import { h, clear } from './dom';
-import type { RecordedVolume } from '../data/onboardbank';
+import type { RecordedVolume } from '../data/audio/onboardbank';
 import type { Store } from './store';
 import { fmtTime } from './theme';
 import { UI_SCALES, loadPref, savePref } from './layout';
 import { toast } from './confirm';
 import { timePick } from './timepick';
 import metroLogo from './assets/metro-logo.png';
-import lineBadge from './assets/line2-badge.png';
+import { LINE, GROUP, visibleLineGroups } from '../data/current';
+import { lineBadge } from './branding';
 
 export const SPEEDS = [1, 2, 5, 10, 30, 60, 120];
 export { dayTypeOf, dateLabel } from '../sim/calendar';
@@ -77,8 +78,8 @@ export class Header {
       h('div', { class: 'hdr-speed' }, h('span', { class: 'lbl' }, '模拟速率'), this.pauseBtn, this.speedSel, this.actual, jumpAt.el, jumpBtn),
       h('div', { class: 'hdr-brand' },
         h('img', { class: 'metro-logo', src: metroLogo, alt: '上海地铁' }),
-        h('img', { class: 'line-badge', src: lineBadge, alt: '2号线 Line 2' }),
-        h('div', {}, h('div', { class: 'hdr-title' }, '上海地铁2号线列车自动监控系统'), h('div', { class: 'hdr-sub' }, 'ATS · OCC 行车调度 · CBTC 主用 / TBTC 后备')),
+        lineBadge('line-badge'),
+        h('div', {}, h('div', { class: 'hdr-title' }, LINE.ui.headerTitle), h('div', { class: 'hdr-sub' }, LINE.ui.headerSubtitle)),
       ),
       h('div', { class: 'hdr-status' }, this.zones, this.kpis, this.alarmCnt, this.settingsBtn),
     );
@@ -121,6 +122,13 @@ export class Header {
     const scale = this.hooks.scale(), muted = this.hooks.muted(), traction = this.hooks.traction(), stationSound = this.hooks.stationSound();
     clear(this.menu);
     this.menu.append(
+      sub('线路', GROUP.name, ...visibleLineGroups(import.meta.env.DEV).map(group =>
+        item(group.name, close(() => {
+          if (group.id === GROUP.id) return;
+          const url = new URL(location.href);
+          url.searchParams.set('line', group.id);
+          location.assign(url.href);
+        }), { on: group.id === GROUP.id }))),
       sub('界面缩放', `${Math.round(scale * 100)}%`,
         ...UI_SCALES.map((v) => item(`${Math.round(v * 100)}%`, () => { this.hooks.setScale(v); this.refreshScale(); }, { on: Math.abs(v - scale) < 1e-3 })),
         h('div', { class: 'msep' }),

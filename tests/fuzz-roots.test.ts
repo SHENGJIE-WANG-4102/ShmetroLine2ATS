@@ -11,7 +11,7 @@ import { faultProcedure } from '../src/sim/faults';
 import { generatePlan, overnightPlaces, platformBerth, turnbackAt, validatePlan } from '../src/sim/timetable';
 import { nextOperatingConfig } from '../src/sim/operatingDay';
 import { PERF } from '../src/sim/dynamics';
-import { WEATHER_RULES } from '../src/data/line2';
+import { WEATHER_RULES } from '../src/data/current';
 import { validateCommand } from '../src/sim/commands';
 import type { Command } from '../src/sim/model';
 import { openCall } from '../src/sim/radio';

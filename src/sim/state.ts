@@ -11,8 +11,10 @@ import type { Sim } from './engine';
 import type { Train, Plan, SimEvent } from './model';
 import { indexBodies } from './movement';
 import { initVehicles } from './yard';
+import { assertScope, currentScope, type LineScope } from '../data/scope';
 
 export interface Checkpoint {
+  scope?: LineScope;
   t: number;
   secAcc: number;
   rngState: number;
@@ -141,6 +143,7 @@ export function capture(sim: Sim): Checkpoint {
   data.runLevelMode = sim.runLevel === 0 ? 'diagram' : 'override';
   const plan = sim.plan;
   return {
+    scope: currentScope(),
     t: sim.t,
     secAcc: sim.secAcc,
     rngState: sim.rngState,
@@ -161,6 +164,8 @@ export function capture(sim: Sim): Checkpoint {
 }
 
 export function restore(sim: Sim, cp: Checkpoint) {
+  assertScope(cp.scope);
+  for (const input of cp.inputs ?? []) assertScope(input.scope);
   const rec = sim as unknown as Record<string, unknown>;
   for (const k of CLONED) if (k in cp.data) rec[k] = structuredClone(cp.data[k]);
   for (const k of SCALARS) if (k in cp.data) rec[k] = cp.data[k];
@@ -171,7 +176,7 @@ export function restore(sim: Sim, cp: Checkpoint) {
   sim.t = cp.t;
   sim.secAcc = cp.secAcc;
   sim.rngState = cp.rngState;
-  sim.inputLog = cp.inputs?.slice() ?? [];
+  sim.inputLog = cp.inputs?.map(input => ({ ...input, scope: currentScope() })) ?? [];
   // trains
   sim.trains.clear();
   sim.trainList = cp.trains.map(cloneTrain);

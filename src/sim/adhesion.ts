@@ -17,7 +17,7 @@ import type { Sim } from './engine';
 import type { Train } from './model';
 import { G } from './gradient';
 import { linkChain } from './topology';
-import { EXPOSED, LINE_INFO } from '../data/line2';
+import { EXPOSED, LINE_INFO } from '../data/current';
 
 /** wet-rail adhesion at standstill, and its fall with speed: μ(v) = MU0 / (1 + MU_FALL·km/h) */
 const MU0 = 0.15;

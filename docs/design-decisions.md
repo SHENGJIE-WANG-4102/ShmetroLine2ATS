@@ -3191,3 +3191,87 @@ B的机场单锚通过不等于“三末班端到端”整条测试通过：西�
 按任务明确的失败停点，保留正式运行规则和参数，不继续调参。这两个有限候选的失败不构成所有通用模型都无解的证明；当前可审结论是：本次A所试的开收班倍率缩短不能同时满足空间分布和间隔门槛，B直接统一等级口径也会破坏既有末班沿途约束。没有采用运行代码改动，因此未启动候选的跨日天气随机压测，也不宣称候选实跑或完整性验收通过；没有跑全量测试、soak或simday。
 
 本轮无新的正式【假设】，A/B试算假设均拒绝。未commit/push/切分支。120×复核可看工作日05:20–06:12的4002（静安寺约05:43:18、蟠祥路约06:11:56），以及21:57–23:32的1391，重点看远东大道后至机场的误差累积；这是原问题的观察窗口，不是已修复效果。
+
+## D140 线路组选线骨架与虚构测试线（2026-10-24）
+
+按用户决定完成第一阶段：启动参数选择线路组，组内保留 `lines` / `lineIds`，目前各组一条线；默认2号线。页面 `?line=2` / 开发模式 `?line=test`，Node `ATS_LINE=test` 或 `--line=test` / `--line test`；菜单换线重新加载页面，worker URL携带相同参数。正式菜单仅2号线，正式构建不开放测试线。没有实现14号线、UTO、分叉、环线或共线，也没有改分支、提交或推送。
+
+基线固定为 `ce1954b`；已核对它与 `5bbfb11` 的src/scripts/tests没有代码差异。晚间停站1.2、开收班0.918/0.418保留。旧九个顶层入口在src/scripts/tests全部迁完后删除，音频通用入口在 `src/data/audio/`，核心与首末班等入口统一 `src/data/current.ts`。三个未跟踪车底原型仅改import，逻辑不动。
+
+### 数据去向与一致性
+
+|原位置|新位置|
+|---|---|
+|src/data/line2.ts、firstlast.ts、lasttrains.ts|src/data/lines/line2/同名文件|
+|src/data/soundbank.ts、onboardbank.ts、doorbank.ts、vvvf.ts、ridelog.ts、onboardfield1021.ts|src/data/lines/line2/同名文件；共用类型/算法抽至types、audioUtils、rideEvidence|
+|sim/timetable.ts的模板、时段、停站/等级时钟、首班起点、收车边界、端点归属/容量/候班表|lines/line2/simulation.ts|
+|sim/calibration.ts的客流、潮汐权重、PEAK_SECTION和停站参数|lines/line2/simulationExtras.ts的calibration|
+|sim/holiday.ts的节假日封站、加强客流、定点班车|lines/line2/simulationExtras.ts的holiday|
+|sim/pis.ts的目的地列规则、屏幕时钟和欢迎/天气文字|lines/line2/simulationExtras.ts的pis|
+|sim/gradient.ts的埋深、越江锚点和坡度参数|lines/line2/simulationExtras.ts的gradient|
+|sim/dynamics.ts与energy.ts的车辆性能、牵引、运行等级、质量和能耗参数|lines/line2/physics.ts|
+|sim/scenario.ts的29教员事件、14训练场景|lines/line2/scenarios.ts；通用解释器执行action数据|
+|sim/topology.ts的站序14/15换行位置|lines/line2/simulation.ts的topology.wrapAfter|
+|ui中的标题、颜色、长站名拆行、帮助文字、换乘色、显示宽度|lines/line2/ui.ts；badge图片也迁入line2目录|
+|sim/connections.ts|继续消费已迁移的lasttrains数据；消息里的线路名改读当前线路|
+
+原九模块85个顶层初始化表达式按原源码逐字对比一致（只归一化换行）；运行图12张表按站码还原旧站序逐项一致。29事件68次回调（有车/无车及步骤）和14场景与基线一致。额外569,160组客流/停站计算、牵引曲线/等级、坡度剖面、各站各方向各目的地PIS首末班和全部节假日事件时刻均一致。日志在 `work/multiline/data-initializers.json`、`verify-sim-tables.log`、`verify-extras.log`。
+
+### 测试线暴露的隐含假设与同链修复
+
+- 固定31站、小交路端点、首班特殊始发站与三个库归属：改读线路表；测试线6站、1库，两端折返。
+- 固定首班中间检查点：把原站序17如实映射为上海科技馆，保留原05:24校准，未按旧变量名误改站。
+- 界面按第14/15站换行、写死标题和长站名：换行位置、品牌与显示表都改读数据。
+- 所有线路都默认有TBTC：系统/列车命令、模式切换、自动降级和司机电话共用信号能力判据；没有后备就停车等待通信/ZC恢复。2号线能力包含TBTC，原行为和文字保持。
+- 走行音只硬认某一车型：改用当前音频表的车型范围；测试线空音库，无录音播放。
+- 测试线没有图片标志：显示数据里的文字标志，2号线继续使用原图片。
+- 从注册表直接加载线路数据时，音库经topology回到current造成循环初始化：唯一方向函数实现移到无线路依赖的topologyOrder，topology继续统一导出；没有复制第二套方向判断。
+- 音频占位工具原手写加载器不能加载迁移后的ES模块：使用已有Vite加载入口，315 clips读取成功；未生成或入库音频。
+- 源码移入子目录后，压测模型hash原来只扫一层会漏变更：递归扫描并加入线路组范围；测试预热目录hash也加入组编号。
+- 旧诊断JSON字段顺序会造成CLI字符串比较误报：回放脚本改按序列化值深比较，旧存档数据不变。
+
+### 类型、身份与可空能力
+
+`LineData`必填：id、branding、signalling、automation、core、firstLast、lastTrains、audio、simulation、ui。core必须描述车站、车辆、配线、基本运营和环境；simulation必须描述运行图、性能、客流、坡度与展示所需字段。组类型保留多成员数组，按线路编号取数据，station/depot/trip/train引用有lineId范围。
+
+空能力用数据表达：signalling.fallback、过夜/热备、固定班车、换乘末班、场景/教员事件、封站/节日加强、音频与录音、露天段、施工候选均可为空；HQ_LATE_RUN、peakSection、river可为null；没有高架/地面锚点可填Infinity。首班补充、指定收车和插入始发站等也是可选字段。测试线【假设】为6座虚构站、8列车、20分钟间隔，06:00/06:10至22:00/22:10；沿用现有8A车辆与门动作参数，只用于通用性验证，不代表现实线路。
+
+config、checkpoint、诊断和每条inputLog都有groupId+lineIds。恢复与回放先核对范围，旧无scope存档只按原2号线解释；跨线拒绝。上一运营日诊断按组存储；预热key包含组范围及递归源码。scope放在既有config中并随nextOperatingConfig延续，没有新增需归类/移时的Sim状态字段。
+
+### 验证记录
+
+两种日型计划仍为679/474趟、108/50个blocks，四个SHA256完全一致：
+
+- weekday trips：8845295974bed845031ca7e895c0c237cef22e73bc1cb537f51310c18e3be587
+- weekday blocks：7c2bcf599d15d3a740997a8dc551e6883d30ab70815cca2df035fffba26f9ebe
+- weekend trips：b2cab235138c2a2b0437f208008b31947546b179586e9522b09257b42f5427aa
+- weekend blocks：8e16c913afa62903d46caece77d25291ff56260b6050733e835a77a9dd2d7f56
+
+validate-plan两日型、firstlast、gaode-compare的完整输出与基线逐字一致：两日型0 issue，高德仍9坏格。测试线两日型均100趟、fleet 3、0 issue；新测试已验证完整两日、天气下车辆守恒与0完整性违例。测试线随机种子14001（level1、wind3、density0:1）两日通过、0违例；含每天下雨/风和随机调度操作。
+
+类型检查、Vite构建通过。浏览器验证开发菜单2→test重载、31→6站，worker scope相同、没有破图或正常路径JS错误；正式菜单仅2号线。新旧2号线和测试线的CLI诊断回放均matchesSnapshot:true且integrity为空，显式跨线回放拒绝。证据在 `work/multiline/`，不入库。
+
+2号线种子13813（双休日、level1、wind3、density0:1）在改前/改后均于第一天14:34:39.0报DEADLOCK：014-回段 → 074-0045 → 014-回段（61 s），内部列车17/61；两版t均为52478.99999948197。它是基线已有死锁，本轮保留失败现场，不修改规则或放宽检查、不算通过。现场分别在fuzz-before-13813和fuzz-after-13813。另一2号线种子13811（工作日、level1、wind2、density0:1）改后两天通过、0违例、含两次天气。没有运行npm test、soak或simday，没有改任何完整性阈值、豁免或测试预期。
+
+### 验收口径补记（用户决定，2026-10-24）
+
+全文件验证比此前两个文件的4条基线红项多查出5条原有断言失败；已在ce1954b原代码/原测试上定向复跑，断言信息与迁移后相同。用户决定「和源代码保持相同失败即可」，据此按零新增回归验收，不为凑成4条而修改断言或运营规则。
+
+- features：CM/RM各一条物理锁闭/扣车测试，都是expected dwell to be run。
+- features：CM平台侧门使能测试，expected run to be dwell；CM空车站停门使能测试，expected true to be false。
+- round3：短暂占用尾轨后的加开延续，expected 1 to be greater than or equal to 2。
+- core：占用进路救援 S0102→尽头(侧向) preset=false/true 两条，LIVENESS 违例；热备（D45）接替退出车、接替晚点车两条，STACK_TRACE_ERROR。原版同样失败、信息相同（baseline-core-extra、failure-comparison）。
+
+审查补记（2026-10-24）：25个文件全批次共14条红，其中13条在ce1954b上同样红（calibration 2、timetable D73 2、features 4、round3 1、core 4）。剩下一条 features「车辆在车场、正线与终点存车之间守恒」在全批次里超过60 s超时；单独复跑改后53.0/67.1 s、原版52.7/55.0 s，不是变慢，是这条测试本身贴着超时线、并行负载下会超时。上面features 4、round3 1、core 4这9条是ce1954b上已有、此前只跑两个文件而漏看的失败（何时引入未查），第二部分开工前单独排查。计划哈希已在审查时独立重算，四个与基线一致；正式构建确认内联启动脚本打包为入口。
+
+定向原版验证仅选择这些失败项，未选测试由测试框架报告为未执行；没有向仓库添加skip或豁免。证据：baseline-extra-tests.json/log。本轮没有修改上述任何断言。
+
+验证总批次曾额外选入未改动的整日场景目录，发现其需逐个预热至晚间后中止，改为25个相关/修改文件与新测试；中断批次不计通过。场景迁移使用独立的68次回调对照，不拿这个中断批次作证据。
+
+### 后续结构判断
+
+11号线分叉最难的是buildTopology/寻路与运行图仍按单里程轴、双方向和一个核心区间组织；环线还要替换双终点/单程顺序假设。3、4号线共线需让两个服务线路引用同一物理轨道、联锁/闭塞资源和容量，不能各建一份独立轨道再靠线路前缀区分。界面线路图和运行图纵轴同样依赖单里程轴，本阶段只集中数据，不实现这些规则。
+
+只读取了14号线分支的数据文件清单，它仍以原九个顶层数据文件组织。将来合并时先把其数据适配为独立LineData并注册线路组，再把UTO差异接到通用能力/规则入口并回归两个线路组；本阶段未读取或改动其运营实现，也未动该分支。
+
+120×建议先看2号线05:20首班4002、07:40–10:00大小交路、21:57末班1391；D139原两处首末班超差和第二部分高峰间隔问题仍保留。开发测试线观察06:00开班、22:00–次日06:10收车和再开班，并验证换线是整页重载。

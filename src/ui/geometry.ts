@@ -11,7 +11,7 @@
  */
 import type { Topology, TLink } from '../sim/topology';
 import type { TrainSnap } from '../sim/model';
-import { LINE_INFO } from '../data/line2';
+import { LINE_INFO } from '../data/current';
 
 /** Schematic units before camera zoom; shared by platforms and train symbols. */
 export const PLATFORM_WIDTH = 72;

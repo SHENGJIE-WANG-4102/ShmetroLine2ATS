@@ -3,8 +3,8 @@
  * keeping both recorded tails. Physical deadlines stay independent of the
  * recording's duration.
  */
-import { SOUND_BANK, clipDuration, type SoundClip, type SoundKind } from '../data/soundbank';
-import { DOOR_REFERENCE_TIMING, DOOR_TAKES } from '../data/doorbank';
+import { SOUND_BANK, clipDuration, type SoundClip, type SoundKind } from '../data/audio/soundbank';
+import { DOOR_REFERENCE_TIMING, DOOR_TAKES } from '../data/audio/doorbank';
 import { DOOR_CLOSE_S } from '../sim/calibration';
 import { RecordedSoundPlayer, VVVF_MAX_RATE, isUndergroundStation, type StationTrain, type StationSoundCommand } from './stationaudio';
 

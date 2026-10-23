@@ -3,10 +3,12 @@ import { Sim, FIXED_DT } from './engine';
 import type { Command, SimConfig } from './model';
 import { capture, restore, type Checkpoint } from './state';
 import type { Topology } from './topology';
+import { assertScope, currentScope, type LineScope } from '../data/scope';
 
-export type RecordedInput = { t: number; cmd: Command } | { t: number; drive: { train: number; notch: number } };
+export type RecordedInput = { scope?: LineScope } & ({ t: number; cmd: Command } | { t: number; drive: { train: number; notch: number } });
 export interface Diagnostics {
   version: 2;
+  scope?: LineScope;
   topology: string;
   dt: number;
   config: SimConfig;
@@ -17,10 +19,12 @@ export interface Diagnostics {
 }
 
 export function exportDiagnostics(sim: Sim, inputs: RecordedInput[] = sim.inputLog): Diagnostics {
+  assertScope(sim.config.scope);
+  for (const input of inputs) assertScope(input.scope);
   return {
-    version: 2, topology: topologySignature(sim.topo), dt: FIXED_DT, config: { ...sim.config },
+    version: 2, scope: currentScope(), topology: topologySignature(sim.topo), dt: FIXED_DT, config: { ...sim.config },
     startState: sim.startState ?? capture(new Sim(sim.config)),
-    inputs: structuredClone(inputs.filter(e => e.t <= sim.t + 1e-6)),
+    inputs: structuredClone(inputs.filter(e => e.t <= sim.t + 1e-6).map(input => ({ ...input, scope: currentScope() }))),
     until: sim.t, state: capture(sim),
   };
 }
@@ -50,21 +54,45 @@ export function parseDiagnostics(json: string): Diagnostics {
     return value;
   }) as Diagnostics;
   if (bundle.version !== 2 || typeof bundle.topology !== 'string' || bundle.dt !== FIXED_DT || !Number.isFinite(bundle.until)
-    || !Array.isArray(bundle.inputs) || !bundle.startState || !bundle.config
+    || !Array.isArray(bundle.inputs) || !bundle.startState || !bundle.state || !bundle.config
     || bundle.until < bundle.startState.t || bundle.until > 28 * 3600) throw new Error('Unsupported diagnostics bundle');
   let last = bundle.startState.t;
+  assertScope(bundle.scope);
+  assertScope(bundle.config.scope);
+  assertScope(bundle.startState.scope);
+  assertScope(bundle.state?.scope);
   for (const input of bundle.inputs) {
+    assertScope(input.scope);
     if (!Number.isFinite(input.t) || input.t < last - 1e-6 || input.t > bundle.until + 1e-6) throw new Error('Invalid command timeline');
     last = input.t;
   }
+  // Upgrade old single-line archives before comparison or a later export.
+  bundle.scope = currentScope();
+  bundle.config.scope = currentScope();
+  for (const cp of [bundle.startState, bundle.state]) {
+    cp.scope = currentScope();
+    cp.inputs = cp.inputs?.map(input => {
+      assertScope(input.scope);
+      return { ...input, scope: currentScope() };
+    }) ?? [];
+  }
+  bundle.inputs = bundle.inputs.map(input => ({ ...input, scope: currentScope() }));
   return bundle;
 }
 
 export function replayDiagnostics(bundle: Diagnostics): Sim {
+  assertScope(bundle.scope);
+  assertScope(bundle.config.scope);
+  for (const cp of [bundle.startState, bundle.state]) {
+    assertScope(cp.scope);
+    for (const input of cp.inputs ?? []) assertScope(input.scope);
+  }
+  for (const input of bundle.inputs) assertScope(input.scope);
   const sim = new Sim(bundle.config);
   if (bundle.topology !== topologySignature(sim.topo)) throw new Error('Diagnostics infrastructure differs from the current model');
   restore(sim, bundle.startState);
-  sim.startState = structuredClone(bundle.startState);
+  sim.startState = structuredClone({ ...bundle.startState, scope: currentScope(),
+    inputs: bundle.startState.inputs?.map(input => ({ ...input, scope: currentScope() })) ?? [] });
   sim.replaying = true;
   let cursor = 0;
   while (sim.t < bundle.until - 1e-6) {
@@ -73,11 +101,12 @@ export function replayDiagnostics(bundle: Diagnostics): Sim {
   }
   while (cursor < bundle.inputs.length && bundle.inputs[cursor].t <= sim.t + 1e-6) applyInput(sim, bundle.inputs[cursor++]);
   sim.replaying = false;
-  sim.inputLog = structuredClone(bundle.inputs);
+  sim.inputLog = structuredClone(bundle.inputs.map(input => ({ ...input, scope: currentScope() })));
   return sim;
 }
 
 export function applyInput(sim: Sim, input: RecordedInput) {
+  assertScope(input.scope);
   if ('cmd' in input) sim.command(input.cmd);
   else sim.drive(input.drive.train, input.drive.notch);
 }

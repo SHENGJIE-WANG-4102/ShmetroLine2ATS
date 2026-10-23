@@ -1,8 +1,8 @@
-// Compare the weekday plan with the published first / last trains (src/data/firstlast.ts):
+// Compare the weekday plan with the published first / last trains (src/data/current.ts):
 // per station, and section by section along the three last trains (each one train end to end).
 //   usage: npx tsx scripts/firstlast.ts
 import { Sim } from '../src/sim/engine';
-import { FIRST_LAST } from '../src/data/firstlast';
+import { FIRST_LAST } from '../src/data/current';
 import { readFileSync } from 'node:fs';
 import type { Plan } from '../src/sim/model';
 

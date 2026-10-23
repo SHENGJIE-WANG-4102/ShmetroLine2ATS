@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createProbeWorld, probeSection } from '../scripts/audio/field-model';
 import { capture, restore } from '../src/sim/state';
-import { STATIONS, LINE_INFO, OPERATIONS } from '../src/data/line2';
+import { STATIONS, LINE_INFO, OPERATIONS } from '../src/data/current';
 import { regulationDistance, regulationProfile, scanAhead, goalBerth, MA_NEAR, computeBody, indexBodies, updateTrainMotion } from '../src/sim/movement';
 import { PERF, computeRunTimes, sectionEta, sectionPlan, staticLinkLimit } from '../src/sim/dynamics';
 import { newTrain } from '../src/sim/ats';

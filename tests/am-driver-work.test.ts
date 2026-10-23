@@ -8,7 +8,7 @@ import {setMode,turnbackDwell,simulatedAmDriver}from'../src/sim/onboard';
 import {platformBerth}from'../src/sim/timetable';
 import {computeBody,indexBodies}from'../src/sim/movement';
 import {carryWorld,nextOperatingConfig,DAY_S}from'../src/sim/operatingDay';
-import {OPERATIONS,STATIONS}from'../src/data/line2';
+import {OPERATIONS,STATIONS}from'../src/data/current';
 import {DOOR_CLOSE_S}from'../src/sim/calibration';
 import {runAmTurnback}from'./helpers/am-turnback';
 

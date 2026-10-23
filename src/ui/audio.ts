@@ -5,7 +5,7 @@
  * recorded sounds are handled by vvvf.ts and stationaudio.ts.
  */
 import { loadPref, savePref } from './layout';
-import { RECORDED_VOLUME_GAINS, type RecordedVolume } from '../data/onboardbank';
+import { RECORDED_VOLUME_GAINS, type RecordedVolume } from '../data/audio/onboardbank';
 import { VvvfSound, type VvvfMode, type VvvfIdentity } from './vvvf';
 import { StationAudio, type StationAudioFrame } from './stationaudio';
 import { OnboardAudio, type OnboardAudioFrame } from './onboardaudio';

@@ -5,10 +5,10 @@
  */
 import { writeFileSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
-import { FIRST_LAST } from '../../src/data/firstlast';
-import { STATIONS } from '../../src/data/line2';
+import { FIRST_LAST } from '../../src/data/current';
+import { STATIONS } from '../../src/data/current';
 import { RECORDING_SOURCES, RIDE_LOG, RIDE_MODEL_BASELINE, USER_DOOR_REFERENCES,
-  LEGACY_RECORDING_IDS, FIELD_1016_RECORDING_IDS, summarizeRideLog, type RecordingId, type RideStop } from '../../src/data/ridelog';
+  LEGACY_RECORDING_IDS, FIELD_1016_RECORDING_IDS, summarizeRideLog, type RecordingId, type RideStop } from '../../src/data/audio/ridelog';
 
 const minute = (clock: string): number => {
   const [hours, minutes] = clock.split(':').map(Number);

@@ -34,7 +34,7 @@ python scripts/gaode/scrape.py diff --baseline work/gaode-scrape/baseline-202610
 python -m unittest discover -s scripts/gaode -p test_scrape.py
 ```
 
-`UP` 往西、`DN` 往东，沿用 `src/data/line2.ts`。东行全表最后一班与
+`UP` 往西、`DN` 往东，沿用 `src/data/current.ts`。东行全表最后一班与
 `firstlast.ts` 中 `lastE`、`lastG` 较晚者比较。整分钟一致为通过；相差 1 min
 保留明确提示；更大差异不覆盖正式文本。严格递增、去重、整小时缺失也自动检查。
 

@@ -6,17 +6,18 @@
  * and a command log for rewind and replay (回放).
  */
 import { Sim, FIXED_DT } from './engine';
-import type { Command, FromWorker, ToWorker, SimConfig } from './model';
+import type { FromWorker, ToWorker, SimConfig } from './model';
 import { nextOperatingConfig, unfinishedAtRollover } from './operatingDay';
 import { OPERATING_DAY } from './dayRandom';
 import { capture, restore, type Checkpoint } from './state';
-import { compactCheckpoints, exportDiagnostics, stringifyDiagnostics } from './diagnostics';
+import { compactCheckpoints, exportDiagnostics, stringifyDiagnostics, type RecordedInput } from './diagnostics';
+import { currentScope } from '../data/scope';
 import { preparePlan } from './planning';
 import { captureWarmup, readWarmup, restoreWarmup, warmupKey, writeWarmup } from './warmupCache';
 
 // Vite includes source text as build inputs. Any simulation/data change
 // changes the key automatically, including development worker reloads.
-const warmupSources = import.meta.glob(['./*.ts', '../data/*.ts'], { eager: true, query: '?raw', import: 'default' });
+const warmupSources = import.meta.glob(['./*.ts', '../data/**/*.ts'], { eager: true, query: '?raw', import: 'default' });
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -45,7 +46,7 @@ const dayTime = (t: unknown): number | null => (typeof t === 'number' && Number.
 const STEP_BUDGET = 9; // ms of simulation work per tick
 const CP_INTERVAL = 60; // s of sim time between checkpoints
 
-type LogEntry = { t: number; cmd: Command } | { t: number; drive: { train: number; notch: number } };
+type LogEntry = RecordedInput;
 let checkpoints: Checkpoint[] = [];
 let cmdLog: LogEntry[] = [];
 let pending: LogEntry[] = [];
@@ -315,7 +316,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       if (!sim) return;
       takeOver();
       const r = sim.command(m.cmd);
-      cmdLog.push({ t: sim.t, cmd: m.cmd });
+      cmdLog.push({ scope: currentScope(), t: sim.t, cmd: m.cmd });
       post({ type: 'cmdResult', id: m.id, ok: r.ok, msg: r.msg });
       flushEvents();
       sendSnapshot();

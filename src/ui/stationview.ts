@@ -22,7 +22,7 @@ import { Geometry, stationWindow } from './geometry';
 import { TrackView } from './trackview';
 import { confirmAndSend, toast } from './confirm';
 import { SEC, SW, type Snapshot } from '../sim/model';
-import { STATIONS } from '../data/line2';
+import { STATIONS } from '../data/current';
 
 export type StationFn = 'select' | 'route' | 'guide' | 'cancel' | 'swN' | 'swR' | 'lock' | 'block' | 'secUnlock' | 'axle';
 

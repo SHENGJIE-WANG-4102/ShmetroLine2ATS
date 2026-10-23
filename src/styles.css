@@ -16,7 +16,8 @@
   --text-dim: #8195a8;
   --text-muted: #5d6e80;
   --text-bright: #ffffff;
-  --line: #8cc220;
+  --line: #ffffff;
+  --pis-line: #ffffff;
   --accent: #00e5ff;
   --ok: #46d47c;
   --warn: #ffc400;
@@ -121,6 +122,7 @@ input[type=range] { accent-color: var(--line); height: var(--ctl); }
 @container brand (max-width: 250px) { .hdr-brand .metro-logo { display: none; } }
 .metro-logo { width: 68px; height: 68px; flex: none; }
 .line-badge { height: 68px; width: auto; flex: none; }
+.line-badge-text { display: inline-flex; align-items: center; justify-content: center; padding: 0 12px; border-radius: 4px; background: var(--line); color: #05080c; font-weight: 600; }
 .hdr-title { font-size: 32px; color: #fff; letter-spacing: 2px; font-weight: 700; }
 .hdr-sub { font-size: 20px; color: var(--text-dim); margin-top: 6px; }
 .clock { font: 600 60px/1 var(--font-mono); color: #fff; letter-spacing: 2px; }
@@ -309,12 +311,13 @@ tr.recovered td.txt { color: var(--ok); }
 .pm-head { display: flex; align-items: center; gap: 1.4cqw; font-size: 2.6cqw; color: #cfe3ff; }
 .pm-head img { height: 4cqw; width: auto; }
 .pm-head span { margin-left: auto; }
+.pm-head .line-badge-text { margin-left: 0; }
 .pm-name { font-size: 6cqw; font-weight: 700; letter-spacing: .1em; line-height: 1.1; }
 .pm-towards { font-size: 2.8cqw; color: #9cc8ff; }
 .pm-strip { display: flex; margin-top: auto; border-top: .35cqw solid #2a62b8; }
 .pm-stop { flex: 1; display: flex; flex-direction: column; align-items: center; gap: .8cqw; min-width: 0; margin-top: -1.3cqw; }
-.pm-stop i { width: 2.2cqw; height: 2.2cqw; border-radius: 50%; background: #0b1b36; border: .45cqw solid #8fc31f; }
-.pm-stop.here i { background: #8fc31f; box-shadow: 0 0 1.2cqw #8fc31f; }
+.pm-stop i { width: 2.2cqw; height: 2.2cqw; border-radius: 50%; background: #0b1b36; border: .45cqw solid var(--pis-line); }
+.pm-stop.here i { background: var(--pis-line); box-shadow: 0 0 1.2cqw var(--pis-line); }
 .pm-stop span { font-size: 1.8cqw; line-height: 1.2; color: #cfe3ff; text-align: center; max-width: 100%; max-height: 4.4cqw; overflow: hidden; padding: 0 .3cqw; }
 .pm-stop.here span { color: #fff; font-weight: 700; }
 .pm-load { font-size: 2.3cqw; color: #ffd36b; min-height: 2.8cqw; }
@@ -515,7 +518,7 @@ tr.recovered td.txt { color: var(--ok); }
 
 .instructor-picker { max-height: 280px; overflow: auto; border: 1px solid var(--border, #27394c); padding: 10px; }
 .instructor-picker fieldset { border: 0; margin: 8px 0; padding: 0; }
-.instructor-picker legend { color: #8cc220; margin-bottom: 5px; }
+.instructor-picker legend { color: var(--line); margin-bottom: 5px; }
 .instructor-picker label { display: inline-flex; align-items: center; gap: 7px; width: 48%; margin: 5px 1%; vertical-align: top; }
 .event-actions { display: flex; gap: 8px; }
 

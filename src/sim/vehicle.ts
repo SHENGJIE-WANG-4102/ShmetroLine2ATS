@@ -21,7 +21,7 @@ import type { Train, VehicleFault } from './model';
 import { openCall } from './radio';
 import { trainLabel, cmdWithdraw } from './ats';
 import { injectFault } from './faults';
-import { STATIONS } from '../data/line2';
+import { STATIONS } from '../data/current';
 
 /** inverters on an 8-car 6M2T train */
 export const TRACTION_UNITS = 6;

@@ -1,3 +1,6 @@
+import { findOnboardAnnouncement } from '../../audioUtils';
+import type { VoicePart, OriginalAnnouncement, OnboardAnnouncement } from '../../types';
+export type { RecordedVolume, VoiceLanguage, VoicePart, OriginalAnnouncement, OnboardAnnouncement } from '../../types';
 /** D71: local, bilingual carriage PA. All ranges are original-file seconds.
  * Word timing supplies initial boundaries; extraction snaps them within 15 ms
  * to a quiet zero crossing and joins normalised parts with a 30 ms crossfade.
@@ -7,32 +10,15 @@
  * Empty/missing voice parts suppress that sentence; no generated speech.
  */
 import { STATIONS } from './line2';
-import { ahead } from '../sim/topology';
+import { ahead } from '../../../sim/topologyOrder';
 import { FIELD_1021_ORIGINALS, FIELD_1021_PARTS } from './onboardfield1021';
 import type { SoundClip, AnnouncementDoorSide } from './soundbank';
 export const VOICE_CROSSFADE_S = .03;
 export const RECORDED_VOLUME_GAINS = { small: .6, medium: 1, large: 1.45 } as const;
-export type RecordedVolume = keyof typeof RECORDED_VOLUME_GAINS;
-export type VoiceLanguage = 'zh' | 'en' | 'bilingual';
-export interface VoicePart {
-  id: string; language: VoiceLanguage; speaker: 'onboard-zh' | 'onboard-en' | 'recorded-pair' | 'platform-zh';
-  role: string; name?: string; source: SoundClip['source']; range: [number, number];
-  confidence: SoundClip['confidence']; effects?: 'clean-speech-zh' | 'clean-speech-en'; file?: string;
-}
-export interface OriginalAnnouncement {
-  id: string; station: string; direction: 'DN' | 'UP'; type: 'next' | 'arrived';
-  source: SoundClip['source']; recordedDestination: string; range: [number, number];
-  confidence: SoundClip['confidence']; doorSide: AnnouncementDoorSide;
-  destinationSentence?: [number, number]; destinationName?: [number, number];
-  transferRange?: [number, number]; terminalOnly?: boolean;
-  /** Explicitly reviewed PA contains no direction-dependent wording. Still
-   * requires the same station, terminus and door side when reused. */
-  directionNeutral?: boolean;
-  recordedDirection?: 'DN' | 'UP';
-  delayS?: number | null; advanceS?: number; measuredAdvance?: boolean;
-  /** Confirmed English-first arrival cut: prepend the recorded Chinese call. */
-  arrivalRecipe?: readonly string[];
-}
+
+
+
+
 export const VOICE_SOURCES = [
   { id: 'ride-1021-east', filename: '10-21-2026 19.56.wav', recordedDate: '2026-10-21', durationS: 1859.30 },
   { id: 'ride-1021-west', filename: '10-21-2026 20.33.wav', recordedDate: '2026-10-21', durationS: 3667.54 },
@@ -230,12 +216,7 @@ export const ORIGINAL_ONBOARD: readonly OriginalAnnouncement[] = [
   {"id":"original-next-up-jkl","station":"金科路","direction":"UP","type":"next","source":"ride-west","recordedDestination":"蟠祥路·国家会计学院","range":[11.6,38.2],"confidence":"medium","doorSide":"L","destinationSentence":[11.6,15.96],"destinationName":[13.5,15.96],"delayS":null},
   {"id":"original-arrived-up-jkl","station":"金科路","direction":"UP","type":"arrived","source":"ride-west","recordedDestination":"蟠祥路·国家会计学院","range":[111.48,130.2],"confidence":"medium","doorSide":"L","advanceS":37.6,"measuredAdvance":false},
 ];
-export interface OnboardAnnouncement {
-  station: string; direction: 'DN' | 'UP'; source: SoundClip['source'];
-  destination: string; doorSide: AnnouncementDoorSide; missingSentences: readonly string[];
-  next?: { clipId: string; phraseAt: number; delayS: number | null; confidence: SoundClip['confidence'] };
-  arrived?: { clipId: string; phraseAt: number; advanceS: number; measuredAdvance: boolean; confidence: SoundClip['confidence'] };
-}
+
 export const ONBOARD_DESTINATIONS = ['蟠祥路·国家会计学院', '广兰路', '浦东1号2号航站楼'] as const;
 /** Additional user-authorised PA coverage, independent of timetable generation.
  * User decision: retain the existing revenue run to TZ before its empty
@@ -553,5 +534,5 @@ export const ONBOARD_RENDER_BANK: readonly SoundClip[] = rendered;
 export const ONBOARD_ANNOUNCEMENTS: readonly OnboardAnnouncement[] = announcements;
 /** Strict station + direction + terminus + actual door side lookup. */
 export function onboardAnnouncement(station: string, direction: 'DN' | 'UP', destination: string, side: AnnouncementDoorSide, catalog = ONBOARD_ANNOUNCEMENTS) {
-  return catalog.find(a => a.station === station && a.direction === direction && a.destination === destination && a.doorSide === side);
+  return findOnboardAnnouncement(station, direction, destination, side, catalog);
 }

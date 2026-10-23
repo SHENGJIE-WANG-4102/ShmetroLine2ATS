@@ -1,3 +1,5 @@
+import type { OtherLastTrain } from '../../types';
+export type { OtherLastTrain } from '../../types';
 /**
  * Other lines' last trains at the Line 2 interchanges (换乘末班车), D63.
  *
@@ -13,19 +15,7 @@
  * 浦东南路 14号线) 8–10.
  */
 
-export interface OtherLastTrain {
-  /** Line 2 station id */
-  station: string;
-  line: string;
-  /** destination of the service (往…) */
-  toward: string;
-  /** last departure from the interchange, Mon–Thu and Sun (s of the operating day) */
-  dep: number;
-  /** Friday / Saturday last departure where later */
-  friSat?: number;
-  /** walking time between the platforms (s) */
-  walk: number;
-}
+
 
 const T = (h: number, m: number) => (h < 4 ? h + 24 : h) * 3600 + m * 60;
 const W = (min: number) => min * 60;

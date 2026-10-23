@@ -1,7 +1,7 @@
 /** Hover tooltip for schematic objects. */
 import { h, clear } from './dom';
 import type { Store } from './store';
-import { STATIONS, LINE_INFO } from '../data/line2';
+import { STATIONS, LINE_INFO } from '../data/current';
 import { SEC, SW, SIG_ASPECT } from '../sim/model';
 import { fmtDelay } from './theme';
 

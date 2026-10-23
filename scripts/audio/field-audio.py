@@ -416,7 +416,7 @@ def measure_source(source, out, timing):
     if source['mode'] == 'adopted-events':
         events = []
         for row in source['events']:
-            events.append(dict(station=row['station'], **{key: None if row.get(key) is None else {**row['evidence'].get(key, dict(confidence='low')), 'at': row[key]} for key in ['stop', 'start', 'close', 'open', 'closingMotion', 'locked']}, provenance='reviewed src/data/ridelog.ts'))
+            events.append(dict(station=row['station'], **{key: None if row.get(key) is None else {**row['evidence'].get(key, dict(confidence='low')), 'at': row[key]} for key in ['stop', 'start', 'close', 'open', 'closingMotion', 'locked']}, provenance='reviewed src/data/audio/ridelog.ts'))
     elif source['mode'] == 'pa-windows':
         events = events_from_announcements(audio, source, source['announcements'], duration)
     else:

@@ -1,9 +1,11 @@
 /** Calibrated service assumptions; factual sources are recorded in D29–D31. */
 import type { DayType, TrackDir } from './model';
 import { dayRandom } from './dayRandom';
-import { DOOR_REFERENCE_TIMING } from '../data/doorbank';
-import { OPERATIONS, STATIONS } from '../data/line2';
-export const RIDERSHIP_TARGET = { weekday: 1_090_000, weekend: 1_090_000 * 0.7 };
+import { DOOR_REFERENCE_TIMING } from '../data/audio/doorbank';
+import { OPERATIONS, STATIONS, SIMULATION } from '../data/current';
+import { ahead } from './topology';
+const C = SIMULATION.calibration;
+export const RIDERSHIP_TARGET = C.ridershipTarget;
 /** 【假设】每日目标在中心值的 ±5% 内均匀抽取，两种日型共用规则。 */
 export const RIDERSHIP_RANGE = Object.fromEntries(Object.entries(RIDERSHIP_TARGET).map(([day,center])=>[day,{min:Math.round(center*.95),max:Math.round(center*1.05)}])) as Record<DayType,{min:number;max:number}>;
 export function drawDailyRidership(day: DayType, seed: number): number {
@@ -12,11 +14,13 @@ export function drawDailyRidership(day: DayType, seed: number): number {
 }
 /** Where and when the reported peak section load (高峰最大断面) is taken: weekdays,
  * 淞虹路–广兰路, the morning and evening peak hours (h). */
-export const PEAK_SECTION = { day: 'weekday' as DayType, from: 'SHR', to: 'GLL', hours: [[6.8333, 9.5], [16.8333, 19.5]] };
+export const PEAK_SECTION = C.peakSection;
 export function inPeakSection(day: DayType, station: number, t: number): boolean {
+ const peak=PEAK_SECTION;
+ if (!peak) return false;
  const id=(x: string)=>STATIONS.findIndex(st=>st.id===x), h=t/3600;
- return day===PEAK_SECTION.day && station>=id(PEAK_SECTION.from) && station<=id(PEAK_SECTION.to)
-  && PEAK_SECTION.hours.some(([a,b])=>h>=a && h<b);
+ return day===peak.day && !ahead('DN', station, id(peak.from)) && !ahead('DN', id(peak.to), station)
+  && peak.hours.some(([a,b])=>h>=a && h<b);
 }
 /** One physical clock shared by simulation, PSD, DMI and audio. */
 export const DOOR_CLOSE_S = DOOR_REFERENCE_TIMING.warningToMotionS + DOOR_REFERENCE_TIMING.motionToLockedS;
@@ -25,28 +29,26 @@ export const DOOR_CYCLE = meanRange(OPERATIONS.autoDoorOpenDelay) + DOOR_REFEREN
   + DOOR_CLOSE_S + meanRange(OPERATIONS.autoStartDelay);
 /** D73图定停站原值保留：旧门序列预算15秒，关门至起车预算12秒。
  * 物理门序列用区间期望12.2秒；差额2.8秒留作原图定客流作业余量。 */
-export const PLANNED_DOOR_BUDGET = 15; // D73图定门作业预算，D119保持
-export const PLANNED_CLOSE_BUDGET = 12;
-export const MIN_DWELL = 22; // D73保留的停站下限；物理门序列改用DOOR_CYCLE期望值
-export const MAX_EARLY_HOLD = 10;
-export const MAX_DWELL_BUSY = 85; // 【假设】 peak ceiling, calibrated against fleet counts (D73)
-export const MAX_DWELL = 70;
-export const DOORS_PER_SIDE = 40; // eight cars, five doors per car
-export const EXCHANGE_PER_DOOR = 2.2; // persons/s, calibrated aggregate exchange (assumption)
-const WEEKDAY: [number, number][] = [[4.5,0],[5.4,.08],[6.2,.4],[6.8,1.2],[7.5,3.4],[8.1,4],[8.8,2.7],[9.6,.8],[11,.65],[13,.7],[16,.8],[17.2,2.6],[18,3.7],[18.8,2.8],[19.8,.85],[21,.5],[22.5,.25],[23.5,.1],[24.5,0]];
-const WEEKEND: [number, number][] = [[4.5,0],[5.4,.1],[7,.4],[9,.9],[10.5,1.15],[14,1.2],[17,1.25],[19,1.1],[21,.7],[22.5,.4],[23.5,.15],[24.5,0]];
+export const PLANNED_DOOR_BUDGET = C.plannedDoorBudget; // D73图定门作业预算，D119保持
+export const PLANNED_CLOSE_BUDGET = C.plannedCloseBudget;
+export const MIN_DWELL = C.minDwell; // D73保留的停站下限；物理门序列改用DOOR_CYCLE期望值
+export const MAX_EARLY_HOLD = C.maxEarlyHold;
+export const MAX_DWELL_BUSY = C.maxDwellBusy; // 【假设】 peak ceiling, calibrated against fleet counts (D73)
+export const MAX_DWELL = C.maxDwell;
+export const DOORS_PER_SIDE = C.doorsPerSide; // eight cars, five doors per car
+export const EXCHANGE_PER_DOOR = C.exchangePerDoor; // persons/s, calibrated aggregate exchange (assumption)
 export function profile(day: DayType, t: number): number {
- const h=t/3600, p=day==='weekday'?WEEKDAY:WEEKEND;
+ const h=t/3600, p=C.profiles[day];
  for(let i=0;i+1<p.length;i++)if(h>=p[i][0]&&h<p[i+1][0])return p[i][1]+(p[i+1][1]-p[i][1])*(h-p[i][0])/(p[i+1][0]-p[i][0]);
  return 0;
 }
 /** Both directions sum to two: tides redistribute station demand, not its daily total. */
 export function directionShare(day: DayType, station: number, dir: TrackDir, t: number): number {
- if(day!=='weekday')return 1;
+ const tide=C.tides[day], west=tide.stationWeights[station] ?? 0;
+ if (!tide.amplitude || !west) return 1;
  const h=t/3600;
- const am=Math.max(0,1-Math.abs(h-8)/2),pm=Math.max(0,1-Math.abs(h-18)/2);
- const west=station<=12?1:station>=17?-1:0;
- const dn=1+.72*west*(am-pm);
+ const am=Math.max(0,1-Math.abs(h-tide.morning)/tide.width),pm=Math.max(0,1-Math.abs(h-tide.evening)/tide.width);
+ const dn=1+tide.amplitude*west*(am-pm);
  return dir==='DN'?dn:2-dn;
 }
 export function rawDemand(day: DayType, station: number, dir: TrackDir, t: number): number {

@@ -1,3 +1,5 @@
+import type { RecordingId, RecordingSource, AcousticCandidate, RideConfidence, RideEventEvidence, RideStop, RecordingDoorReview } from '../../types';
+export type { RideDirection, RecordingId, RecordingSource, AcousticCandidate, RideConfidence, RideEventEvidence, RideStop, RecordingDoorReview, RideMeasuredEvent } from '../../types';
 /**
  * User's local Line 2 recordings, supplied on 2026-10-14 and 2026-10-16.
  * Source files live in ignored work/recordings/; no audio or passenger
@@ -25,32 +27,12 @@
  * they are not statistical error bars. User-supplied markers retain decimals.
  * Station order/names: line2.ts; official comparison: firstlast.ts.
  */
-export type RideDirection = 'DN' | 'UP';
+
 export const LEGACY_RECORDING_IDS = ['ride-east', 'ride-west', 'platform-01', 'platform-03'] as const;
 export const FIELD_1016_RECORDING_IDS = ['ride-1016-west-core', 'ride-1016-west-end', 'ride-1016-east-end', 'ride-1016-east-night'] as const;
-export type RecordingId = typeof LEGACY_RECORDING_IDS[number] | typeof FIELD_1016_RECORDING_IDS[number];
 
-export interface RecordingSource {
-  id: RecordingId;
-  filename: string;
-  kind: 'ride' | 'platform';
-  durationS: number;
-  clockStart: string | null;
-  /** User-confirmed lower bound; never substitute it for an exact start. */
-  clockStartNotBefore?: string;
-  clockStartPrecision?: 'minute';
-  recordedDate?: string;
-  /** User label, not an interpretation of stock type or vehicle identity. */
-  vehicleLabel?: string;
-  /** Filename route can start before the captured portion. */
-  observedFrom?: string;
-  note?: string;
-  from: string;
-  to: string;
-  directions: RideDirection[];
-  /** Filename references; these do not establish microphone proximity. */
-  doorReferences?: { direction: RideDirection; car: number; door: number; trainType: string }[];
-}
+
+
 
 export const RECORDING_SOURCES: RecordingSource[] = [
   { id: 'ride-east', filename: '2号线江苏路~广兰路 终点站广兰路小交路02A05 020897.wav',
@@ -85,57 +67,12 @@ export const RECORDING_SOURCES: RecordingSource[] = [
     note: 'Filename clock is approximate to the minute; entry into 北新泾 is captured before its first recorded departure.' },
 ];
 
-export interface AcousticCandidate {
-  /** Seconds in the original file, not a sliced/concatenated audio stream. */
-  at: number;
-  /** Search tolerance 【假设】; must not be advertised as verified accuracy. */
-  searchRadiusS: number;
-  evidence: 'closing-tone-pulses' | 'rising-traction-band' | 'opening-band-step' | 'door-impact-duration' | 'traction-switch-and-rolling';
-}
 
-export type RideConfidence = 'high' | 'medium' | 'low';
-export interface RideEventEvidence {
-  confidence: RideConfidence;
-  method: AcousticCandidate['evidence'] | 'spectral-knee' | 'user-marker' | 'file-boundary';
-  gainDb?: number;
-  impactAt?: number;
-  travelS?: number;
-  powerAt?: number;
-  rollingConfirmed?: boolean;
-  score?: number;
-  edgeLimited?: boolean;
-  preContextLimited?: boolean;
-  /** Descending ridge band, not a speed or chainage estimate. */
-  bandHz?: [number, number];
-  ridgeFallDb?: number;
-  lowBeforeDb?: number;
-  lowAfterDb?: number;
-  lowFallDb?: number;
-  floorDb?: number;
-  ambiguous?: boolean;
-  /** Keep the independent automatic estimate when a user marker overrides it. */
-  autoAt?: number;
-  note?: string;
-}
 
-export interface RideStop {
-  recording: RecordingId;
-  station: string;
-  direction: RideDirection;
-  /** Adopted events in original recording seconds; null means not captured. */
-  stop: number | null;
-  open: number | null;
-  /** Warning onset, retained for the 10-14 closing-warning → start metric. */
-  close: number | null;
-  /** Mechanical closing onset. Absent on legacy rows; uncertain estimates stay low. */
-  closingMotion?: number | null;
-  start: number | null;
-  evidence: Partial<Record<'stop' | 'open' | 'close' | 'closingMotion' | 'start', RideEventEvidence>>;
-  candidates: Partial<Record<'open' | 'close' | 'closingMotion' | 'start', AcousticCandidate>>;
-  /** Bounds for automated arrival analysis, not a request for user review. */
-  analysisWindowS: [number, number] | null;
-  note?: string;
-}
+
+
+
+
 
 const tone = (at: number): AcousticCandidate => ({ at, searchRadiusS: 1, evidence: 'closing-tone-pulses' });
 const traction = (at: number): AcousticCandidate => ({ at, searchRadiusS: 3, evidence: 'rising-traction-band' });
@@ -217,28 +154,7 @@ for (const marker of USER_RIDE_MARKERS) {
     ...(automatic === null ? {} : { autoAt: automatic }), note: 'User-provided recording timestamp.' };
 }
 
-export interface RecordingDoorReview {
-  recording: RecordingId;
-  station: string;
-  reviewedOn: string;
-  /** Original-file seconds. The reply below uses seconds within this clip. */
-  clipWindowS: [number, number];
-  reply: string;
-  note?: string;
-  /** No opening audible in this window; not evidence that the doors stayed shut. */
-  openingNotHeard?: boolean;
-  events?: Partial<Record<'open' | 'close' | 'closingMotion' | 'locked', {
-    at: number;
-    confidence: RideConfidence;
-    method: 'user-marker' | 'opening-band-step';
-    /** User-reported timing range, not a statistical confidence interval. */
-    rangeS?: [number, number];
-    presenceConfirmed?: boolean;
-    timingConfirmed?: boolean;
-    edgeLimited?: boolean;
-    note?: string;
-  }>>;
-}
+
 
 /** User review on 2026-10-23. All adopted event timestamps use original-file seconds. */
 export const USER_DOOR_REVIEWS: RecordingDoorReview[] = [
@@ -605,55 +521,5 @@ const FIELD_1016_RIDE_LOG: RideStop[] = [
 ];
 RIDE_LOG.push(...FIELD_1016_RIDE_LOG);
 
-export type RideMeasuredEvent = 'stop' | 'open' | 'closingMotion' | 'start' | 'close';
-export const RIDE_MEASURED_EVENTS: readonly RideMeasuredEvent[] = ['stop', 'open', 'closingMotion', 'start', 'close'];
 
-/** Confidence is event-specific: a weak opening never invalidates a strong
- * stop→start dwell; a weak stop never enters either run or dwell means. */
-export function usableRideEvent(row: RideStop, event: RideMeasuredEvent): boolean {
-  const value = row[event];
-  return typeof value === 'number' && Number.isFinite(value) &&
-    row.evidence[event] !== undefined && row.evidence[event]!.confidence !== 'low';
-}
-
-/** Observed-only summaries. Never pair recordings, impute boundaries, or mix
- * the old immutable plan snapshot with the current clock-matched plan. */
-export function summarizeRideLog(rows: readonly RideStop[]) {
-  const runs: number[] = [], dwells: number[] = [], openingLags: number[] = [];
-  const warningToStart: number[] = [], closingToStart: number[] = [];
-  const pairedRuns: number[] = [], pairedDwells: number[] = [];
-  const events = Object.fromEntries(RIDE_MEASURED_EVENTS.map(event => [event,
-    { high: 0, medium: 0, low: 0, missing: 0 }])) as Record<RideMeasuredEvent,
-      { high: number; medium: number; low: number; missing: number }>;
-  const previousBySource = new Map<RecordingId, RideStop>();
-  for (const row of rows) {
-    for (const event of RIDE_MEASURED_EVENTS) {
-      const value = row[event], evidence = row.evidence[event];
-      if (typeof value !== 'number' || !Number.isFinite(value) || !evidence) events[event].missing++;
-      else events[event][evidence.confidence]++;
-    }
-    const hasDwell = usableRideEvent(row, 'stop') && usableRideEvent(row, 'start');
-    const dwell = hasDwell ? row.start! - row.stop! : null;
-    if (dwell !== null && dwell >= 0) dwells.push(dwell);
-    if (usableRideEvent(row, 'stop') && usableRideEvent(row, 'open') && row.open! >= row.stop!)
-      openingLags.push(row.open! - row.stop!);
-    if (usableRideEvent(row, 'close') && usableRideEvent(row, 'start') && row.start! >= row.close!)
-      warningToStart.push(row.start! - row.close!);
-    if (usableRideEvent(row, 'closingMotion') && usableRideEvent(row, 'start') && row.start! >= row.closingMotion!)
-      closingToStart.push(row.start! - row.closingMotion!);
-    const previous = previousBySource.get(row.recording);
-    if (previous && previous.direction === row.direction && usableRideEvent(previous, 'start') && usableRideEvent(row, 'stop')) {
-      const run = row.stop! - previous.start!;
-      if (run >= 0) {
-        runs.push(run);
-        if (dwell !== null && dwell >= 0) { pairedRuns.push(run); pairedDwells.push(dwell); }
-      }
-    }
-    previousBySource.set(row.recording, row);
-  }
-  const metric = (values: number[]) => ({ count: values.length,
-    meanS: values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 100) / 100 : null });
-  return { rows: rows.length, events, run: metric(runs), dwell: metric(dwells),
-    openingLag: metric(openingLags), warningToStart: metric(warningToStart), closingToStart: metric(closingToStart),
-    paired: { count: pairedRuns.length, runMeanS: metric(pairedRuns).meanS, dwellMeanS: metric(pairedDwells).meanS } };
-}
+export { RIDE_MEASURED_EVENTS, usableRideEvent, summarizeRideLog } from '../../rideEvidence';

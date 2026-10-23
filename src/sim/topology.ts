@@ -1,7 +1,7 @@
 /**
  * Track topology builder.
  *
- * Turns the line data (src/data/line2.ts) into a node/link track graph with
+ * Turns the line data (src/data/current.ts) into a node/link track graph with
  * switches, axle-counter sections, signals, platforms, berths and the
  * interlocking route table. The result is a pure function of the data, so the
  * worker (simulation) and the main thread (renderer) both build it locally
@@ -15,9 +15,12 @@
  *    that node ("entry key" = node*65536 + link).
  */
 import {
-  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, stationChainages,
+  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, stationChainages,
   type CrossoverKind, type SidingLane, type LeadDef,
-} from '../data/line2';
+} from '../data/current';
+
+import { ahead } from './topologyOrder';
+export { ahead } from './topologyOrder';
 
 export type TrackKind = 'DN' | 'UP' | 'X' | 'SID' | 'CON' | 'DEP';
 export type Dir = 1 | -1;
@@ -290,7 +293,8 @@ export function buildTopology(): Topology {
   const chains = stationChainages();
   const nStations = STATIONS.length;
   const lastCh = chains[nStations - 1];
-  const wrapChain = (chains[14] + chains[15]) / 2;
+  const wrapAfter = STATIONS.findIndex(station => station.id === SIMULATION.topology.wrapAfter);
+  const wrapChain = (chains[wrapAfter] + chains[wrapAfter + 1]) / 2;
 
   const nodes: TNode[] = [];
   const links: TLink[] = [];
@@ -1563,9 +1567,24 @@ export function linkChain(topo: Topology, link: number, offset: number): number 
   return l.chainA + (l.chainB - l.chainA) * Math.min(1, Math.max(0, offset / l.len));
 }
 
-/** Forward order on the current linear topology; callers do not compare station indices. */
-export function ahead(direction: 'DN' | 'UP', from: number, to: number): boolean {
-  return direction === 'DN' ? to > from : to < from;
+
+
+/** Stations in running order, optionally starting at an included station. */
+export function orderedStations(direction: 'DN' | 'UP', from?: number): number[] {
+  return STATIONS.map((_, station) => station)
+    .filter(station => from === undefined || station === from || ahead(direction, from, station))
+    .sort((a, b) => ahead(direction, a, b) ? -1 : ahead(direction, b, a) ? 1 : 0);
+}
+
+/** Last station reached in a direction on the current linear topology. */
+export function downstreamTerminal(direction: 'DN' | 'UP'): number {
+  return orderedStations(direction).at(-1)!;
+}
+
+/** Inclusive forward station range; a reversed range contains no stations. */
+export function stationRange(direction: 'DN' | 'UP', from: number, to: number): number[] {
+  if (from !== to && !ahead(direction, from, to)) return [];
+  return orderedStations(direction, from).filter(station => station === to || ahead(direction, station, to));
 }
 
 /** Geographic running direction of a physical train, including depot/siding links. */

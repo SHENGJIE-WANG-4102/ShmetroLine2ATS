@@ -3,9 +3,9 @@
  */
 import { SOUND_BANK, ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S,
   ONBOARD_HOLD_CLIP, ONBOARD_HOLD_DELAY_S, ONBOARD_HOLD_REPEAT_S,
-  clipDuration, type SoundClip, type OnboardAnnouncement, type AnnouncementDoorSide } from '../data/soundbank';
-import { STATIONS } from '../data/line2';
-import { onboardAnnouncement, onboardDoorSide } from '../data/onboardbank';
+  clipDuration, type SoundClip, type OnboardAnnouncement, type AnnouncementDoorSide } from '../data/audio/soundbank';
+import { STATIONS } from '../data/current';
+import { onboardAnnouncement, onboardDoorSide } from '../data/audio/onboardbank';
 import { PLT, type Snapshot, type TrainSnap, type Plan } from '../sim/model';
 import type { Topology } from '../sim/topology';
 import { RecordedSoundPlayer, automatic, audioTrain, stopEstimate, VVVF_MAX_RATE, STATION_ALIGNMENT_S,

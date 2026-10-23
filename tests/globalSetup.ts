@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { startupGroupId } from '../src/data/startup';
 
 /** Warm-ups the test files share (dayType-startTime-seed): each takes tens of
  * seconds of simulation, so they run once, in parallel, before the tests, and
@@ -10,6 +11,7 @@ export const WARMUPS = ['weekday-28800-7', 'weekday-32400-7', 'weekday-35700-5',
 
 function sourceHash(): string {
   const hash = createHash('sha256');
+  hash.update(startupGroupId());
   const walk = (dir: string) => {
     for (const name of readdirSync(dir).sort()) {
       const path = join(dir, name);

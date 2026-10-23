@@ -4,11 +4,11 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SOUND_BANK, SOUNDBANK_DIRECTORY, clipDuration } from '../../src/data/soundbank';
+import { SOUND_BANK, SOUNDBANK_DIRECTORY, clipDuration } from '../../src/data/audio/soundbank';
 import { ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S,
-  ONBOARD_DESTINATIONS, RECORDED_ONBOARD, VOICE_PARTS, VOICE_SOURCES, compatibleVoiceRecipe } from '../../src/data/onboardbank';
-import { RECORDING_SOURCES } from '../../src/data/ridelog';
-import { STATIONS } from '../../src/data/line2';
+  ONBOARD_DESTINATIONS, RECORDED_ONBOARD, VOICE_PARTS, VOICE_SOURCES, compatibleVoiceRecipe } from '../../src/data/audio/onboardbank';
+import { RECORDING_SOURCES } from '../../src/data/audio/ridelog';
+import { STATIONS } from '../../src/data/current';
 const ids = new Set<string>(), files = new Set<string>();
 for (const clip of SOUND_BANK) {
   if (ids.has(clip.id) || files.has(clip.file)) throw new Error(`Duplicate clip: ${clip.id}`);

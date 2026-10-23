@@ -18,24 +18,13 @@
  */
 import type { Topology, Dir } from './topology';
 import { linkChain } from './topology';
-import { PROFILE_ANCHORS, LINE_INFO } from '../data/line2';
+import { PROFILE_ANCHORS, LINE_INFO, SIMULATION } from '../data/current';
 
 export const G = 9.81;
 
 /** rail depth of the underground stations by name (m below ground), others STATION_DEPTH */
-const DEPTH: Record<string, number> = {
-  虹桥火车站: 18, 人民广场: 16, 南京东路: 18, 陆家嘴: 19, 世纪大道: 17, 龙阳路: 15,
-};
-const STATION_DEPTH = 14;
-const ELEVATED = 12;
-const GROUND = 1;
-/** level stretch either side of a station centre (half platform plus run-off, m) */
-const FLAT = 115;
-const RAMP = 0.024;
-const VALLEY = 0.003;
-const MAX_DIP = 9;
-/** the river crossing: lowest rail level and where it is */
-const RIVER = { from: '南京东路', to: '陆家嘴', depth: 34, grade: 0.027 };
+const { depths: DEPTH, stationDepth: STATION_DEPTH, elevated: ELEVATED, ground: GROUND,
+  flat: FLAT, ramp: RAMP, valley: VALLEY, maxDip: MAX_DIP, river: RIVER } = SIMULATION.gradient;
 
 export interface Profile { ch: number[]; h: number[] }
 
@@ -65,7 +54,7 @@ function buildProfile(topo: Topology): Profile {
     const h1 = levelOf(n);
     const a = s.chain + FLAT, b = n.chain - FLAT;
     const L = b - a;
-    if (s.name === RIVER.from && n.name === RIVER.to) {
+    if (RIVER && s.name === RIVER.from && n.name === RIVER.to) {
       const low = -RIVER.depth;
       const da = (h0 - low) / RIVER.grade, db = (h1 - low) / RIVER.grade;
       add(a + da, low);

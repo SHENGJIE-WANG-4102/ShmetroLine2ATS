@@ -5,7 +5,7 @@
  */
 import type { Sim } from './engine';
 import type { StopTask, Train } from './model';
-import { STATIONS, LINE_INFO } from '../data/line2';
+import { STATIONS, LINE_INFO } from '../data/current';
 import { callCrowd } from './radio';
 import { ahead } from './topology';
 

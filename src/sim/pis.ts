@@ -5,8 +5,9 @@
  */
 import type { Sim } from './engine';
 import type { PisData, PisRow, TrackDir } from './model';
-import { STATIONS, LINE_INFO } from '../data/line2';
-import { FIRST_LAST } from '../data/firstlast';
+import { STATIONS, LINE_INFO, SIMULATION } from '../data/current';
+const RULES = SIMULATION.pis;
+import { FIRST_LAST } from '../data/current';
 import { PERF } from './dynamics';
 import { serviceEnd } from './timetable';
 
@@ -24,10 +25,7 @@ export function formatPisCountdown(row: PisRow | undefined): string {
 export interface PisFirstLast { destination: string; first: string; last: string }
 
 /** Screen time is wall-clock time, independent of simulation speed. 10-16 video measurements, D86. */
-export const PIS_TIMING = {
-  pageMs: 4450, scrollingPageMs: 13350, footerMs: 2500,
-  slideMs: 350, footerSlideMs: 300, englishWidthsPerSecond: 0.15,
-} as const;
+export const PIS_TIMING = RULES.timing;
 
 export interface PisCycleState { page: number; since: number }
 
@@ -51,17 +49,19 @@ export function selectPisFirstLast(station: string, track: TrackDir, first?: Pis
   const dest = to && to.name !== station ? to.id : undefined;
   // 【假设】龙阳路、淞虹路等其他终点没有单独的官方列，沿用该方向大交路。
   // 无车或本站终到时也按站台方向显示，避免把到达本站的车当成发车方向。
-  const service = dest === 'GLL' ? 'GLL' : dest === 'PXL' ? 'PXL' : dest === 'PDA' ? 'PDA' : track === 'DN' ? 'PDA' : 'PXL';
+  const rules = RULES.destinations;
+  const service = rules.find(r => r.station === dest) ?? rules.find(r => r.station === RULES.defaults[track]);
+  if (!service) return [];
   const time = (s: string) => s ? `${String(Number(s.slice(0, 2)) % 24).padStart(2, '0')}${s.slice(2)}` : '--:--';
-  const item = (id: 'PDA' | 'GLL' | 'PXL'): PisFirstLast => ({
-    destination: STATIONS.find((s) => s.id === id)!.name,
-    first: time(id === 'PXL' ? row.firstW : row.firstE),
-    last: time(id === 'PXL' ? row.lastW : id === 'GLL' ? row.lastG : row.lastE),
+  const item = (rule: typeof service): PisFirstLast => ({
+    destination: STATIONS.find(s => s.id === rule.station)!.name,
+    first: time(row[rule.first]), last: time(row[rule.last]),
   });
-  // 实拍江苏路往东同时列机场与广兰路，第一班的目的地置于首行。
-  const services: ('PDA' | 'GLL' | 'PXL')[] = [service];
-  if (service === 'PDA' && row.lastG) services.push('GLL');
-  else if (service === 'GLL') services.push('PDA');
+  const services = [service];
+  for (const alt of service.alternatives) {
+    const target = rules.find(r => r.station === alt.station);
+    if (target && (!alt.when || row[alt.when])) services.push(target);
+  }
   return services.map(item);
 }
 
@@ -158,10 +158,10 @@ export function computePis(sim: Sim, station: number): PisData {
   if (sim.plat[s.platforms.DN].esp || sim.plat[s.platforms.UP].esp) notes.push('站台临时停止服务，请听从工作人员指挥');
   if (sim.plat[s.platforms.DN].surge > 1 || sim.plat[s.platforms.UP].surge > 1) notes.push('本站客流较大，请有序候车，注意安全');
   if (sim.plat[s.platforms.DN].limitUntil > sim.t) notes.push('本站实施客流控制，请耐心等候');
-  if (sim.env.wind > 0 || sim.env.rain) notes.push('受天气影响，东段高架区段列车限速运行');
+  if (sim.env.wind > 0 || sim.env.rain) notes.push(RULES.weatherNotice);
   for (const a of sim.alarms.values()) {
     if ((a.level === 'A' || a.level === 'B') && (a.cat === '信号' || a.cat === '列车')) { notes.push('因设备故障，列车运行间隔有所延长，请耐心候车'); break; }
   }
-  out.notice = notes[0] ?? `欢迎乘坐上海地铁2号线 · ${STATIONS[station].name}站`;
+  out.notice = notes[0] ?? `${RULES.welcome} · ${STATIONS[station].name}站`;
   return out;
 }

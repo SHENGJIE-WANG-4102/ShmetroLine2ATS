@@ -2,7 +2,7 @@
 import type { Sim } from './engine';
 import type { Block, SimConfig, VehicleRecord, YardState } from './model';
 import type { Topology } from './topology';
-import { FLEET, LINE_INFO, OPERATIONS } from '../data/line2';
+import { FLEET, LINE_INFO, OPERATIONS } from '../data/current';
 import { depotMoves, yardNeed } from './timetable';
 
 export type FleetState = Pick<Sim, 'topo' | 'plan' | 'yards' | 'vehicles' | 'depotStock' | 'config' | 't'> & Pick<Sim, 'log'>;

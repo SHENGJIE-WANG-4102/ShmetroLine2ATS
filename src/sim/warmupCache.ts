@@ -1,6 +1,7 @@
 import type { SimConfig, Plan } from './model';
 import { capture, restore, type Checkpoint } from './state';
 import type { Sim } from './engine';
+import { assertScope, currentScope } from '../data/scope';
 
 const DB = 'atssim-warmup';
 const STORE = 'checkpoints';
@@ -29,7 +30,8 @@ export function restoreWarmup(sim: Sim, saved: WarmupCheckpoint) {
 }
 
 export async function warmupKey(config: SimConfig, plan: Plan, sources: Record<string, unknown>): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify([sources, plan, config], (_key,value) =>
+  if (config.scope) assertScope(config.scope);
+  const bytes = new TextEncoder().encode(JSON.stringify([currentScope(), sources, plan, config], (_key,value) =>
     value && typeof value === 'object' && !Array.isArray(value)
       ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))) : value));
   const hash = await crypto.subtle.digest('SHA-256', bytes);

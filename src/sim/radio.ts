@@ -11,7 +11,7 @@
  */
 import type { Sim } from './engine';
 import type { RadioCall, Train } from './model';
-import { STATIONS } from '../data/line2';
+import { STATIONS } from '../data/current';
 import { cmdAuthRM, cmdRescue, rescueApproach, trainLabel, answerOverrun } from './ats';
 import { grantRM, answerDegrade, answerEbRelease } from './onboard';
 import { setBypass } from './psd';

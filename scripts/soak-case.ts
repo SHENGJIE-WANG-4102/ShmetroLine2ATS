@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync, writeSync, renameSync } from 'node:fs';
 import { Sim } from '../src/sim/engine';
 import { exportDiagnostics, stringifyDiagnostics } from '../src/sim/diagnostics';
 import { OVERLAY_PRESETS, dayPeriods } from '../src/sim/timetable';
-import { STATIONS } from '../src/data/line2';
+import { STATIONS } from '../src/data/current';
 import { profile } from '../src/sim/calibration';
 /** minimum share of planned passenger trips delivered, by fault level (level 3 is not gated, D23) */
 const DELIVERY_GATE: Record<number, number> = { 1: .95, 2: .90 };

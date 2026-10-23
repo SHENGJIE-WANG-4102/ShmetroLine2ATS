@@ -4,7 +4,7 @@
 import type { Sim } from './engine';
 import { injectTraction, injectDoor, injectBrake, clearVehicleFault } from './vehicle';
 import type { Fault, FaultKind, Command } from './model';
-import { STATIONS } from '../data/line2';
+import { STATIONS, supportsSignalSystem } from '../data/current';
 import { cancelRoute, committedTrain } from './interlocking';
 import { withdrawAuthority } from './movement';
 import { failTrain, recoverTrain, trainLabel, rescueBlockedByConsist } from './ats';
@@ -117,7 +117,7 @@ export function injectFault(sim: Sim, kind: FaultKind, target: number, duration:
       const zones = target < 0 ? topo.zones.map((z) => z.id) : [target];
       for (const z of zones) sim.zoneState[z] = 'ZCFAIL';
       f.text = target < 0 ? 'DCS/ZC 全线故障' : `${topo.zones[target].name} 区域控制器故障`;
-      sim.log('A', '信号', `${f.text}：区域内CBTC列车失去移动授权，需切换至TBTC后备系统`, { key: `zc-${target}` });
+      sim.log('A', '信号', `${f.text}：区域内CBTC列车失去移动授权，${supportsSignalSystem('TBTC') ? '需切换至TBTC后备系统' : '本线路无TBTC后备，停车等待区域控制恢复'}`, { key: `zc-${target}` });
       break;
     }
     case 'axle': {

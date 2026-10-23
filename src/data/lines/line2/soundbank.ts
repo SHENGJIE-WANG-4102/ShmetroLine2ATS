@@ -1,6 +1,7 @@
+import type { SoundClip } from '../../types';
+export type { SoundKind, SoundDirection, AnnouncementDoorSide, SoundClip } from '../../types';
 import { ONBOARD_RENDER_BANK, FIELD_1016_TERMINAL_CLIP, ONBOARD_HOLD_CLIP } from './onboardbank';
 import { DOOR_BANK } from './doorbank';
-import type { RecordingId } from './ridelog';
 export { ONBOARD_ANNOUNCEMENTS, ONBOARD_NEXT_DELAY_S, ONBOARD_ARRIVAL_ADVANCE_S, ONBOARD_HOLD_CLIP, ONBOARD_HOLD_DELAY_S, ONBOARD_HOLD_REPEAT_S } from './onboardbank';
 export type { OnboardAnnouncement } from './onboardbank';
 /** Local recordings only; files are not distributed with the repository (D71).
@@ -11,46 +12,11 @@ export type { OnboardAnnouncement } from './onboardbank';
  * 【假设】 platform motion/ambience/templates are reused at underground stations.
  * Interior names remain specific to the recorded station and direction.
  */
-export type SoundKind = 'arrive' | 'depart' | 'ambience' | 'prefix' | 'station-name' | 'suffix' | 'close' | 'open' | 'close-motion'
-  | 'door-warn-open' | 'door-warn-close' | 'door-motion-open' | 'door-motion-close'
-  | 'interior-departure' | 'interior-special' | 'interior-prefix' | 'interior-name' | 'interior-suffix' | 'interior-arrival' | 'interior-rolling' | 'interior-idle';
-export type SoundDirection = 'DN' | 'UP' | 'both' | 'shared';
+
+
 /** Audio door wording; B is both sides, independent of the physical snapshot. */
-export type AnnouncementDoorSide = 'L' | 'R' | 'B';
-export interface SoundClip {
-  id: string; file: string; kind: SoundKind; station: string; direction: SoundDirection;
-  side: 'east' | 'west' | 'both' | 'shared';
-  source: RecordingId | 'door-reference' | 'cabin-reference' | 'hold-reference' | 'ride-1021-east' | 'ride-1021-west';
-  /** Original range; for composed clips this is only the first library part.
-   * All constituent source clocks/ranges are resolved through composition;
-   * composed duration is durationS, never the first part's range length. */
-  range: [number, number]; both: boolean; confidence: 'high' | 'medium' | 'low';
-  stopAt?: number; startAt?: number;
-  /** Trimming foreign PA may end the audio before the unchanged stop clock. */
-  anchorAfterTail?: boolean;
-  fadeInS?: number; fadeOutS?: number;
-  /** Whole source uses this reference's constant gain; never per-clip loudnorm. */
-  sourceGain?: 'platform-01' | 'platform-03' | 'ride-east' | 'ride-west';
-  /** Verified source-clock voice window; absent means no reliable PA to meter. */
-  voiceRange?: [number, number];
-  /** Optional other side's anchor; both recordings require compatible timing. */
-  otherAt?: number; anchorErrorS?: number; advanceS?: number; name?: string;
-  loopCrossfadeS?: number; truncatedTail?: boolean;
-  /** Unavoidable PA inside a movement recording: never announce twice or lie about destination. */
-  embeddedDestination?: string;
-  /** Fixed extraction filters; remove intelligible voices from the cabin floor. */
-  effects?: 'cabin-floor' | 'rolling-noise' | 'door-warning' | 'door-mechanism';
-  provenance?: 'original' | 'composed';
-  recordedDestination?: string;
-  /** Present when direction-neutral whole arrival audio is reused unchanged. */
-  recordedDirection?: 'DN' | 'UP';
-  destination?: string;
-  doorSide?: AnnouncementDoorSide;
-  /** Ordered library parts, rendered offline with 30 ms seams.
-   * JSL borrows its exact proper name from platform PA by user decision. */
-  composition?: readonly string[];
-  durationS?: number;
-}
+
+
 export const SOUNDBANK_DIRECTORY = 'sounds/field-20261014';
 /** D71: source PA references. One constant gain preserves on-site balance.
  * 【假设】 -16 LUFS nominal, with common source headroom if needed. */
@@ -79,7 +45,5 @@ export const SOUND_BANK: readonly SoundClip[] = [
   {"id":"onboard-idle","file":"onboard-idle.mp3","kind":"interior-idle","station":"静安寺","direction":"shared","side":"shared","source":"ride-east","range":[134,146],"loopCrossfadeS":1,"effects":"cabin-floor","both":false,"confidence":"medium"},
 ];
 
-export function clipDuration(clip: SoundClip): number {
-  return clip.durationS ?? (clip.range[1] - clip.range[0] - (clip.loopCrossfadeS ?? 0));
-}
+export { clipDuration } from '../../audioUtils';
 

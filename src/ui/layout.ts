@@ -7,6 +7,7 @@
  * logical canvas, and the regions re-flow (the schematic then pans).
  */
 import { DESIGN_W, DESIGN_H } from './theme';
+import { LINE } from '../data/current';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -27,7 +28,7 @@ export interface Regions {
 
 export const UI_SCALES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
-const LS = (k: string) => `ats2.${k}`;
+const LS = (k: string) => `${LINE.ui.preferencePrefix}.${k}`;
 
 export function loadPref<T>(key: string, def: T): T {
   try {

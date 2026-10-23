@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>上海轨道交通2号线 ATS 中央监视</title>
+    <title>轨道交通 ATS 中央监视</title>
     <link rel="icon" type="image/png" href="./src/ui/assets/metro-logo.png" />
   </head>
   <body>
@@ -12,11 +12,16 @@
     <div id="boot">
       <div class="boot-box">
         <img class="boot-logo" src="./src/ui/assets/metro-logo.png" alt="上海地铁" />
-        <div class="boot-title">上海轨道交通2号线 · ATS 中央监视</div>
+        <div class="boot-title">轨道交通 · ATS 中央监视</div>
         <div class="boot-sub" id="boot-msg">正在加载线路数据与运行图…</div>
         <div class="boot-bar"><div id="boot-progress"></div></div>
       </div>
     </div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module">
+      import('./src/main.ts').catch(error => {
+        document.getElementById('boot-msg').textContent = `启动失败：${error instanceof Error ? error.message : String(error)}`;
+        console.error(error);
+      });
+    </script>
   </body>
 </html>

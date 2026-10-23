@@ -9,7 +9,7 @@ import { makeSim, runFor, runUntil, assertNoCollision, assertIntegrity, dirOf } 
 import { capture, restore, fingerprint } from '../src/sim/state';
 import { computePis } from '../src/sim/pis';
 import { yardCount } from '../src/sim/yard';
-import { LINE_INFO, FLEET, fleetEntry } from '../src/data/line2';
+import { LINE_INFO, FLEET, fleetEntry } from '../src/data/current';
 import { nextLink } from '../src/sim/topology';
 import { scanAhead, goalBerth, refreshAuthority, MA_NEAR } from '../src/sim/movement';
 import { dmiTrainNo, computeDmi } from '../src/sim/dmi';

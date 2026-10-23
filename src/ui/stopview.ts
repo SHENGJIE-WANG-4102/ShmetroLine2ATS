@@ -23,7 +23,7 @@
  */
 import { h } from './dom';
 import type { TrainSnap, DmiData } from '../sim/model';
-import { STATIONS } from '../data/line2';
+import { LINE as CURRENT_LINE, STATIONS } from '../data/current';
 import { FONT_CN } from './theme';
 
 const W = 760;
@@ -58,8 +58,7 @@ const CAB_DOOR_W = 0.6;
 const NOSE = 0.55;
 /** distance before the mark at which the view appears (m) */
 export const STOPVIEW_RANGE = 300;
-/** Line 2 green */
-const LINE = '#8cc220';
+const LINE = CURRENT_LINE.branding.color;
 
 const C = {
   bg: '#0b0f16',

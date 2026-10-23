@@ -1,6 +1,6 @@
 /** Local-only 02A05 inverter takes, read by measured stator frequency. */
-import { VVVF_HZ_PER_MS, VVVF_TAKES, type VvvfClip, type VvvfTake } from '../data/vvvf';
-import { fleetEntry } from '../data/line2';
+import { VVVF_HZ_PER_MS, VVVF_TAKES, type VvvfClip, type VvvfTake } from '../data/audio/vvvf';
+import { fleetEntry } from '../data/current';
 import type { TrainSnap } from '../sim/model';
 
 export type VvvfMode = 'power' | 'brake' | 'cruise' | 'off';
@@ -30,7 +30,8 @@ export function chooseVvvfTake(identity: VvvfIdentity, clip: Clip, takes: readon
 
 /** Snapshot acceleration is motor effort: safety braking wins over planned phase. */
 export function inverterMode(train: Pick<TrainSnap, 'vehicle' | 'v' | 'a' | 'manual' | 'atoPhase' | 'eb' | 'failed' | 'phase'>): VvvfMode {
-  if (fleetEntry(train.vehicle)?.type !== '02A05' || train.eb || train.failed || train.phase !== 'run' || train.v <= 0) return 'off';
+  if (!VVVF_TAKES.some(take => take.vehicleType === fleetEntry(train.vehicle)?.type)
+    || train.eb || train.failed || train.phase !== 'run' || train.v <= 0) return 'off';
   if (train.a < -.05) return 'brake';
   if (train.manual) return train.a > .03 ? 'power' : 'off';
   if (train.atoPhase === 'hold') return 'cruise';

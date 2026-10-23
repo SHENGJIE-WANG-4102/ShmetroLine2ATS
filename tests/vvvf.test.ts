@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { VVVF_TAKES } from '../src/data/vvvf';
+import { VVVF_TAKES } from '../src/data/audio/vvvf';
 import { chooseVvvfTake, inverterMode, VvvfSound, vvvfTimeAt } from '../src/ui/vvvf';
 import type { TrainSnap } from '../src/sim/model';
 

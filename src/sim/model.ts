@@ -6,6 +6,7 @@ import type { Dir } from './topology';
 import type { HaltCode, Halt, ArsWait } from './halt';
 import type { TurnbackState, DepotState, PsdState, FaultState } from './fsm';
 import type { AtoState, SectionPlan } from './dynamics';
+import type { LineScope } from '../data/scope';
 
 export type DayType = 'weekday' | 'weekend';
 export type Level = 'CBTC' | 'TBTC';
@@ -611,6 +612,8 @@ export type Command =
   | { c: 'bookmark'; label: string };
 
 export interface SimConfig {
+  /** Fixed at process startup; absent only in old configurations or fresh defaults. */
+  scope?: LineScope;
   dayType: DayType;
   depotStock?: number[];
   dateLabel: string;

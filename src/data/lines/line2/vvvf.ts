@@ -1,3 +1,5 @@
+import type { VvvfTake } from '../../types';
+export type { VvvfClip, VvvfTake } from '../../types';
 /**
  * 02A05 traction sound (TKQ506B-2000 IGBT-VVVF, 纵横机电): where in two
  * recordings the inverter runs at a given stator frequency.
@@ -39,13 +41,8 @@ export const VVVF_BRAKE: [number, number][] = [
   [22, 31.9], [23, 27.7], [30.1, 0],
 ];
 
-export interface VvvfClip {
-  file: string;
-  table: [number, number][];
-  /** [begin seconds, end seconds, f1 Hz] for synchronous steady resampling. */
-  plateau: [number, number, number];
-}
-export interface VvvfTake { id: string; vehicleType: string; power: VvvfClip; brake: VvvfClip }
+
+
 
 /**
  * Measured local-only takes. Post p1/p2: 2025-08-04, 02113; pre 1:

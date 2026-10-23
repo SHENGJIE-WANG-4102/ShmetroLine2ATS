@@ -1,3 +1,4 @@
+export type {  } from '../../types';
 /** D71: recorded warning and mechanism are separate assets. No passenger text.
  * 【假设】 narrow warning bands are isolated; the same bands are rejected from
  * mechanism tracks so concurrent playback does not double the warning.

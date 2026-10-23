@@ -4,7 +4,7 @@
  */
 import type { Sim } from './engine';
 import type { Possession } from './model';
-import { EXPOSED, WEATHER_RULES, POSSESSIONS, STATIONS } from '../data/line2';
+import { EXPOSED, WEATHER_RULES, POSSESSIONS, STATIONS } from '../data/current';
 import { openCall, possReqSpec, possRelSpec } from './radio';
 import { DRY_AFTER, railWet, scatterSlick } from './adhesion';
 

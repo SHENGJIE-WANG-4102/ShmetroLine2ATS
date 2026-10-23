@@ -1,3 +1,5 @@
+import type { SourceRef, StationData, CrossoverDef, SidingDef, PairDef, LoopDef, TailDef, DepotDef } from '../../types';
+export type { SourceRef, StationData, CrossoverKind, CrossoverDef, LeadDef, SidingDef, SidingLane, PairStubDef, PairDef, LoopDef, TailDef, DepotDef, FixedRun } from '../../types';
 /**
  * 上海轨道交通2号线 线路基础数据
  *
@@ -12,12 +14,7 @@
  * worker and the renderer consume.
  */
 
-export interface SourceRef {
-  id: string;
-  title: string;
-  url: string;
-  used: string;
-}
+
 
 export const SOURCES: SourceRef[] = [
   {
@@ -100,30 +97,7 @@ export const SOURCES: SourceRef[] = [
   },
 ];
 
-export interface StationData {
-  /** Platform display hardware; omitted stations use the classic vertical information column. */
-  pisLayout?: 'classic' | 'wide';
-  /** short stable id used in code */
-  id: string;
-  /** current official Chinese name */
-  name: string;
-  /** Cab display spelling confirmed by a Line 2 photo; otherwise use name. */
-  dmiName?: string;
-  /** former name(s), for the info panel */
-  formerName?: string;
-  /** distance from the previous station in metres (source: wiki-zh), null for the first */
-  interM: number | null;
-  /** interchange lines (display only) */
-  transfers: string[];
-  /** planned base dwell in seconds (approximation) */
-  dwell: number;
-  /** relative passenger demand weight (approximation, 1 = average) */
-  demand: number;
-  /** tracks served by a side platform (outside the track); every other face is
-   *  an island between the two mains. Source: pdf-peixian where the PDF shows
-   *  the platform, island otherwise (approximation) */
-  sidePlatform?: ('DN' | 'UP')[];
-}
+
 
 /**
  * Stations, west → east. `interM` values are the 站间距 column of the
@@ -180,15 +154,7 @@ export const STATION_EN: Record<string, string> = {
 };
 
 /** Station chainage (platform centre) in metres from 蟠祥路·国家会计学院. */
-export function stationChainages(): number[] {
-  const out: number[] = [];
-  let c = 0;
-  for (const s of STATIONS) {
-    if (s.interM !== null) c += s.interM;
-    out.push(c);
-  }
-  return out;
-}
+
 
 export const LINE_INFO = {
   name: '上海轨道交通2号线',
@@ -230,9 +196,7 @@ export const FLEET: { no: string; type: string; n: number }[] = FLEET_TYPES.flat
   }));
 
 /** fleet entry for a train number, or undefined */
-export function fleetEntry(no: string): { no: string; type: string; n: number } | undefined {
-  return FLEET.find((f) => f.no === no);
-}
+
 
 /**
  * 上行 / 下行 convention used throughout the UI. The real Shanghai Metro
@@ -249,58 +213,19 @@ export const DIRECTIONS = {
 // turnback tracks and sidings are not public)
 // ---------------------------------------------------------------------------
 
-export type CrossoverKind = '/' | '\\';
 
-export interface CrossoverDef {
-  /** station index the crossover belongs to (for naming) */
-  station: number;
-  /** offset of crossover centre from the station centre (m, + = east) */
-  offset: number;
-  kind: CrossoverKind;
-}
+
+
 
 /** a stub track's far end runs on into a depot (出入段线) */
-export interface LeadDef {
-  /** depot id (LAYOUT.depots) */
-  depot: string;
-  /** entry-only / exit-only conversion track; omitted = both ways */
-  flow?: 'in' | 'out';
-}
 
-export interface SidingDef {
-  id: string;
-  name: string;
-  station: number;
-  /** direction the stub runs from its attached end towards its buffer */
-  side: 'west' | 'east';
-  /** signed offset of the attached end from the station centre (m, + = east);
-   *  the turnout(s) on the main line lie 40 m back from it */
-  at: number;
-  length: number;
-  /** mains the stub is connected to: both through a Y (default) or one turnout */
-  connect?: 'both' | 'UP' | 'DN';
-  /** schematic lane: between the mains (default), the upper / lower half of
-   *  that space (paired stubs), or outside a main along the platform */
-  lane?: SidingLane;
-  /** usable for reversing (default true); storage-only sidings set false */
-  turnback?: boolean;
-  /** the stub is a depot lead: instead of a buffer it runs on into the yard */
-  lead?: LeadDef;
-  /** a second turnout on the stub, `at` m from its attached end, with a
-   *  connector running on to `main` (龙阳路: middle track → UP main) */
-  link?: { main: 'UP' | 'DN'; at: number };
-}
 
-export type SidingLane = 'mid' | 'midUP' | 'midDN' | 'outUP' | 'outDN';
+
+
+
 
 /** one of the two tracks behind a double Y */
-export interface PairStubDef {
-  id: string;
-  name: string;
-  length: number;
-  turnback?: boolean;
-  lead?: LeadDef;
-}
+
 
 /**
  * Two middle tracks joined to both mains by a double Y with a diamond
@@ -310,59 +235,18 @@ export interface PairStubDef {
  * Either middle track is reachable from either main; UP → upper and DN →
  * lower can be used at the same time.
  */
-export interface PairDef {
-  id: string;
-  station: number;
-  /** direction the middle tracks run from the junction */
-  side: 'west' | 'east';
-  /** signed offset of the start of the middle tracks from the station centre (m);
-   *  the main-line turnouts lie 80 m back from it */
-  at: number;
-  /** [upper (UP side), lower (DN side)] */
-  stubs: [PairStubDef, PairStubDef];
-}
+
 
 /**
  * Middle track between the mains joined at both ends to both mains through a
  * Y (待避/存车线). With `platform` it runs past an island platform shared with
  * the UP main, and small-loop trains reverse at that platform (广兰路).
  */
-export interface LoopDef {
-  id: string;
-  name: string;
-  station: number;
-  /** offsets of the west and east Y from the station centre (m) */
-  west: number;
-  east: number;
-  platform?: boolean;
-}
 
-export interface TailDef {
-  station: number;
-  side: 'west' | 'east';
-  /** usable tail length beyond the last switch */
-  length: number;
-  /** scissors crossover between the platform and the tails (default true);
-   *  without one the mains just run on to buffers */
-  scissors?: boolean;
-  /** usable for reversing (default true) */
-  turnback?: boolean;
-}
 
-export interface DepotDef {
-  id: string;
-  name: string;
-  short: string;
-  /** station the depot leads join the line at */
-  station: number;
-  stablingTracks: number;
-  /** 【假设】能力按用户决定及配线图 V2025.26.2 建模；检修库不占停车列位。 */
-  work: { daily: boolean; monthly: boolean; overhaul: boolean };
-  capacity: number;
-  /** seconds from leaving a stabling track to reaching the transfer-track gate */
-  exitTime: number;
-  source: string;
-}
+
+
+
 
 export const LAYOUT = {
   /** terminal tail tracks (站后尾轨). Layout per the 配线图 PDF, see docs/layout-pdf.md */
@@ -605,16 +489,7 @@ export const OPERATIONS = {
  * `alight` (and at `to`), passing the other stations at the platform pass
  * limit. The train comes from `depotFrom`'s side and goes into `depotTo`.
  */
-export interface FixedRun {
-  from: string; to: string;
-  /** departures from `from` (s since midnight of the service day) */
-  departures: number[];
-  /** stations where passengers may board (and alight) */
-  board: string[];
-  /** stations where passengers may only alight */
-  alight: string[];
-  depotFrom: string; depotTo: string;
-}
+
 
 // ---------------------------------------------------------------------------
 // Environment (APPROXIMATIONS)

@@ -45,7 +45,8 @@ import { updateOnboard, setManual, cmdTrainLevel, cmdTrainDto, cmdLineAto, autho
 import { psdTick, psdOpen, setBypass, doorMotionTick } from './psd';
 import { updateHalts, HALT } from './halt';
 import { newIntegrity, checkSafety, checkLiveness, type IntegrityState } from './invariants';
-import { LINE_INFO, STATIONS } from '../data/line2';
+import { LINE_INFO, STATIONS, supportsSignalSystem } from '../data/current';
+import { assertScope, currentScope } from '../data/scope';
 import { validateCommand } from './commands';
 import { preparePlan } from './planning';
 import { cmdStandbyRelief, standbyTick } from './standby';
@@ -196,13 +197,15 @@ export class Sim {
     const tr = this.trains.get(train);
     if (!tr?.manual || !Number.isFinite(notch)) return false;
     tr.notch = Math.max(-8, Math.min(4, Math.round(notch)));
-    if (!this.replaying) this.inputLog.push({ t: this.t, drive: { train, notch: tr.notch } });
+    if (!this.replaying) this.inputLog.push({ scope: currentScope(), t: this.t, drive: { train, notch: tr.notch } });
     return true;
   }
 
   /** `from`: the previous operating day at its rollover, whose world carries on (D111) */
   constructor(config: SimConfig, from?: Sim) {
-    this.config = config;
+    if (config.scope) assertScope(config.scope);
+    if (from) assertScope(from.config.scope);
+    this.config = config = { ...config, scope: currentScope() };
     if (!sharedTopo) {
       sharedTopo = buildTopology();
       sharedRt = computeRunTimes(sharedTopo, LINE_INFO.trainLength);
@@ -475,7 +478,7 @@ export class Sim {
 
   /** a dispatcher command; `by` names a non-human issuer (自动调度) in the log */
   command(cmd: Command, by?: string): CmdResult {
-    if (!by && !this.replaying) this.inputLog.push({ t: this.t, cmd: structuredClone(cmd) });
+    if (!by && !this.replaying) this.inputLog.push({ scope: currentScope(), t: this.t, cmd: structuredClone(cmd) });
     const error = validateCommand(this, cmd);
     if (error) {
       this.log('C', '调度', `命令拒绝：${error}`, { manual: !by });
@@ -607,6 +610,7 @@ export class Sim {
         return { ok: true, msg: preview.msg };
       }
       case 'zoneLevel': {
+        if (!supportsSignalSystem(cmd.level)) return { ok: false, msg: `当前线路不支持 ${cmd.level} 信号制式` };
         const names: string[] = [];
         for (const z of cmd.zones) {
           const cur = this.zoneState[z];

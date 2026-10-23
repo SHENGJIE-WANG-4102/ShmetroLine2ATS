@@ -20,7 +20,7 @@ import { PSD, inTable, type PsdState } from './fsm';
 import { trainLabel } from './ats';
 import { callPsd } from './radio';
 import { DOOR_CLOSE_S } from './calibration';
-import { OPERATIONS } from '../data/line2';
+import { OPERATIONS } from '../data/current';
 import { doorCloseHold } from './vehicle';
 import { simulatedAmDriver } from './onboard';
 

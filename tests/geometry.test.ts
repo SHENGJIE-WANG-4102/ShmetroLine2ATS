@@ -3,7 +3,7 @@ import {Geometry} from '../src/ui/geometry';
 import type {Topology} from '../src/sim/topology';
 import {buildTopology} from '../src/sim/topology';
 import {lineWindow,stationWindow} from '../src/ui/geometry';
-import {LINE_INFO} from '../src/data/line2';
+import {LINE_INFO} from '../src/data/current';
 
 const length=(segments:ReturnType<Geometry['trainBody']>)=>segments.reduce((n,s)=>n+Math.hypot(s.x2-s.x1,s.y2-s.y1),0);
 function geometry() {

@@ -2,7 +2,7 @@
  * Last-train connections at the interchanges (末班车换乘衔接), D63/D133.
  *
  * Two kinds, both from the other lines' published last trains
- * (src/data/lasttrains.ts), counted only where the timetables connect:
+ * (src/data/current.ts), counted only where the timetables connect:
  *  - feed (他线 → 2号线): the last Line 2 train a transferring passenger from
  *    another line's last train can still take;
  *  - onward (2号线 → 他线): the last Line 2 arrival from which the other
@@ -15,8 +15,8 @@
 import type { Sim } from './engine';
 import type { Connection, StopTask, TrackDir, Train } from './model';
 export type { Connection };
-import { STATIONS } from '../data/line2';
-import { OTHER_LAST_TRAINS } from '../data/lasttrains';
+import { STATIONS, LINE_INFO } from '../data/current';
+import { OTHER_LAST_TRAINS } from '../data/current';
 import { parseIso } from './calendar';
 import { trainLabel } from './ats';
 
@@ -81,7 +81,7 @@ export function connectionDeparture(sim: Sim, tr: Train, task: StopTask) {
     if (c.kind === 'feed') {
       // passengers of the other line's last train reach the platform at planned + walk
       if (sim.t + 1 >= c.planned + c.walk) c.state = 'made';
-      else miss(sim, c, `2号线${DIR_NAME[c.dir]}末班 ${trainLabel(tr)} ${hhmm(sim.t)} 发车，${subject(c)}的换乘乘客 ${hhmm(c.planned + c.walk)} 才到站台`);
+      else miss(sim, c, `${LINE_INFO.shortName}${DIR_NAME[c.dir]}末班 ${trainLabel(tr)} ${hhmm(sim.t)} 发车，${subject(c)}的换乘乘客 ${hhmm(c.planned + c.walk)} 才到站台`);
     } else {
       // the transfer walks from the arrival
       if (tr.arrivedAt + c.walk <= c.planned) c.state = 'made';

@@ -10,8 +10,8 @@ import { join, resolve, relative, isAbsolute, dirname } from 'node:path';
 import { deserialize } from 'node:v8';
 import { Sim } from '../src/sim/engine';
 import { restore, type Checkpoint } from '../src/sim/state';
-import { STATIONS } from '../src/data/line2';
-import { SOUND_BANK } from '../src/data/soundbank';
+import { STATIONS } from '../src/data/current';
+import { SOUND_BANK } from '../src/data/audio/soundbank';
 import { StationSoundPlanner, stationFrame, predictStationStop, type StationAudioFrame, type StationTrain } from '../src/ui/stationaudio';
 import { onboardFrame, OnboardSoundPlanner, type OnboardAudioFrame } from '../src/ui/onboardaudio';
 

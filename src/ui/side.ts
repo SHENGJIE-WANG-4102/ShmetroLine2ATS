@@ -10,7 +10,7 @@ import { CommandPanel, type PanelHooks } from './cmdpanel';
 import { confirmAndSend, toast, showIntegritySnapshot } from './confirm';
 import { FAULT_LABELS } from '../sim/faults';
 import { SCENARIOS, RANDOM_LEVELS } from '../sim/scenario';
-import { STATIONS, LINE_INFO, WEATHER_RULES } from '../data/line2';
+import { LINE, STATIONS, LINE_INFO, WEATHER_RULES } from '../data/current';
 import type { FaultKind, RadioCall, SimEvent } from '../sim/model';
 import type { Audio } from './audio';
 import { inverterMode, type VvvfMode } from './vvvf';
@@ -322,15 +322,15 @@ export class SidePanel {
     const hm = (t: number) => fmtTime(t).slice(0, 5);
     const line = (c: (typeof list)[number]) => `${/^\d+$/.test(c.line) ? `${c.line}号线` : c.line}往${c.toward}`;
     const trip = (id: number) => snap.trains.find((t) => t.tripId === id);
-    this.tabBody.append(h('div', { class: 'sect-title' }, '末班接续（他线末班 ↔ 2号线）'),
-      h('div', { class: 'hint' }, '按各线公布的末班时刻能衔接的换乘。各线不互相等候（车站广播提醒乘客注意换乘线路首末班时间），2号线晚点赶不上的换乘乘客记为滞留。'),
-      h('table', { class: 'grid' }, h('thead', {}, h('tr', {}, h('th', {}, '车站'), h('th', {}, '接续'), h('th', {}, '他线'), h('th', {}, '2号线'), h('th', {}, '状态'))),
+    this.tabBody.append(h('div', { class: 'sect-title' }, `末班接续（他线末班 ↔ ${LINE.branding.shortName}）`),
+      h('div', { class: 'hint' }, `按各线公布的末班时刻能衔接的换乘。各线不互相等候（车站广播提醒乘客注意换乘线路首末班时间），${LINE.branding.shortName}晚点赶不上的换乘乘客记为滞留。`),
+      h('table', { class: 'grid' }, h('thead', {}, h('tr', {}, h('th', {}, '车站'), h('th', {}, '接续'), h('th', {}, '他线'), h('th', {}, LINE.branding.shortName), h('th', {}, '状态'))),
         h('tbody', {}, ...list.map((c) => {
           const tr = trip(c.trip);
           const [label, style] = STATE[c.state];
           return h('tr', { style: tr ? 'cursor:pointer' : '', onclick: () => { if (tr) { this.store.select({ kind: 'train', id: tr.id }); this.hooks.locate(); } } },
             h('td', {}, STATIONS[c.st].name),
-            h('td', {}, c.kind === 'feed' ? `${line(c)} → 2号线${c.dir === 'DN' ? '下行' : '上行'}` : `2号线${c.dir === 'DN' ? '下行' : '上行'} → ${line(c)}`),
+            h('td', {}, c.kind === 'feed' ? `${line(c)} → ${LINE.branding.shortName}${c.dir === 'DN' ? '下行' : '上行'}` : `${LINE.branding.shortName}${c.dir === 'DN' ? '下行' : '上行'} → ${line(c)}`),
             h('td', { class: 'mono' }, hm(c.kind === 'feed' ? c.planned + 30 : c.planned)),
             h('td', { class: 'mono' }, `${hm(c.l2)}${tr && tr.delay > 60 ? `（晚${Math.round(tr.delay / 60)}′）` : ''}`),
             h('td', { style }, label));

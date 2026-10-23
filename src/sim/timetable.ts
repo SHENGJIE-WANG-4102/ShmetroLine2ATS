@@ -14,9 +14,10 @@ import { ahead } from './topology';
 import type { RunTimes } from './dynamics';
 import { cancelTrip, type Block, type DayType, type Plan, type PlanStop, type StopTask, type Task, type Trip, type TripKind, type TrackDir } from './model';
 import { plannedDwell } from './calibration';
-import { STATIONS, OPERATIONS, LINE_INFO, type FixedRun } from '../data/line2';
-import { FIXED_LATE_TRAINS } from '../data/firstlast';
-import { FIRST_LAST } from '../data/firstlast';
+import { STATIONS, OPERATIONS, LINE_INFO, SIMULATION, type FixedRun } from '../data/current';
+import { FIXED_LATE_TRAINS } from '../data/current';
+import { FIRST_LAST } from '../data/current';
+import type { ClockBand } from '../data/simulation';
 
 export interface Template {
   id: string;
@@ -32,72 +33,11 @@ export interface Template {
   continuePattern?: boolean;
 }
 
-export const TEMPLATES: Record<string, Template> = {
-  weekdayAM: {
-    id: 'weekdayAM', name: '工作日早高峰', desc: '大小交路交替：大—大—小，淞虹路—广兰路 2\'30"，外段平均 3\'45"',
-    pattern: ['big', 'big', 'small'], headway: 150, peak: true, openingAlternation: true, phase: { DN: 2 },
-  },
-  weekdayPM: {
-    id: 'weekdayPM', name: '工作日晚高峰', desc: '大小交路交替：大—大—小，淞虹路—广兰路 3\'00"，外段 4\'30"',
-    pattern: ['big', 'big', 'small'], headway: 180, peak: true, phase: { UP: 1 },
-  },
-  weekdayAMTail: {
-    id: 'weekdayAMTail', name: '早高峰退出', desc: '2:1 交路逐步退出早高峰', // 【假设】
-    pattern: ['big', 'big', 'small'], headway: 210,
-  },
-  weekdayOff: {
-    id: 'weekdayOff', name: '工作日平峰', desc: '单一大交路 5\'00"', pattern: ['big'], headway: 300,
-  },
-  weekdayEvening: {
-    id: 'weekdayEvening', name: '工作日夜间平峰', desc: '单一大交路 7\'00"', pattern: ['big'], headway: 420,
-  },
-  weekdayPMTail: {
-    id: 'weekdayPMTail', name: '晚高峰延续', desc: '2:1 延至约20:55，间隔由2\'45"逐步增至4\'00"', // 【假设】 piecewise-linear interpolation
-    pattern: ['big', 'big', 'small'], headway: 165, continuePattern: true,
-  },
-  weekdayNight: {
-    id: 'weekdayNight', name: '晚间大交路', desc: '21:00附近原小交路时隙改开机场车，3\'00"向末班8\'00"插值', // 【假设】
-    pattern: ['big'], headway: 180,
-  },
-  weekend: {
-    id: 'weekend', name: '双休日/节假日', desc: '全天单一大交路，日间 4\'30"', pattern: ['big'], headway: 270,
-  },
-  firstLast: {
-    id: 'firstLast', name: '首末班及收车', desc: '首班 05:25 起 7\'00"；21:57 后蟠祥路—广兰路 8\'00"，末班后回段/存车',
-    pattern: ['big'], headway: 420,
-  },
-};
+export const TEMPLATES: Record<string, Template> = SIMULATION.timetable.templates;
 
 export interface Period { from: number; to: number; template: string; headway?: number; headwayTo?: number; label: string }
 
-const H = (h: number, m = 0) => h * 3600 + m * 60;
-
-const DAY_PERIODS: Record<DayType, Period[]> = {
-  weekday: [
-    { from: H(4), to: H(6, 5), template: 'firstLast', label: '首班/早间' },
-    { from: H(6, 5), to: H(7, 40), template: 'weekdayOff', headway: 300, label: '早高峰前过渡' },
-    { from: H(7, 40), to: H(10), template: 'weekdayAM', label: '早高峰' },
-    { from: H(10), to: H(10, 40), template: 'weekdayAMTail', headway: 190, headwayTo: 270, label: '早高峰退出' }, // 【假设】
-    { from: H(10, 40), to: H(18, 15), template: 'weekdayOff', label: '平峰' },
-    { from: H(18, 15), to: H(19, 30), template: 'weekdayPM', label: '晚高峰' },
-    // D72: 19:44 observed ~165 s, 20:43 observed ~240 s. The
-    // interpolation between observations is 【假设】, with a 12-min 2:1
-    // cycle by 20:45. This band does not pre-position a second peak wave.
-    { from: H(19, 30), to: H(19, 45), template: 'weekdayPMTail', label: '晚高峰延续' },
-    { from: H(19, 45), to: H(20, 45), template: 'weekdayPMTail', headway: 165, headwayTo: 240, label: '晚高峰间隔渐长' },
-    { from: H(20, 45), to: H(20, 55), template: 'weekdayPMTail', headway: 240, label: '小交路收车前' },
-    { from: H(20, 55), to: H(21), template: 'weekdayNight', headway: 240, headwayTo: 180, label: '机场车接替时隙' }, // 【假设】
-    { from: H(21), to: H(21, 40), template: 'weekdayNight', headway: 240, label: '晚间大交路' }, // 【假设】
-    { from: H(21, 40), to: H(28), template: 'firstLast', headway: 240, label: '末班/收车' },
-  ],
-  weekend: [
-    { from: H(4), to: H(6, 40), template: 'firstLast', label: '首班/早间' },
-    { from: H(6, 40), to: H(7, 40), template: 'weekend', headway: 360, label: '早间过渡' },
-    { from: H(7, 40), to: H(21), template: 'weekend', label: '双休日日间' },
-    { from: H(21), to: H(21, 40), template: 'weekdayEvening', label: '夜间' },
-    { from: H(21, 40), to: H(28), template: 'firstLast', headway: 480, label: '末班/收车' },
-  ],
-};
+const DAY_PERIODS: Record<DayType, Period[]> = SIMULATION.timetable.dayPeriods;
 
 /**
  * Service periods as shown to the dispatcher (header, timetable graph). The
@@ -106,115 +46,25 @@ const DAY_PERIODS: Record<DayType, Period[]> = {
  * passenger sees the change, read from the Gaode tables at 世纪公园 and
  * 张江高科 (reference/timetable-gaode/).
  */
-const SHOWN_PERIODS: Record<DayType, Period[]> = {
-  weekday: [
-    { from: H(4), to: H(6, 5), template: 'firstLast', label: '首班/早间' },
-    { from: H(6, 5), to: H(6, 45), template: 'weekdayOff', label: '早高峰前过渡' },
-    { from: H(6, 45), to: H(10), template: 'weekdayAM', label: '早高峰' },
-    { from: H(10), to: H(10, 45), template: 'weekdayAMTail', label: '早高峰退出' },
-    { from: H(10, 45), to: H(17), template: 'weekdayOff', label: '平峰' },
-    { from: H(17), to: H(17, 30), template: 'weekdayOff', label: '晚高峰前过渡' },
-    { from: H(17, 30), to: H(20, 30), template: 'weekdayPM', label: '晚高峰' },
-    { from: H(20, 30), to: H(21, 30), template: 'weekdayPMTail', label: '晚高峰退出' },
-    { from: H(21, 30), to: H(22, 30), template: 'weekdayNight', label: '夜间' },
-    { from: H(22, 30), to: H(28), template: 'firstLast', label: '末班/收车' },
-  ],
-  weekend: DAY_PERIODS.weekend,
-};
+const SHOWN_PERIODS: Record<DayType, Period[]> = SIMULATION.timetable.shownPeriods;
 
 export function dayPeriods(dayType: DayType): Period[] {
   return DAY_PERIODS[dayType].map(p => ({ ...p }));
 }
 
-interface ClockBand { from: number; to: number; value: number; valueTo?: number }
 // D73/D74 calibration clocks are independent of service frequency and route patterns.
-const DWELL_BANDS: Record<DayType, ClockBand[]> = {
-  weekday: [
-    { from: 0, to: H(6, 5), value: 0.918 },
-    { from: H(6, 5), to: H(6, 50), value: 1 },
-    { from: H(6, 50), to: H(9, 30), value: 0.8 },
-    { from: H(9, 30), to: H(16, 50), value: 1 },
-    { from: H(16, 50), to: H(19, 30), value: 0.8 },
-    // D138【假设】: existing evening band fitted to the seven ride-east samples.
-    { from: H(19, 30), to: H(21), value: 1.2 },
-    { from: H(21), to: H(21, 40), value: 1.1, valueTo: 0.418 },
-    { from: H(21, 40), to: Infinity, value: 0.418 },
-  ],
-  weekend: [
-    { from: 0, to: H(6, 40), value: 0.918 },
-    { from: H(6, 40), to: H(21), value: 1.05 },
-    { from: H(21), to: H(21, 40), value: 0.918 },
-    { from: H(21, 40), to: Infinity, value: 0.418 },
-  ],
-};
-const RUN_BANDS: Record<DayType, ClockBand[]> = {
-  weekday: [
-    { from: 0, to: H(21, 10), value: 1 },
-    { from: H(21, 10), to: H(21, 25), value: 2 },
-    { from: H(21, 25), to: H(21, 40), value: 3 },
-    { from: H(21, 40), to: Infinity, value: 4 },
-  ],
-  weekend: [
-    { from: 0, to: H(21, 40), value: 1 },
-    { from: H(21, 40), to: Infinity, value: 4 },
-  ],
-};
+const DWELL_BANDS: Record<DayType, ClockBand[]> = SIMULATION.timetable.dwellBands;
+const RUN_BANDS: Record<DayType, ClockBand[]> = SIMULATION.timetable.runBands;
 
-interface ServiceData {
-  openingUp?: { at: number; headway: number; template: string; label: string };
-  denseUp?: number;
-  openingDn?: { to: number; headway: number }[];
-  peaks: Record<string, { DN?: number; UP?: number; upEnd?: number }>;
-  overrides: (Period & { dir: TrackDir })[];
-  openingSupplements: { from: number; to: number; headway: number; terminal: number }[];
-  shortClose?: number;
-  carryingClose?: { from: number; to: number };
-  lateHeadway: number;
-  standby: StandbyWindow[];
-}
-const SERVICE_DATA: Record<DayType, ServiceData> = {
-  weekday: {
-    openingUp: { at: H(5, 35) + 30, headway: 450, template: 'weekdayOff', label: '西行开班疏班' }, // 【假设】
-    denseUp: H(6, 55),
-    openingDn: [{ to: H(6, 10), headway: 225 }, { to: Infinity, headway: 180 }],
-    peaks: { weekdayAM: {}, weekdayPM: { DN: H(17), UP: H(17, 24), upEnd: H(20, 20) } },
-    overrides: [
-      { dir: 'UP', from: H(18, 55), to: H(19, 25), template: 'weekdayNight', headway: 180, label: '西段退峰前三分钟连续大交路' }, // 【假设】由实拍S1/S2反推参考站波次
-      { dir: 'DN', from: H(19, 45), to: H(21, 20), template: 'weekdayNight', headway: 180, label: '西段东行三分钟延续' }, // 【假设】
-      { dir: 'DN', from: H(9, 45), to: H(10, 40), template: 'weekdayAMTail', headway: 200, headwayTo: 300, label: '东行早高峰退出' }, // 【假设】
-    ],
-    // 【假设】 LYL depot origins fill the western opening wave while GLL is sparse.
-    openingSupplements: [
-      { from: 0, to: H(5, 35), headway: 450, terminal: 0 },
-      { from: H(5, 35), to: H(5, 50), headway: 225, terminal: 0 },
-      { from: H(5, 50), to: H(6, 10), headway: 450, terminal: 0 },
-      { from: H(6, 10), to: H(6, 30), headway: 225, terminal: 0 },
-      { from: H(6, 30), to: H(6, 40), headway: 225, terminal: 4 },
-      { from: H(6, 40), to: H(7, 10), headway: 150, terminal: 4 },
-    ],
-    shortClose: H(20, 55),
-    carryingClose: { from: H(20, 50), to: H(21) },
-    lateHeadway: 240,
-    standby: [{ from: H(11, 30), need: H(16), to: H(20, 30) }],
-  },
-  weekend: {
-    peaks: {}, overrides: [], openingSupplements: [], lateHeadway: 480,
-    standby: [{ from: H(9), need: H(21), to: H(21) }],
-  },
-};
+const SERVICE_DATA = SIMULATION.timetable.serviceData;
 
 // Published opening duties and depot operating windows, shared by all day types.
-const OPENING = {
-  longyang: H(5, 20), century: H(5, 24), guanglanWest: H(5, 28), guanglanEast: H(6),
-  outerAlternation: H(7, 10),
-  stockUntil: H(10), redirectFrom: H(7), emptyFeedersFrom: H(20),
-  feederUntil: H(26), stableUntil: H(10), dayStart: H(4),
-};
+const OPENING = SIMULATION.timetable.opening;
 
 /** Margin of the outer (west of 淞虹路) alternation window inside a peak band:
  * the outer end leads (DN) or lags (UP) the core by its ~11 min running time,
  * plus the transition into the pattern. */
-export const OUTER_BAND_MARGIN = 1200;
+export const OUTER_BAND_MARGIN = SIMULATION.timetable.outerBandMargin;
 /** whether a time at an outer station falls in a peak's 2'30"/5'00" pattern */
 export function inOuterAlternation(periods: Period[], t: number): boolean {
   return periods.some(p => TEMPLATES[p.template].peak && t >= p.from + OUTER_BAND_MARGIN && t < p.to - OUTER_BAND_MARGIN);
@@ -224,20 +74,23 @@ export function inOuterAlternation(periods: Period[], t: number): boolean {
 
 export interface OverlayPreset { id: string; label: string; from: number; to: number; a: number; b: number; headway: number; desc: string }
 
-export const OVERLAY_PRESETS: OverlayPreset[] = [
-  { id: 'ciie', label: '进博会保障加开', from: H(9, 30), to: H(17, 30), a: 1, b: 22, headway: 900, desc: '国家会展中心 ↔ 广兰路 区间加开，平峰每15分钟一列（各方向）' },
-  { id: 'hongqiao', label: '虹桥枢纽大客流加开', from: H(20), to: H(22, 30), a: 2, b: 22, headway: 720, desc: '虹桥火车站 ↔ 广兰路 区间加开，夜间每12分钟一列（虹桥火车站无折返条件，加开车延至国家会展中心折返）' },
-];
+export const OVERLAY_PRESETS: OverlayPreset[] = SIMULATION.timetable.overlays;
 
 // ---------------------------------------------------------------- helpers
 
 /** fixedRuns: the fixed-time special trains of the day (default: the regular ones) */
 export interface PlanContext { topo: Topology; rt: RunTimes; dayType: DayType; fixedRuns?: FixedRun[]; initialStock?: number[] }
 
-const TERMINAL_DEPOT: Record<number, string> = { 0: 'BZL', 30: 'CSD', 4: 'BZL', 22: 'LYD', 1: 'BZL', 2: 'BZL', 19: 'LYD', 28: 'CSD' };
+const stationIndex = (id: string | undefined) => STATIONS.findIndex(st => st.id === id);
+const stationTable = <T>(table: Record<string, T>): Record<number, T> =>
+  Object.fromEntries(Object.entries(table).map(([id, value]) => [stationIndex(id), value]));
+const [CORE_W, CORE_E] = SIMULATION.timetable.terminals.core.map(stationIndex);
+const INSERT_ORIGIN = stationIndex(SIMULATION.timetable.terminals.insertOrigin);
+
+const TERMINAL_DEPOT = stationTable(SIMULATION.timetable.terminals.depot);
 /** trains a terminal can hold at once: two tail tracks or paired stubs + the
  * departure platform; 广兰路 turns on its single middle-track platform */
-const TERMINAL_CAP: Record<number, number> = { 0: 3, 30: 3, 4: 3, 22: 1, 1: 3, 2: 2 };
+const TERMINAL_CAP = stationTable(SIMULATION.timetable.terminals.capacity);
 /**
  * trains the circulation lets lay over at a terminal at once. At the line ends
  * this is the full terminal: the peak cycle there leaves a turn just short of
@@ -246,7 +99,7 @@ const TERMINAL_CAP: Record<number, number> = { 0: 3, 30: 3, 4: 3, 22: 1, 1: 3, 2
  * a fresh one every cycle, breaking the west-end 2'30"/5'00" pattern. An
  * insertion into a full terminal is caught by the validator (D7).
  */
-const MAX_PRESENT: Record<number, number> = { 0: 3, 30: 3, 4: 2, 22: 1, 1: 3, 2: 2 };
+const MAX_PRESENT = stationTable(SIMULATION.timetable.terminals.maxPresent);
 /** longest a train may wait at a terminal between trips (s) */
 const MAX_LAYOVER = 1500;
 /**
@@ -324,7 +177,7 @@ export function overnightPlaces(topo: Topology) {
 /** 【假设】图定，非物理规则：official opening propagation is direction-asymmetric.
  * Uniform early level 3 makes the PXL opener several minutes late. Keep
  * normal dwell/level 1, and state the two remaining diagram budgets (D74). */
-export const FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S = { guanglanEast: 15, longyangWest: -6 };
+export const FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S = SIMULATION.timetable.firstTrainRunAdjust;
 
 /** stations visited from a to b inclusive */
 function seq(a: number, b: number): number[] {
@@ -539,8 +392,8 @@ function layoutService(ctx: PlanContext) {
   const nS = topo.stations.length;
   const W = 0;
   const E = nS - 1;
-  const SHR = 4;
-  const GLL = 22;
+
+
   let upPhase = 10; // UP peak phase, aligned to the first airport train below.
   /** the published first trains from their origins: they open each station */
   const firstService: ServiceRequest[] = [];
@@ -559,14 +412,14 @@ function layoutService(ctx: PlanContext) {
   const coreLead = new Map(peaks.map(p => {
     const hw = peakHw(p);
     const lead = Math.max(...(['DN', 'UP'] as const).map(dir => {
-      const from = dir === 'DN' ? SHR : GLL, to = dir === 'DN' ? GLL : SHR;
+      const from = dir === 'DN' ? CORE_W : CORE_E, to = dir === 'DN' ? CORE_E : CORE_W;
       const stops = buildStops(ctx, dir, from, to, p.from, true, factorAt);
       return stops.at(-1)!.arr - p.from + hw + 30;
     }));
     return [p, Math.ceil(lead / hw) * hw] as const;
   }));
   if (peaks.length) {
-    const first = buildStops(ctx, 'UP', E, W, OPERATIONS.firstEastTerminusDep, true, factorAt).find(s => s.st === GLL)!.dep;
+    const first = buildStops(ctx, 'UP', E, W, OPERATIONS.firstEastTerminusDep, true, factorAt).find(s => s.st === CORE_E)!.dep;
     const anchor = peaks[0].from - coreLead.get(peaks[0])!;
     const hw = peakHw(peaks[0]);
     // Keep the official 06:00 origin on the AM core grid, instead of adding
@@ -634,7 +487,7 @@ function layoutService(ctx: PlanContext) {
   {
     let idx = 0;
     let lastPeriod = '';
-    let t = firstReference('DN', W, E, SHR, OPERATIONS.firstWestTerminusDep);
+    let t = firstReference('DN', W, E, CORE_W, OPERATIONS.firstWestTerminusDep);
     for (let guard = 0; guard < 2000; guard++) {
       const p = streamAt(t, 'DN');
       const tpl = TEMPLATES[p.template];
@@ -649,21 +502,21 @@ function layoutService(ctx: PlanContext) {
       if (tpl.openingAlternation && t < OPENING.outerAlternation) kind = idx % 2 === 0 ? 'big' : 'small';
       if (guard === 0) kind = 'big'; // preserve the published PXL 05:25 opener
       if (kind === 'big' || kind === 'late') {
-        const originDep = atReference('DN', W, E, SHR, t)[0].dep;
+        const originDep = atReference('DN', W, E, CORE_W, t)[0].dep;
         if (originDep > OPERATIONS.lastBigEastboundDep) break;
         const to = E;
-        const stops = atReference('DN', W, to, SHR, t);
+        const stops = atReference('DN', W, to, CORE_W, t);
         addTrip('DN', kind, W, to, stops, true);
       } else {
-        const stops = buildStops(ctx, 'DN', SHR, GLL, t, true, factorAt);
+        const stops = buildStops(ctx, 'DN', CORE_W, CORE_E, t, true, factorAt);
         // End the eastbound short route at its far end, rather than letting
         // another whole-core journey start at 20:55 (D72).
         if (service.shortClose !== undefined && stops.at(-1)!.arr >= service.shortClose) {
           // The train of the former short-route slot continues east from
-          // SHR to the airport; adding a new PXL origin would require an
+          // CORE_W to the airport; adding a new PXL origin would require an
           // unrelated extra train at the west end during the withdrawal.
-          addTrip('DN', 'big', SHR, E, buildStops(ctx, 'DN', SHR, E, t, true, factorAt), true);
-        } else addTrip('DN', 'small', SHR, GLL, stops, true);
+          addTrip('DN', 'big', CORE_W, E, buildStops(ctx, 'DN', CORE_W, E, t, true, factorAt), true);
+        } else addTrip('DN', 'small', CORE_W, CORE_E, stops, true);
       }
       idx++;
       t = nextSlot(t, 'DN');
@@ -674,24 +527,24 @@ function layoutService(ctx: PlanContext) {
   const lateCount = Math.floor((OPERATIONS.lastLateEastboundDep - OPERATIONS.lastBigEastboundDep - MIN_HEADWAY) / service.lateHeadway) + 1;
   for (let index = lateCount - 1; index >= 0; index--) {
     const departure = OPERATIONS.lastLateEastboundDep - index * service.lateHeadway;
-    addTrip('DN', 'late', W, GLL, buildStops(ctx, 'DN', W, GLL, departure, true, factorAt), true);
+    addTrip('DN', 'late', W, CORE_E, buildStops(ctx, 'DN', W, CORE_E, departure, true, factorAt), true);
   }
   // ---- UP stream (reference: 广兰路 departure)
   {
     let idx = 0;
     let lastPeriod = '';
     const lastBigWestDep = OPERATIONS.lastBigWestboundDep;
-    const firstThrough = firstReference('UP', E, W, GLL, OPERATIONS.firstEastTerminusDep);
+    const firstThrough = firstReference('UP', E, W, CORE_E, OPERATIONS.firstEastTerminusDep);
     // Explicit origin first trains below supply the early western section;
     // the airport stream starts with the published 06:00 departure.
     firstService.push(addTrip('UP', 'big', E, W, buildStops(ctx, 'UP', E, W, OPERATIONS.firstEastTerminusDep, true, factorAt), true));
-    // Opening trains from GLL are fed by depot trains changing ends on its
+    // Opening trains from CORE_E are fed by depot trains changing ends on its
     // single middle-track platform; one cycle there takes minTurn plus the
     // throat clearance. A slot that comes sooner starts at 龙阳路 instead,
     // where the depot train enters westbound service directly (the published
     // 05:20 first train does the same).
-    const gllCycle = minTurn(GLL) + (OPERATIONS.platformTurnClear.GLL ?? 0) + 10;
-    let lastGllOpening = -Infinity;
+    const coreCycle = minTurn(CORE_E) + (OPERATIONS.platformTurnClear[STATIONS[CORE_E].id] ?? 0) + 10;
+    let lastCoreOpening = -Infinity;
     let t = service.openingUp?.at ?? firstThrough;
     for (let guard = 0; guard < 2000; guard++) {
       const p = streamAt(t, 'UP');
@@ -708,30 +561,30 @@ function layoutService(ctx: PlanContext) {
         kind = Math.round((t - firstThrough) / peakHw(p)) % 2 === 0 ? 'big' : 'small';
       }
       if (tpl.openingAlternation && t >= peaks[0].from && t < peaks[0].from + peakHw(p)) kind = 'big';
-      if (kind === 'big' && atReference('UP', E, W, GLL, t)[0].dep < OPERATIONS.firstEastTerminusDep - .01) kind = 'small';
+      if (kind === 'big' && atReference('UP', E, W, CORE_E, t)[0].dep < OPERATIONS.firstEastTerminusDep - .01) kind = 'small';
       // The explicit 06:00 airport train occupies its full path. During
       // morning build-up do not insert another departure within 90 seconds.
       if (Math.abs(t - firstThrough) < 120) { idx++; t = nextSlot(t, 'UP'); continue; }
       if (kind === 'big') {
-        const originDep = atReference('UP', E, W, GLL, t)[0].dep;
+        const originDep = atReference('UP', E, W, CORE_E, t)[0].dep;
         if (originDep > lastBigWestDep) kind = 'late';
-        else addTrip('UP', 'big', E, W, atReference('UP', E, W, GLL, t), true);
+        else addTrip('UP', 'big', E, W, atReference('UP', E, W, CORE_E, t), true);
       }
       if (kind === 'late') {
-        break; // official airport last train is also GLL's last westbound service
+        break; // official airport last train is also CORE_E's last westbound service
       }
       if (kind === 'small') {
-        // Before the airport's first through train reaches GLL, western
+        // Before the airport's first through train reaches CORE_E, western
         // first-service trains run to PXL. This supplies west-end turns
         // without queueing dozens of early depot feeders at PXL.
         const opening = t < firstThrough;
-        if (opening && t - lastGllOpening < gllCycle) {
-          const atLYL = buildStops(ctx, 'UP', GLL, W, t, true, factorAt).find(s => s.st === 19)!.dep;
-          addTrip('UP', 'ins', 19, W, buildStops(ctx, 'UP', 19, W, atLYL, true, factorAt), true);
+        if (opening && INSERT_ORIGIN >= 0 && t - lastCoreOpening < coreCycle) {
+          const atInsert = buildStops(ctx, 'UP', CORE_E, W, t, true, factorAt).find(s => s.st === INSERT_ORIGIN)!.dep;
+          addTrip('UP', 'ins', INSERT_ORIGIN, W, buildStops(ctx, 'UP', INSERT_ORIGIN, W, atInsert, true, factorAt), true);
         } else {
-          if (opening) lastGllOpening = t;
-          const to=opening?W:SHR;
-          addTrip('UP', opening ? 'ins' : 'small', GLL, to, buildStops(ctx, 'UP', GLL, to, t, true, factorAt), true);
+          if (opening) lastCoreOpening = t;
+          const to=opening?W:CORE_W;
+          addTrip('UP', opening ? 'ins' : 'small', CORE_E, to, buildStops(ctx, 'UP', CORE_E, to, t, true, factorAt), true);
         }
       }
       idx++;
@@ -743,27 +596,28 @@ function layoutService(ctx: PlanContext) {
   // station timing is calibrated separately; no run or dwell time is changed.
   // (淞虹路 05:58 westbound and 远东大道 06:24 eastbound are not origins: they
   // are the 龙阳路 and 广兰路 first trains passing.)
-  const firstLYL = Math.max(OPENING.longyang, OPENING.century - buildStops(ctx, 'UP', 19, W, OPENING.longyang, true, factorAt).find(s => s.st === 17)!.dep + OPENING.longyang);
-  for (const [dir, from, to, dep] of [
-    ['UP', 19, W, firstLYL], ['UP', GLL, W, OPENING.guanglanWest],
-    ['DN', GLL, E, OPENING.guanglanEast],
-  ] as const) firstService.push(addTrip(dir, 'ins', from, to, buildStops(ctx, dir, from, to, dep, true, factorAt, undefined,
-    dir === 'DN' ? FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S.guanglanEast : from === 19 ? FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S.longyangWest : 0), true));
+  for (const origin of SIMULATION.timetable.firstOrigins) {
+    const { dir } = origin, from = stationIndex(origin.from), to = stationIndex(origin.to);
+    const checkpoint = origin.checkpoint;
+    const dep = checkpoint ? Math.max(origin.dep, checkpoint.dep
+      - buildStops(ctx, dir, from, to, origin.dep, true, factorAt).find(stop => stop.st === stationIndex(checkpoint.station))!.dep + origin.dep) : origin.dep;
+    firstService.push(addTrip(dir, 'ins', from, to, buildStops(ctx, dir, from, to, dep, true, factorAt, undefined, origin.runAdjustS ?? 0), true));
+  }
 
   {
     for (let round = 0; round < 30; round++) {
-      const calls = trips.filter(t => t.dir === 'UP' && t.revenue && t.to <= SHR)
-        .flatMap(t => t.stops.filter(s => s.st === 19).map(s => s.dep)).sort((a, b) => a - b);
+      const calls = trips.filter(t => t.dir === 'UP' && t.revenue && !ahead('DN', CORE_W, t.to))
+        .flatMap(t => t.stops.filter(s => s.st === INSERT_ORIGIN).map(s => s.dep)).sort((a, b) => a - b);
       let added = false;
       for (let i = 0; i + 1 < calls.length; i++) {
         const at = calls[i];
         const band = service.openingSupplements.find(p => at >= p.from && at < p.to);
         if (!band || calls[i + 1] - at < band.headway + MIN_HEADWAY) continue;
         const dep = at + band.headway;
-        const terminal = service.openingSupplements.find(p => dep >= p.from && dep < p.to)?.terminal ?? band.terminal;
-        const stops = buildStops(ctx, 'UP', 19, terminal, dep, true, factorAt);
+        const terminal = stationIndex(service.openingSupplements.find(p => dep >= p.from && dep < p.to)?.terminal ?? band.terminal);
+        const stops = buildStops(ctx, 'UP', INSERT_ORIGIN, terminal, dep, true, factorAt);
         if (!new DepIndex(trips).clear(stops, 'UP')) continue;
-        addTrip('UP', 'ins', 19, terminal, stops, true);
+        addTrip('UP', 'ins', INSERT_ORIGIN, terminal, stops, true);
         added = true;
         break;
       }
@@ -774,26 +628,26 @@ function layoutService(ctx: PlanContext) {
   if (service.shortClose !== undefined) {
     // The last two short-route duties finish carrying passengers: the final
     // westbound one goes to 蟠祥路 and the eastbound one to 龙阳路 depot.
-    const distance = (trip: ServiceRequest) => Math.abs((trip.stops.find(stop => stop.st === GLL)?.dep ?? -Infinity) - service.shortClose!);
+    const distance = (trip: ServiceRequest) => Math.abs((trip.stops.find(stop => stop.st === CORE_E)?.dep ?? -Infinity) - service.shortClose!);
     const closingSlot = trips.filter(t => t.dir === 'UP' && distance(t) <= 180).sort((a, b) => distance(a) - distance(b))[0];
     if (closingSlot) {
       const dep = service.shortClose;
       closingSlot.locked = true;
       closingSlot.kind = 'wd';
-      closingSlot.from = GLL;
+      closingSlot.from = CORE_E;
       closingSlot.to = W;
-      closingSlot.stops = buildStops(ctx, 'UP', GLL, W, dep, true, factorAt);
+      closingSlot.stops = buildStops(ctx, 'UP', CORE_E, W, dep, true, factorAt);
     }
-    // The preceding short-route trains finish their trips and return at SHR;
+    // The preceding short-route trains finish their trips and return at CORE_W;
     // classify these as withdrawals once they overlap the closing window.
     for (const t of trips) if (t.dir === 'UP' && t.kind === 'small' && t.stops.at(-1)!.arr > service.shortClose) t.kind = 'wd';
-    const dn = trips.filter(t => t.dir === 'DN' && t.from === SHR && t.kind === 'big'
-      && t.stops.find(s => s.st === 19)!.arr >= service.carryingClose!.from
-      && t.stops.find(s => s.st === 19)!.arr <= service.carryingClose!.to).at(0);
+    const dn = trips.filter(t => t.dir === 'DN' && t.from === CORE_W && t.kind === 'big'
+      && t.stops.find(s => s.st === INSERT_ORIGIN)!.arr >= service.carryingClose!.from
+      && t.stops.find(s => s.st === INSERT_ORIGIN)!.arr <= service.carryingClose!.to).at(0);
     if (dn) {
       dn.kind = 'wd';
-      dn.to = 19;
-      dn.stops = buildStops(ctx, 'DN', SHR, 19, dn.stops[0].dep, true, factorAt);
+      dn.to = INSERT_ORIGIN;
+      dn.stops = buildStops(ctx, 'DN', CORE_W, INSERT_ORIGIN, dn.stops[0].dep, true, factorAt);
     }
   }
 
@@ -801,25 +655,25 @@ function layoutService(ctx: PlanContext) {
   // arrival that would turn into an UP departure a slot or two later, but
   // whose platform the following arrival needs first, runs on to the eastern
   // terminal instead (延伸运行), where the tails have room.
-  {
-    const mt = minTurn(GLL);
+  if (SIMULATION.timetable.terminals.overflowWithdrawal) {
+    const mt = minTurn(CORE_E);
     // the departing train is out of the west throat and the next arrival's
     // route into the middle track set within this time
-    const GLL_CLEAR = 60;
+    const CORE_CLEAR = 60;
     const arrAt = (t: ServiceRequest) => t.stops[t.stops.length - 1].arr;
-    const arrivals = trips.filter((t) => t.dir === 'DN' && t.to === GLL && t.kind === 'small').sort((a, b) => arrAt(a) - arrAt(b));
-    const deps = trips.filter((t) => t.dir === 'UP' && t.from === GLL).map((t) => t.stops[0].dep).sort((a, b) => a - b);
+    const arrivals = trips.filter((t) => t.dir === 'DN' && t.to === CORE_E && t.kind === 'small').sort((a, b) => arrAt(a) - arrAt(b));
+    const deps = trips.filter((t) => t.dir === 'UP' && t.from === CORE_E).map((t) => t.stops[0].dep).sort((a, b) => a - b);
     for (let i = 0; i + 1 < arrivals.length; i++) {
       const A = arrivals[i];
       const d = deps.find((x) => x >= arrAt(A) + mt - 1e-6);
       // (no departure within a slot or two: the train is withdrawn to the depot as before)
-      if (d !== undefined && d - arrAt(A) <= mt + 450 && d + GLL_CLEAR <= arrAt(arrivals[i + 1])) continue;
+      if (d !== undefined && d - arrAt(A) <= mt + 450 && d + CORE_CLEAR <= arrAt(arrivals[i + 1])) continue;
       // During morning opening, a short-route train with no middle-track
       // turn runs to CSD's entry at YDD rather than filling the airport tails.
       // This is a passenger-carrying withdrawal, not an extra airport origin.
-      // 【假设】 when GLL has no turn slot, withdraw at CSD's YDD entry
+      // 【假设】 when CORE_E has no turn slot, withdraw at CSD's YDD entry
       // rather than add an unplanned arrival to the airport turning cycle.
-      A.to = 28; A.kind = 'wd';
+      A.to = stationIndex(SIMULATION.timetable.terminals.overflowWithdrawal); A.kind = 'wd';
       A.stops = buildStops(ctx, 'DN', A.from, A.to, A.stops[0].dep, true, factorAt);
     }
   }
@@ -828,7 +682,7 @@ function layoutService(ctx: PlanContext) {
   // a cutoff. Shift the last existing duty, keeping its preceding headway.
   for (const [dir, from, to, dep] of [
     ['DN', W, E, OPERATIONS.lastBigEastboundDep],
-    ['DN', W, GLL, OPERATIONS.lastLateEastboundDep],
+    ['DN', W, CORE_E, OPERATIONS.lastLateEastboundDep],
     ['UP', E, W, OPERATIONS.lastBigWestboundDep],
   ] as const) {
     const last = trips.filter(t => t.dir === dir && t.from === from && t.to === to && t.revenue)
@@ -995,7 +849,7 @@ export function allocateTerminalServices(ctx: PlanContext, requests: readonly Se
         for (const revenue of modes) {
           const stops = buildStops(ctx, dir, terminal, to, arrival(incoming) + turn + offset, revenue, factor);
           if (!index.clear(stops, dir)) continue;
-          if (revenue && stops.some(stop => stop.st < 4 && inOuterAlternation(dayPeriods(ctx.dayType), stop.dep))) continue;
+          if (revenue && stops.some(stop => ahead('DN', stop.st, CORE_W) && inOuterAlternation(dayPeriods(ctx.dayType), stop.dep))) continue;
           if (!reserve(terminal, arrival(incoming), stops[0].dep)) continue;
           supply.withdrawals.set(incoming.id, { dir, from: terminal, to, depot, stops, revenue });
           withdrawing = true;
@@ -1026,7 +880,7 @@ export function allocateTerminalServices(ctx: PlanContext, requests: readonly Se
           for (const revenue of [true, false]) {
             if (revenue && wait < boarding) continue;
             const stops = buildStops(ctx, direction, junction, terminal, arrival(incoming) + wait, revenue, factor);
-            if (!revenue && stops.some(stop => stop.st < 4 && inOuterAlternation(periods, stop.dep))) continue;
+            if (!revenue && stops.some(stop => ahead('DN', stop.st, CORE_W) && inOuterAlternation(periods, stop.dep))) continue;
             if (stops.at(-1)!.arr + turn > departure(outgoing) || departure(outgoing) - stops.at(-1)!.arr > MAX_LAYOVER) continue;
             if (!throughIndex.clear(stops, direction) || !reserve(terminal, stops.at(-1)!.arr, departure(outgoing))) continue;
             supply.feeders.set(outgoing.id, { dir: direction, from: junction, to: terminal, depot, stops, revenue });
@@ -1041,7 +895,7 @@ export function allocateTerminalServices(ctx: PlanContext, requests: readonly Se
       const origins = [terminal, ...topo.stations.map((_, station) => station).filter(station => station !== terminal
         && outgoing.stops.some(stop => stop.st === station)
         && (turnbackAt(topo, station, outgoing.dir === 'DN' ? 'UP' : 'DN') || exitStation(topo, depot, outgoing.dir) === station))]
-        .filter(station => outgoing.dir === 'DN' ? station <= 4 : station >= 22);
+        .filter(station => !ahead(outgoing.dir, outgoing.dir === 'DN' ? CORE_W : CORE_E, station));
       let supplied = false;
       for (const origin of locked(outgoing) ? [terminal] : origins) {
         const dep = outgoing.stops.find(stop => stop.st === origin)!.dep;
@@ -1114,9 +968,8 @@ function buildPlan(ctx: PlanContext, shift?: number[], stock?: number[], sourceD
   const requestIssues: PlanIssue[] = [];
   for (const service of services) {
     const request = requests[service.id];
-    const required = request.stops.filter(stop => stop.st >= Math.max(4, Math.min(request.from, request.to))
-      && stop.st <= Math.min(22, Math.max(request.from, request.to)));
-    const lastCore = request.dir === 'DN' ? 22 : 4;
+    const required = request.stops.filter(stop => !ahead('DN', stop.st, CORE_W) && !ahead('DN', CORE_E, stop.st));
+    const lastCore = request.dir === 'DN' ? CORE_E : CORE_W;
     const retainsCore = service.dir === request.dir && required.every(stop => {
       const selected = service.stops.find(call => call.st === stop.st);
       return selected && (stop.st === lastCore ? selected.arr === stop.arr : selected.dep === stop.dep);
@@ -1135,7 +988,7 @@ function buildPlan(ctx: PlanContext, shift?: number[], stock?: number[], sourceD
   for (const trip of drafts) if (isPublishedOrigin(ctx, trip)) anchors.add(trip.id);
   spaceServiceDepartures(drafts, anchors);
   const clocks = { original: new Map(requestedDepartures), protected: anchors };
-  const blocks = circulate(ctx, drafts, [...new Set([W, E, 4, 22, 1, 19, 28, ...overnightPlaces(topo).map(place => place.station)])], periods, undefined, undefined, 0, undefined, undefined, shift, stock, supply, clocks, sourceDepots);
+  const blocks = circulate(ctx, drafts, [...new Set([W, E, ...SIMULATION.timetable.terminals.circulate.map(stationIndex), ...overnightPlaces(topo).map(place => place.station)])], periods, undefined, undefined, 0, undefined, undefined, shift, stock, supply, clocks, sourceDepots);
   addIntermediateStandbys(ctx, drafts, blocks);
   // This is the publication boundary. Matching above selects retirement
   // destinations; subsequent conflict handling cannot change those choices.
@@ -1734,7 +1587,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
   // West of 淞虹路 the peak runs big-route trains only, alternating 2'30" and
   // 5'00". A depot move there would split a 5'00" gap, so none is planned in
   // the outer alternation window (D30).
-  const outerQuiet = (stops: PlanStop[]) => !stops.some(p => p.st < 4 && inOuterAlternation(periods, p.dep));
+  const outerQuiet = (stops: PlanStop[]) => !stops.some(p => ahead('DN', p.st, CORE_W) && inOuterAlternation(periods, p.dep));
   const lastDepFrom = (T: number) => Math.max(...pool.filter((t) => t.from === T).map((t) => t.stops[0].dep), -Infinity);
   const firstDepFrom = (T: number) => Math.min(...pool.filter((t) => t.from === T).map((t) => t.stops[0].dep), Infinity);
   const startOf: Map<number, Block['start']> = new Map();
@@ -1926,7 +1779,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
     const spare = topo.depots.map((dp, i) => (ctx.initialStock?.[i] ?? dp.capacity) - (stock?.[i] ?? byDepot[i].length));
     shift.forEach((n, d) => {
       // Redirect after opening: sending a BZL/LYD train to the airport before
-      // 06:00 would cross GLL's occupied DN platform. Actual yardNeed, rather
+      // 06:00 would cross CORE_E's occupied DN platform. Actual yardNeed, rather
       // than the raw source count, includes returns and far-side suppliers.
       for (const D of byDepot[d].filter(D => !supply?.feeders.has(D.id) && D.stops[0].dep >= OPENING.redirectFrom).slice(0, n)) {
         const c = topo.stations[D.from].chain;
@@ -2300,8 +2153,8 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
   for (let qi = 0; qi < sinkQueue.length; qi++) {
     const A = sinkQueue[qi];
     if (endOf.has(A.id) || A.cancelled || A.next !== undefined) continue; // (queued twice: already sent on)
-    // A surplus opening train from GLL (or 龙阳路, when GLL's middle track
-    // is busy) can finish at SHR and enter BZL directly. Going all the way to
+    // A surplus opening train from CORE_E (or 龙阳路, when CORE_E's middle track
+    // is busy) can finish at CORE_W and enter BZL directly. Going all the way to
     // PXL and returning would insert a depot withdrawal into the AM core
     // slots and the outer alternation.
     const T = A.to;
@@ -2342,14 +2195,15 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
     const depot = retainedHomes.get(A.id) ?? (overlay ? returnHome(A) ?? depotIndex(topo, TERMINAL_DEPOT[T]) : depotIndex(topo, TERMINAL_DEPOT[T]));
     // (an added service ends inside the day: its trains go back as ordinary withdrawals)
     const night = !overlay && arr >= lastDepFrom(T) - 60;
-    if (night && T === 22 && A.dir === 'DN') {
-      // 【假设】 earlier GLL closing services run on empty to CSD, avoiding
+    const closingMove = SIMULATION.timetable.closingDepotMoves.find(move => stationIndex(move.station) === T && move.dir === A.dir);
+    if (night && closingMove) {
+      // 【假设】 earlier CORE_E closing services run on empty to CSD, avoiding
       // a westbound passenger departure after the official airport last train.
-      const csd = depotIndex(topo, 'CSD'), en = entryStation(topo, csd, 'DN');
-      const stops = fitAfter('DN', arr + 45, t0 => buildStops(ctx, 'DN', T, en, t0, false, 1))
-        ?? buildStops(ctx, 'DN', T, en, arr + 45, false, 1);
+      const csd = depotIndex(topo, closingMove.depot), en = entryStation(topo, csd, closingMove.dir);
+      const stops = fitAfter(closingMove.dir, arr + 45, t0 => buildStops(ctx, closingMove.dir, T, en, t0, false, 1))
+        ?? buildStops(ctx, closingMove.dir, T, en, arr + 45, false, 1);
       stops.at(-1)!.stop = false;
-      const empty = addTo(trips, 'DN', 'empty', T, en, stops, false, overlay);
+      const empty = addTo(trips, closingMove.dir, 'empty', T, en, stops, false, overlay);
       A.next = empty.id; empty.prev = A.id;
       endOf.set(empty.id, { kind: 'depot', depot: csd });
       continue;
@@ -2850,9 +2704,11 @@ function fitOpeningFeeders(ctx: PlanContext, blocks: Block[], trips: GenTrip[], 
           const stops = buildStops(ctx, dir, origin, target, start - offset, revenue, factor);
           const arrival = stops.at(-1)!.arr;
           if (arrival > departure - turn + .001 || !index.clear(stops, dir)) continue;
-          // GLL's side-platform train does not leave before 06:00.
-          const gll = stops.find(s => s.st === 22);
-          if (dir === 'DN' && target > 22 && gll && gll.arr < OPENING.guanglanEast + MIN_HEADWAY) continue;
+          // CORE_E's side-platform train does not leave before 06:00.
+          if (SIMULATION.timetable.openingGuards.some(guard => {
+            const station = stationIndex(guard.station), call = stops.find(stop => stop.st === station);
+            return dir === guard.dir && ahead(dir, station, target) && call && call.arr < guard.until + MIN_HEADWAY;
+          })) continue;
           if (reverse && terminalOverflows(topo, target, [...occupied, { from: arrival, to: departure }]).some(o => o.t >= arrival && o.t < departure + HOLD_CLEAR)) continue;
           const portal = topo.depots[depot].portals.exit[dir];
           if (portal.reverse && blocks.some(other => other !== b && !pending.has(other.trips[0]) && other.start.kind === 'depot' && other.start.depot === depot
@@ -3827,7 +3683,7 @@ export function blockTasks(topo: Topology, plan: Plan, block: Block, fromTrip = 
     const first = tasks.length;
     tripTasks(topo, trip, tasks, fromDepot);
     // An explicit overnight berth fixes the departure platform as well as
-    // the train's initial position (GLL middle track versus DN main).
+    // the train's initial position (CORE_E middle track versus DN main).
     if (k === 0 && fromTrip === 0 && block.start.kind === 'stable' && block.start.berth !== undefined) {
       const departure = tasks.slice(first).find((t): t is StopTask => t.k === 'stop');
       if (departure && topo.berths[block.start.berth].kind === 'platform') departure.berth = block.start.berth;
@@ -4215,7 +4071,7 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
     const arrived = last.stops.at(-1)!.arr;
     const morning = plan.blocks.find(b => b.start.kind === 'stable' && b.start.station === station && b.start.berth === stableBerth);
     const first = morning?.trips.map(id => plan.trips[id]).find(t => !t.cancelled);
-    const departure = first?.stops[0].dep ?? OPENING.guanglanEast;
+    const departure = first?.stops[0].dep ?? OPENING.defaultStableDeparture;
     for (const trip of live) {
       if (trip.dir !== 'DN' || trip === last || trip === first) continue;
       const stop = trip.stops.find(s => s.st === station);
