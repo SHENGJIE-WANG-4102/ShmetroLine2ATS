@@ -241,7 +241,7 @@ describe('driver doors and the acceleration limit', () => {
     expect(r.msg).toContain('不办理客运');
   });
 
-  it('RM: no door enable — the wrong side opens and is an incident; the PSD is worked from the PSL', () => {
+  it('RM: door enable for the platform side only; the PSD is worked from the PSL', () => {
     const sim = makeSim('weekday', H);
     const tr = dwellingDN(sim);
     expect(sim.command({ c: 'manual', train: tr.id, mode: 'RM' }).ok).toBe(true);
@@ -250,16 +250,9 @@ describe('driver doors and the acceleration limit', () => {
     const side = platSideOf(sim, tr);
     const other = side === 'L' ? 'R' : 'L';
     const r = sim.command({ c: 'door', train: tr.id, side: other });
-    expect(r.ok).toBe(true);
-    expect(tr.doorSide).toBe(other);
-    expect(sim.metrics.safety.wrongDoor).toBe(1);
-    expect(sim.events.some((e) => e.level === 'A' && e.text.includes('开错侧车门'))).toBe(true);
-    // the other side stays shut while these are open; they close with the same button
-    expect(sim.command({ c: 'door', train: tr.id, side }).ok).toBe(false);
-    expect(sim.command({ c: 'manual', train: tr.id, mode: 'AUTO' }).ok).toBe(false);
-    expect(sim.command({ c: 'door', train: tr.id, side: other }).ok).toBe(true);
-    expect(tr.doorSide).toBe(other);runFor(sim,12.1,check);
+    expect(r.ok).toBe(false);
     expect(tr.doorSide).toBe('');
+    expect(sim.metrics.safety.wrongDoor).toBe(0);
     expect(sim.command({ c: 'door', train: tr.id, side }).ok).toBe(true);
     const p = sim.topo.berths[(tr.tasks[0] as { berth: number }).berth].platform;
     runFor(sim,.4,check);

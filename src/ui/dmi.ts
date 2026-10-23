@@ -15,22 +15,6 @@ import { PERF } from '../sim/dynamics';
 import { FONT_CN, fmtTime } from './theme';
 
 /** seconds of warning before the permitted speed starts to fall below the present speed */
-const INDICATION_S = 6;
-
-/**
- * Pre-indication for the driver of a manually driven train: a lower speed
- * limit or the end of the authority is coming up, and within INDICATION_S the
- * permitted-speed curve towards it meets the present speed (or already has).
- * The platform stopping point is not announced — every station has one.
- * 【假设】 modelled on the ETCS indication status; the Casco DMI photos show none.
- */
-export function speedIndication(t: TrainSnap): string {
-  if (!t.manual || t.phase !== 'run' || t.eb || t.tgtReason === '停车点') return '';
-  if (!(t.tgtD >= 0 && t.tgtD < 5000) || t.tgtV >= t.v - 0.3) return '';
-  const curve = (t.v * t.v - t.tgtV * t.tgtV) / (2 * PERF.bPermit);
-  if (t.tgtD - curve > t.v * INDICATION_S) return '';
-  return t.tgtReason === '限速' ? `前方限速 ${Math.round(t.tgtV * 3.6)}` : '前方停车';
-}
 
 /** Pure snapshot advisory; hidden outside CM, including old replay snapshots. */
 export function recommendedSpeed(t: TrainSnap): number | null {
@@ -268,8 +252,8 @@ export class Dmi {
       marker(red, C.red);
       if (recommendation !== null) marker(vp, C.green);
     }
-    // the recommended speed, or the target speed of a coming restriction while it is announced
-    if (recommendation !== null || speedIndication(t)) marker(recommendation ?? t.tgtV * 3.6, C.yellow);
+    // the recommended speed (CM)
+    if (recommendation !== null) marker(recommendation, C.yellow);
     // needle: tapered white pointer from the hub
     const na = ang(v);
     const [nx, ny] = pt(na, R - 24);
@@ -372,7 +356,6 @@ export class Dmi {
     let col = C.white;
     if (eb) { msg = '紧急制动'; col = C.red; }
     else if (t.v * 3.6 > t.vPermit * 3.6 + 0.5) { msg = '超速'; col = C.yellow; }
-    else if (speedIndication(t)) { msg = `${speedIndication(t)} · ${Math.round(t.tgtD)} m`; col = C.yellow; }
     else if (t.slip) { msg = t.slip === 'slip' ? '空转' : '滑行'; col = C.yellow; }
     else if (t.manual && t.doorSide && !t.doors) { msg = '非站台侧车门开启'; col = C.red; }
     else if (t.manual && t.doorsAwait) { msg = '停稳，待开门'; col = C.white; }

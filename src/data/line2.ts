@@ -571,7 +571,7 @@ export const OPERATIONS = {
   platformStopKmh: Infinity, // 用户决定：停站列车进出站均不另设平台限速
   /** 【用户观察】停稳到自动开门，每站按种子抽取（秒）。 */
   autoDoorOpenDelay: [0.5, 1.5] as const,
-  /** 【假设，用户未定】人工退行限速。 */
+  /** 用户决定（2026-10-23）：人工退行限速。 */
   reverseKmh: 5,
   /** 【假设】库线未建模，以各段出段信号前5米、±1米代替试验库线。 */
   depotDoorTests: { BZL: { beforeSignal: 5 }, LYD: { beforeSignal: 5 }, CSD: { beforeSignal: 5 } } as Record<string, { beforeSignal: number }>,

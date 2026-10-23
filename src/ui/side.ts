@@ -13,7 +13,6 @@ import { SCENARIOS, RANDOM_LEVELS } from '../sim/scenario';
 import { STATIONS, LINE_INFO, WEATHER_RULES } from '../data/line2';
 import type { FaultKind, RadioCall, SimEvent } from '../sim/model';
 import type { Audio } from './audio';
-import { speedIndication } from './dmi';
 import type { VvvfMode } from './vvvf';
 import { PERF, tractionAccel } from '../sim/dynamics';
 import { stationFrame, audioTrain, VVVF_MAX_RATE } from './stationaudio';
@@ -64,7 +63,6 @@ export class SidePanel {
   private seenAlarms = new Set<number>();
   private seenCalls = new Set<number>();
   /** the restriction last announced in the manual cab (chime once per restriction) */
-  private indication = '';
   private hooks: PanelHooks & { rewind(t: number, replay: boolean): void; locateSel(sel: Selection): void };
 
   constructor(store: Store, audio: Audio, hooks: PanelHooks & { rewind(t: number, replay: boolean): void; locateSel(sel: Selection): void }) {
@@ -209,10 +207,6 @@ export class SidePanel {
       perspective: heard ? 'onboard' : 'platform', station: heardStation,
       selectionKey: heard ? `train|${heard.id}` : heardStation === null ? '' : `station|${heardStation}`,
       trains: heard ? [audioTrain(heard, heard.nextStation, this.store.topo)] : platformFrame.trains.filter(tr => tr.atStation) });
-    // and a chime once for each coming restriction announced on its DMI
-    const ind = cab && speedIndication(cab) ? `${cab.id}|${Math.round(cab.tgtV * 3.6)}|${cab.tgtReason}` : '';
-    if (ind && ind !== this.indication) this.audio.chime();
-    this.indication = ind;
     const key = calls.map((c) => `${c.id}:${c.state}:${Math.ceil((c.deadline - snap.t) / 5)}`).join(',') + snap.autoRadio;
     if (key === this.callsKey) return;
     this.callsKey = key;

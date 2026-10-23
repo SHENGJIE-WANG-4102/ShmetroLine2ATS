@@ -1150,10 +1150,9 @@ export function atoButton(sim: Sim, tr: Train, button: 'f' | 'g', down: boolean)
 
 /**
  * The driver of a manual train presses a door button (Y right / U left): the
- * same side again closes. CM: the ATP gives the door enable only for the
- * platform side of a train stopped at its mark. RM: no door enable and no PSD
- * linkage — any side opens (the wrong one is an incident) and station staff
- * work the PSD from the PSL 【假设】.
+ * same side again closes. CM and RM alike (user): the door enable is given only
+ * for the platform side of a train stopped at its mark. RM has no PSD linkage:
+ * station staff work the PSD from the PSL 【假设】.
  */
 export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean; msg: string } {
   if (!tr.manual) return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
@@ -1178,9 +1177,8 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
   const rm = tr.mode === 'RM';
   const enabled = doorEnable(sim, tr);
   if (!enabled[side]) {
-    if (!rm && st && !stopNeedsDoors(tr, st)) return { ok: false, msg: '无门使能：本站不办理客运（非载客车次）' };
-    if (!rm) return { ok: false, msg: plat ? '门使能仅给出客运停车窗内的站台侧' : '无门使能：列车未在客运停车窗或指定出库试验位置停稳' };
-    return wrongDoor(sim, tr, side, plat && side !== plat ? '非站台侧' : '区间或非停车位置');
+    if (st && !stopNeedsDoors(tr, st)) return { ok: false, msg: '无门使能：本站不办理客运（非载客车次）' };
+    return { ok: false, msg: plat ? '门使能仅给出客运停车窗内的站台侧' : '无门使能：列车未在客运停车窗或指定出库试验位置停稳' };
   }
   tr.doorSide = side;
   if (enabled.depot) {
@@ -1191,14 +1189,6 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
   else if (p >= 0) openDoors(sim, tr, p, rm);
 
   return { ok: true, msg: `${word(side)}车门开启${rm ? '，站务人员操作PSL开启站台门' : ''}` };
-}
-
-function wrongDoor(sim: Sim, tr: Train, side: 'L' | 'R', where: string): { ok: boolean; msg: string } {
-  tr.doorSide = side;
-  sim.metrics.safety.wrongDoor++;
-  const word = side === 'L' ? '左侧' : '右侧';
-  sim.log('A', '列车', `列车 ${trainLabel(tr)} 开错侧车门（${word}，${where}）`, { code: 'WRONG_DOOR', train: tr.id });
-  return { ok: true, msg: `${word}车门开启——${where}！` };
 }
 
 /** stopping-accuracy score for a manually driven stop */
