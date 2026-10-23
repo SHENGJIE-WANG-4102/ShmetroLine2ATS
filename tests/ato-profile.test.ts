@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PERF, atoBrakeDistance, atoBrakeProfile, atoControl, atoLimitSpeed, atoStopApproachDistance, atoTractionAccel, jerkLimited, levelAccel, levelCruise, sectionEta, sectionPlan, sectionRecommended, tractionAccel, type AtoState } from '../src/sim/dynamics';
 import {createProbeWorld,probeSection}from'../scripts/audio/field-model';
 import {STATIONS}from'../src/data/line2';
+import {capture,restore}from'../src/sim/state';
 
 describe('section ATO trajectory', () => {
   it('eases both ends of a normal stop while preserving the nominal average and distance', () => {
@@ -164,6 +165,58 @@ describe('section ATO trajectory', () => {
     expect(plan.completed).toBe(true);
     expect(plan.samples.filter(s=>s.remaining<=100).every(s=>s.speed<=slow+.1)).toBe(true);
     expect(Math.abs(plan.eta-budget)).toBeLessThan(.5);
+  });
+  it('keeps an ordinary neutral transition below a terminal static limit out of the planned-coast floor check',()=>{
+    // Actual YDD→HTS profile: the last 198 m are 60 km/h. Its normal ATO
+    // target is 57, below the scheduled-coast floor of 60.
+    const limits=[{length:5720,limit:80/3.6},{length:198,limit:60/3.6}];
+    const plan=sectionPlan(5918,0,323,77/3.6,limits,3/3.6);
+    expect(plan.completed).toBe(true);expect(plan.coastValid).toBe(true);
+    expect(plan.cutoff*3.6).toBeGreaterThanOrEqual(75);
+    expect(plan.coastAt).toBeGreaterThan(0);
+    expect(Math.abs(plan.eta-323)).toBeLessThan(.5);
+    expect(plan.samples.filter(p=>p.remaining<=198).every(p=>p.speed<=57/3.6+.1)).toBe(true);
+    const state:AtoState={phase:'brake',recovered:false,neutral:0};
+    const v=57.350808203125/3.6,remaining=206.5667957861;
+    atoControl(state,{v,a:-.675,target:57/3.6,cruise:plan.cutoff,stopDist:remaining,remaining,plan});
+    expect(v).toBeLessThan(plan.coastFloor-.1);
+    expect(state.phase).toBe('coast');expect(state.plannedCoast).toBe(false);
+    expect(state.brakeEntrySpeed).toBeUndefined();
+  });
+  it('still rejects an early planned coast that falls below its floor before terminal braking',()=>{
+    const dist=4000,plan=sectionPlan(dist,0,240,22);
+    const minScheduledCoast=(coastAt:number)=>{
+      const reference={...plan,coastAt},state:AtoState={phase:'traction',recovered:false,neutral:0};
+      let x=0,v=0,a=0,minimum=Infinity;
+      for(let i=0;i<4000;i++){
+        const remaining=dist-x;if(remaining<.4&&v<.35)break;
+        const target=Math.min(reference.cutoff,Math.sqrt(Math.max(0,2*PERF.bPlan*(remaining-.2))));
+        const c=atoControl(state,{v,a,target,cruise:reference.cutoff,stopDist:remaining,remaining,plan:reference});
+        if(state.phase==='coast'&&state.plannedCoast&&remaining>atoStopApproachDistance(v,a))minimum=Math.min(minimum,v);
+        a=jerkLimited(a,c,.1);const nv=Math.max(0,v+a*.1);x+=(v+nv)*.05;v=nv;
+      }
+      return minimum;
+    };
+    expect(plan.completed).toBe(true);expect(plan.coastValid).toBe(true);
+    expect(plan.cutoff).toBeLessThan(22);expect(plan.coastAt).toBeLessThan(dist);
+    expect(minScheduledCoast(plan.coastAt)).toBeGreaterThanOrEqual(plan.coastFloor-.1);
+    // Scheduling the same cutoff's coast at the section entrance is physically
+    // too early. The solver must retain its floor rather than accepting this.
+    expect(minScheduledCoast(dist)).toBeLessThan(plan.coastFloor-.1);
+  });
+  it('keeps the two real daytime elevated directions close with the terminal 60 limit intact',()=>{
+    const sim=createProbeWorld(),checkpoint=capture(sim),peaks:number[]=[];
+    for(const [origin,destination,dir]of[['YDD','HTS','DN'],['HTS','YDD','UP']]as const){
+      restore(sim,checkpoint);
+      const from=STATIONS.findIndex(s=>s.id===origin),to=STATIONS.findIndex(s=>s.id===destination);
+      const row=probeSection(sim,from,to,dir,43200);
+      expect(row.completed).toBe(true);expect(row.violations).toEqual([]);
+      expect(row.peakKmh).not.toBeNull();
+      peaks.push(row.peakKmh!);
+    }
+    // On-time speed follows the remaining arrival budget, without a minimum
+    // peak-speed requirement. The old false coast rejection split these by 5.
+    expect(Math.abs(peaks[0]-peaks[1])).toBeLessThan(1);
   });
   it('keeps the restriction envelope continuous as coasting effort becomes braking effort',()=>{
     const before=atoLimitSpeed(30,14.4,15,-PERF.resist+.001);

@@ -249,7 +249,9 @@ describe('driver controls and physical enable',()=>{
   expect(sectionCruise(1000,0,10000,5/3.6)).toBe(5/3.6);
   const s=make(),minimum=computeRunTimes(s.topo,186,Infinity,1,true);
   const capped=computeRunTimes(s.topo,186,50,1,true);
-  expect(capped.dn.reduce((a,b)=>a+b,0)-minimum.dn.reduce((a,b)=>a+b,0)).toBeCloseTo(142.9, 1);
+  // D136 airport 60 km/h already changed this physical gap in the frozen
+  // baseline (3833.4 - 3692.8); D137 padding leaves both minimum tables intact.
+  expect(capped.dn.reduce((a,b)=>a+b,0)-minimum.dn.reduce((a,b)=>a+b,0)).toBeCloseTo(140.6, 1);
   expect(OPERATIONS.platformPassKmh).toBe(45);expect(OPERATIONS.platformStopKmh).toBe(Infinity);
  });
  it('RM retains the TBTC AM offer when CBTC is unavailable',()=>{

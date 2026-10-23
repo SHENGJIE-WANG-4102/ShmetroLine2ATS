@@ -19,16 +19,16 @@ describe('D74 diagram ATO levels',()=>{
  const make=()=>new Sim({dayType:'weekday',dateLabel:'night levels',startTime:14400,seed:1,noPossessions:true});
  it('keeps the recalibrated continuous night-grade tables and unchanged level data',()=>{
   const s=make();
-  // D135: capped automatic traction, shaped stops and the one .1760 margin.
-  // The former D121 totals belonged to the old pulsed controller and .20 margin.
-  for(const [level,dn,up] of [[3,4758.4,4760.3],[4,4909.7,4912.1]]){
+  // D137: each stopping interval adds the same 22.5 s; the airport 60 km/h
+  // limit and continuous night-grade performance data stay in the physical run.
+  for(const [level,dn,up] of [[3,4763.2,4765.4],[4,4897.1,4900.4]]){
    const rt=s.rt.byLevel![level];
    expect(Math.abs(rt.dn.reduce((a,b)=>a+b,0)-dn),`level ${level} DN`).toBeLessThanOrEqual(10);
    expect(Math.abs(rt.up.reduce((a,b)=>a+b,0)-up),`level ${level} UP`).toBeLessThanOrEqual(10);
   }
   expect(levelBand(1)).toEqual({band:0,lower:0});expect(levelBand(2)).toEqual({band:5/3.6,lower:0});
   expect(levelBand(3)).toEqual({band:10/3.6,lower:6.5/3.6});expect(levelBand(4)).toEqual({band:10/3.6,lower:9.5/3.6});
-  expect(OPERATIONS.runMargin).toBe(.1760);
+  expect(OPERATIONS.sectionRunAllowanceS).toBe(22.5);
  });
  it('chooses levels at interval departure, including a trip crossing into the night band',()=>{
   const s=make(),departure=21*3600+39*60+55;

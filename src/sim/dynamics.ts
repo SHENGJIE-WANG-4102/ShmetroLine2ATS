@@ -469,10 +469,11 @@ export function computeRunTimes(topo: Topology, trainLen: number, stopPlatformKm
   // (PSD glass vs. the pressure wave), loaded or empty
   const k = OPERATIONS.platformPassKmh;
   const [passDn, passUp] = pass(trackProfile(topo, 'DN', k), trackProfile(topo, 'UP', k));
-  // planning margin over the minimum ATO run (OPERATIONS.runMargin)
-  const pad = (a: number[], margin: number) => a.map(t => minimum ? t : Math.floor(t * (1 + margin) * 10) / 10);
-  const result: RunTimes = { dn: pad(dn, OPERATIONS.runMargin), up: pad(up, OPERATIONS.runMargin),
-    passDn: pad(passDn, OPERATIONS.passRunMargin), passUp: pad(passUp, OPERATIONS.passRunMargin) };
+  // 用户决定（2026-10-23）：所有停站区间统一增加固定秒数。
+  const pad = (a: number[]) => a.map(t => minimum ? t : Math.floor((t + OPERATIONS.sectionRunAllowanceS) * 10) / 10);
+  // 通过走行没有完整起停，不属停站区间固定富余；保留原passRunMargin比例。
+  const passPad = (a: number[]) => a.map(t => minimum ? t : Math.floor(t * (1 + OPERATIONS.passRunMargin) * 10) / 10);
+  const result: RunTimes = { dn: pad(dn), up: pad(up), passDn: passPad(passDn), passUp: passPad(passUp) };
   if (runLevel === 1) result.byLevel = Object.fromEntries([2, 3, 4].map(level => [level, computeRunTimes(topo, trainLen, stopPlatformKmh, level, minimum)]));
   return result;
 }
@@ -509,7 +510,9 @@ function integrateSection(dist: number, initialV: number, initialA: number, cuto
       target = Math.min(target, atoLimitSpeed(d - 3, boundaries[i].cap, v, a));
     }
     const command = atoControl(state,{v,a,target:Math.max(0,target),cruise:cutoff,stopDist:remaining,remaining,plan,dt});
-    if (state.phase === 'coast' && remaining > v*v/(2*PERF.bPlan)+Math.max(3,v*.8) && v < plan.coastFloor-.1) plan.coastValid=false;
+    // Only the scheduled slack-consuming coast has a coast-end floor. A
+    // normal neutral transition at a lower static limit can be slower.
+    if (state.phase === 'coast' && state.plannedCoast && remaining > v*v/(2*PERF.bPlan)+Math.max(3,v*.8) && v < plan.coastFloor-.1) plan.coastValid=false;
     a = jerkLimited(a, Math.max(-PERF.bService, Math.min(atoTractionAccel(v), command)), dt);
     const nextV = Math.max(0,v+a*dt);
     const travelled = (v+nextV)*dt/2;

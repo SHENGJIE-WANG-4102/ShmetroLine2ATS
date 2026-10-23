@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createProbeWorld, probeSection } from '../scripts/audio/field-model';
 import { capture, restore } from '../src/sim/state';
-import { STATIONS } from '../src/data/line2';
+import { STATIONS, LINE_INFO, OPERATIONS } from '../src/data/line2';
 import { regulationDistance, regulationProfile, scanAhead, goalBerth, MA_NEAR, computeBody, indexBodies, updateTrainMotion } from '../src/sim/movement';
-import { PERF, sectionEta, sectionPlan, staticLinkLimit } from '../src/sim/dynamics';
+import { PERF, computeRunTimes, sectionEta, sectionPlan, staticLinkLimit } from '../src/sim/dynamics';
 import { newTrain } from '../src/sim/ats';
 import { buildStops, platformBerth, tripTasks } from '../src/sim/timetable';
 import { releaseRoute } from '../src/sim/interlocking';
@@ -128,6 +128,20 @@ describe('field section measurement harness', () => {
 });
 
 describe('static task-path ETA', () => {
+  it('gives short and long stopping sections the same seconds at every running level', () => {
+    const sim=createProbeWorld();
+    const minimum=computeRunTimes(sim.topo,LINE_INFO.trainLength,OPERATIONS.platformStopKmh,1,true);
+    for(const level of [1,2,3,4]) {
+      const planned=level===1?sim.rt:sim.rt.byLevel![level];
+      const physical=level===1?minimum:minimum.byLevel![level];
+      for(const dir of ['dn','up'] as const) for(let i=0;i<planned[dir].length;i++) {
+        const allowance=planned[dir][i]-physical[dir][i];
+        // The existing 0.1-second truncation may remove a fraction of a tick.
+        expect(allowance,`level ${level} ${dir} section ${i}`).toBeGreaterThan(OPERATIONS.sectionRunAllowanceS-.10000001);
+        expect(allowance,`level ${level} ${dir} section ${i}`).toBeLessThanOrEqual(OPERATIONS.sectionRunAllowanceS+.00000001);
+      }
+    }
+  });
   it('spends a turnout limit only on that segment, carrying speed into the main line', () => {
     const slow = 30 / 3.6, fast = PERF.vMax;
     const limits = [{ length: 100, limit: slow }, { length: 1900, limit: fast }];
