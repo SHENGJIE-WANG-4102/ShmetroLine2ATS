@@ -28,7 +28,7 @@ import { holidayOf, isoDate, parseTime } from '../sim/calendar';
 export { parseTime };
 export const newOperatingSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
 import { INSTRUCTOR_EVENTS, SCENARIOS, instructorEventIds } from '../sim/scenario';
-import { LINE, WEATHER_RULES, unattended } from '../data/current';
+import { LINE, GROUP, WEATHER_RULES, unattended, visibleLineGroups } from '../data/current';
 import { formatDrivingMode } from './drivingMode';
 import { isPlayerDriving } from './utoControls';
 
@@ -720,6 +720,14 @@ export class App {
   showDayDialog(required = false) {
     const d = new Date();
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+    // the line group is fixed at startup (current.ts): switching reloads with ?line=, like the header menu
+    const groups = visibleLineGroups(import.meta.env.DEV);
+    const lineSel = h('select', { onchange: () => {
+      const url = new URL(location.href);
+      url.searchParams.set('line', lineSel.value);
+      location.assign(url.href);
+    } }, ...groups.map(g => h('option', { value: g.id }, g.name))) as HTMLSelectElement;
+    lineSel.value = GROUP.id;
     const dateIn = datePick(d, () => showHol());
     const hol = h('input', { type: 'checkbox' }) as HTMLInputElement;
     const st = h('select', {}, ...[['04:30', '首班车前 04:30'], ['06:30', '早高峰前 06:30'], ['07:40', '早高峰 07:40'], ['12:00', '平峰 12:00'], ['17:40', '晚高峰 17:40'], ['21:30', '末班前 21:30'], ['23:50', '收车 23:50']].map(([v, t]) => h('option', { value: v }, t))) as HTMLSelectElement;
@@ -768,6 +776,7 @@ export class App {
     back.append(h('div', { class: 'modal day-setup' },
       h('div', { class: 'modal-h' }, '运营日设置'),
       h('div', { class: 'modal-b' },
+        groups.length > 1 ? h('div', { class: 'form', style: 'margin-bottom:14px' }, h('label', {}, '线路'), lineSel) : null,
         h('div', { class: 'form' }, h('label', {}, '运营日期'), dateIn.el, h('label', {}, '节假日'), hol),
         holHint,
         h('div', { class: 'form', style: 'margin-top:14px' }, h('label', {}, '开始时刻'), st),

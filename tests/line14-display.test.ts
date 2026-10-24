@@ -79,14 +79,14 @@ describe('column platform and status-grid cab presentation', () => {
     expect(sim.command({ c: 'dmiAck', train: train.id, message: '速度警告', at: sim.t }).ok).toBe(true);
     const dmi = cab.computeDmi(sim, train.id)!;
     expect(dmi.acknowledged).toContain(`${sim.t}|速度警告`);
-    expect(screen.statusGridAlarmAt(dmi, 680, 486)).toBeUndefined();
+    expect(screen.statusGridAlarmAt(dmi, 60, 520)).toBeUndefined();
     expect(sim.inputLog.at(-1)).toMatchObject({ cmd: { c: 'dmiAck' } });
     expect(sim.command({ c: 'dmiAck', train: train.id, message: '速度警告', at: sim.t }).ok).toBe(true);
     expect(train.dmiAcknowledged).toHaveLength(1);
     cab.dmiTick(sim);
     sim.t += 1; train.v = 74 / 3.6; cab.dmiTick(sim);
     const repeated = cab.computeDmi(sim, train.id)!;
-    expect(screen.statusGridAlarmAt(repeated, 680, 486)).toMatchObject({ t: sim.t, m: '速度警告' });
+    expect(screen.statusGridAlarmAt(repeated, 60, 520)).toMatchObject({ t: sim.t, m: '速度警告' });
     expect(repeated.acknowledged).not.toContain(`${sim.t}|速度警告`);
   });
 

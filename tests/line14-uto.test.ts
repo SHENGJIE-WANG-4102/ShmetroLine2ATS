@@ -176,6 +176,14 @@ describe('unattended line operating procedures',()=>{
       expect(sim.integrity.violations).toEqual([]);
     } finally {data.OPERATIONS.atoRandomOverrunProbability=probability;}
   });
+  it('an overrun under an existing ATPM takeover backs up without a second takeover sequence',()=>{
+    const tr=fixture();
+    tr.tasks.unshift({k:'stop',station:22,berth:timetable.platformBerth(sim.topo,22,'DN'),arr:sim.t,dep:sim.t+30,trip:-1} as never);
+    Object.assign(tr,{manual:true,mode:'CM',overrun:9.4,uto:{target:'CM',computer:false,stage:'manual',until:sim.t,detail:''}});
+    const result=ats.answerOverrun(sim,tr,'back');
+    expect(result.ok).toBe(true);
+    expect(tr.uto?.stage).toBe('manual');expect(tr.retreat).toMatchObject({distance:9.4,authorised:true});
+  });
   it('full-auto equipment failure degrades to ATPM and exposes the remote reset command',()=>{
     const tr=fixture();expect(sim.command({c:'fault',kind:'trainUto',target:tr.id,duration:0}).ok).toBe(true);
     uto.utoTrainTick(sim,tr);sequence(tr);

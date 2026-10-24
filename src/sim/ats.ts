@@ -1129,6 +1129,16 @@ export function answerOverrun(sim: Sim, tr: Train | undefined, option: string): 
     tr.tasks.shift();
     return { ok: true, msg: '越站运行，前方站广播' };
   }
+  // Already taken over (key in, OCC told): the attendant only backs up, no second takeover sequence.
+  if (unattended('doorClose') && tr.manual && tr.uto?.stage === 'manual') {
+    if (tr.uto.computer && !(tr.mode === 'RM' || setMode(sim, tr, 'RM', tr.level, `${crewLabel()}转 RM 退行对标`))) {
+      tr.overrun = d; tr.stopUntil = sim.t + 86400; tr.stopReason = 'RM 模式不可用';
+      return { ok: false, msg: 'RM 模式不可用' };
+    }
+    tr.retreat = { distance: d, authorised: true };
+    if (tr.uto.computer) tr.uto.retreat = true;
+    return { ok: true, msg: `同意退行对标，${crewLabel()}操作换向器退行` };
+  }
   if (unattended('doorClose')) {
     const result=requestUtoControl(sim,tr,'RM',tr.uto?.computer??!tr.manual);
     if(!result.ok){tr.overrun=d;tr.stopUntil=sim.t+86400;tr.stopReason=result.msg;return result;}
