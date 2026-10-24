@@ -167,6 +167,11 @@ export const SIMULATION: SimulationData = {
   ...SIMULATION_EXTRAS,
   topology: { wrapAfter: 'LJZ' },
   timetable: {
+    diagnostics: {
+      firstLastLabels: ['last→airport', 'last→蟠祥路', 'last→广兰路'],
+      gaode: { directory: 'reference/timetable-gaode', checks: [['北新泾', 'UP'], ['世纪公园', 'UP'], ['世纪公园', 'DN'], ['张江高科', 'UP'], ['张江高科', 'DN']],
+        windows: [[360,660],[960,1410]], reference: { stations: ['川沙','凌空路','远东大道','海天三路','浦东1号2号航站楼'], from: 8, to: 24 } },
+    },
     templates: TEMPLATES, dayPeriods: DAY_PERIODS, shownPeriods: SHOWN_PERIODS,
     dwellBands: DWELL_BANDS, runBands: RUN_BANDS, serviceData: SERVICE_DATA,
     opening: OPENING, outerBandMargin: 1200, overlays: OVERLAY_PRESETS,

@@ -1,3 +1,6 @@
+import { formatTrainNumber } from './trainNumber';
+import { utoControls, utoDrivingChoices, isPlayerDriving } from './utoControls';
+import { formatDrivingMode } from './drivingMode';
 /**
  * Details & commands for the selected object (select → command → confirm).
  * Trains get the driver display (DMI), following and manual driving;
@@ -8,7 +11,8 @@ import { timePick } from './timepick';
 import { h, clear } from './dom';
 import type { Store } from './store';
 import { confirmAndSend, type CmdSpec } from './confirm';
-import { LINE, STATIONS, LINE_INFO, supportsSignalSystem } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, OPERATIONS, supportsSignalSystem, unattended } from '../data/current';
+import { PERF } from '../sim/dynamics';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT, type TrackDir, type TrainSnap } from '../sim/model';
 import { turnbackAt, exitStation, OVERLAY_PRESETS } from '../sim/timetable';
 import { fmtTime, fmtDelay } from './theme';
@@ -44,10 +48,15 @@ export class CommandPanel {
     this.store = store;
     this.hooks = hooks;
     this.dmi = new Dmi(() => hooks.resolution());
+    this.dmi.onAck = (message, at) => {
+      const selected = this.store.selection;
+      if (selected?.kind === 'train') void this.store.command({ c: 'dmiAck', train: selected.id, message, at });
+    };
     this.stopView = new StopView(() => hooks.resolution());
     this.dmi.onNotch = (n) => {
       const sel = this.store.selection;
-      if (sel?.kind === 'train') this.store.send({ type: 'drive', train: sel.id, notch: n });
+      const train = sel?.kind === 'train' ? this.store.snap?.trains.find(t => t.id === sel.id) : undefined;
+      if (train && isPlayerDriving(train)) this.store.send({ type: 'drive', train: train.id, notch: n });
     };
     store.on('selection', () => this.render(true));
     store.on('snap', () => this.render(false));
@@ -67,6 +76,8 @@ export class CommandPanel {
     if (sel?.kind === 'train' && snap) {
       const t = snap.trains.find((x) => x.id === sel.id);
       key += `|${t ? `${t.manual}${t.atoDriver}${t.mode}${t.failed}${t.hold}${t.halt?.code === 'INTERVAL_LIMIT'}${this.hooks.following() === t.id}` : 'gone'}`;
+      if (t?.uto) key += `|${t.uto.stage}:${t.uto.target}:${t.uto.computer}:${snap.t >= t.uto.until}:${t.doors}:${t.doorClosing}`;
+      if (t) key += `|${t.dto}`;
     }
     if (sel && (sel.kind === 'switch' || sel.kind === 'section' || sel.kind === 'platform' || sel.kind === 'signal') && snap) {
       const arr = sel.kind === 'switch' ? snap.switches : sel.kind === 'section' ? snap.sections : sel.kind === 'platform' ? snap.platforms : snap.signals;
@@ -334,27 +345,28 @@ export class CommandPanel {
     const t0 = this.store.snap!.trains.find((x) => x.id === id);
     if (!t0) { this.el.append(h('div', { class: 'empty' }, '列车已不在线')); return; }
     const following = this.hooks.following() === id;
-    this.el.append(this.head('列车', `${t0.svc}-${t0.trip}`, false, h('span', { class: 'chip info' }, `车组 ${t0.vehicle}`)));
+    this.el.append(this.head('列车', `${formatTrainNumber(t0.svc, t0.trip, true)}`, false, h('span', { class: 'chip info' }, `车组 ${t0.vehicle}`)));
     // follow + driving
     const drive = h('div', { class: 'cmdgrid' },
       this.btn(following ? '取消跟踪' : '跟踪列车', () => this.hooks.follow(following ? null : id), following ? 'on' : 'primary'),
-      ...(t0.manual || t0.atoDriver
-        ? [this.btn('恢复自动驾驶', { title: `列车 ${t0.svc}-${t0.trip} 恢复自动驾驶（CBTC级 DTO 或降级ATO时 AM，TBTC级 AM）`, cmd: { c: 'manual', train: id, mode: 'AUTO' } }, 'primary')]
+      ...(unattended('doorClose') ? utoDrivingChoices(this.store, t0) : t0.manual || t0.atoDriver
+        ? [this.btn('恢复自动驾驶', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 恢复自动驾驶（CBTC级 DTO 或降级ATO时 AM，TBTC级 AM）`, cmd: { c: 'manual', train: id, mode: 'AUTO' } }, 'primary')]
         : [
-          this.btn('ATO 驾驶', { title: `接管列车 ${t0.svc}-${t0.trip}：ATO驾驶`, cmd: { c: 'manual', train: id, mode: 'AM' }, detail: '自动驾驶，到站后关门锁闭、发车条件满足时，同时按住F和G启动。' }, 'warn'),
-          this.btn('人工驾驶 CM', { title: `接管列车 ${t0.svc}-${t0.trip}：人工驾驶 CM（ATP 防护）`, cmd: { c: 'manual', train: id, mode: 'CM' }, detail: '由你操纵牵引/制动手柄驾驶列车（Z 牵引、Q 制动、S 中立位、E 紧急制动；Y/U 右/左侧车门）。到站停准后由你开关门，车门关好才能牵引。ATP 监督速度与移动授权，超速将触发紧急制动并计入安全违章。停站对标将评分。人工驾驶期间仿真速率最高 5×。' }, 'warn'),
-          this.btn('人工驾驶 RM', { title: `接管列车 ${t0.svc}-${t0.trip}：限制人工驾驶 RM（≤25km/h）`, cmd: { c: 'manual', train: id, mode: 'RM' }, critical: true, detail: 'RM 模式无移动授权防护，司机目视行车，限速25km/h。越过红灯将记为冒进信号。须先停车。' }, 'danger'),
+          this.btn('ATO 驾驶', { title: `接管列车 ${formatTrainNumber(t0.svc, t0.trip, true)}：ATO驾驶`, cmd: { c: 'manual', train: id, mode: 'AM' }, detail: '自动驾驶，到站后关门锁闭、发车条件满足时，同时按住F和G启动。' }, 'warn'),
+          this.btn('人工驾驶 CM', { title: `接管列车 ${formatTrainNumber(t0.svc, t0.trip, true)}：人工驾驶 CM（ATP 防护）`, cmd: { c: 'manual', train: id, mode: 'CM' }, detail: '由你操纵牵引/制动手柄驾驶列车（Z 牵引、Q 制动、S 中立位、E 紧急制动；Y/U 右/左侧车门）。到站停准后由你开关门，车门关好才能牵引。ATP 监督速度与移动授权，超速将触发紧急制动并计入安全违章。停站对标将评分。人工驾驶期间仿真速率最高 5×。' }, 'warn'),
+          this.btn('人工驾驶 RM', { title: `接管列车 ${formatTrainNumber(t0.svc, t0.trip, true)}：限制人工驾驶 RM（≤25km/h）`, cmd: { c: 'manual', train: id, mode: 'RM' }, critical: true, detail: 'RM 模式无移动授权防护，司机目视行车，限速25km/h。越过红灯将记为冒进信号。须先停车。' }, 'danger'),
         ]),
     );
     this.el.append(drive);
+    this.el.append(...utoControls(this.store, t0));
     if (this.dmiTrain !== id) { this.dmi.reset(); this.dmiTrain = id; }
     this.store.send({ type: 'dmi', train: id });
-    this.dmi.showLever(t0.manual);
+    this.dmi.showLever(isPlayerDriving(t0));
     this.el.append(this.dmi.el);
     this.el.append(this.stopView.el);
     if (t0.atoDriver) this.el.append(h('div', { class: 'keys' }, 'ATO启动：发车条件满足后同时按住 F + G'));
-    if (t0.manual) this.el.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 右门 · ', h('b', {}, 'U'), ' 左门 · 鼠标滚轮/点击手柄档位'));
-    if (t0.manual) this.el.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
+    if (isPlayerDriving(t0)) this.el.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 右门 · ', h('b', {}, 'U'), ' 左门 · 鼠标滚轮/点击手柄档位'));
+    if (isPlayerDriving(t0)) this.el.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
     const scores = h('div', { class: 'scores' });
     if (t0.drv || t0.manual) this.el.append(h('div', { class: 'sect-title' }, '人工驾驶记录（对标误差 / 得分）'), scores);
     this.el.append(this.liveKv(() => {
@@ -365,8 +377,9 @@ export class CommandPanel {
         ...(t.manual ? [['换向器', t.reverser === -1 ? '后' : t.reverser === 0 ? '零' : '前'] as [string, string]] : []),
         ['目的地', t.dest || '—'], ['方向', dir === 'DN' ? '下行' : '上行'],
         ['当前任务', t.task], ['晚点', t.inService ? fmtDelay(t.delay) : '非载客', t.delay > 300 ? 'bad' : t.delay > 120 ? 'warn' : ''],
+        ...(t.unattendedStatus ? [['自动作业', t.unattendedStatus] as [string, string]] : []),
         ['停车原因', t.halt ? `${t.halt.label}${t.halt.blocker ? `（${t.halt.blocker}）` : ''} [${t.halt.code}] ${t.halt.detail}` : '—'],
-        ['折返阶段', ({ none: '—', arrive: '牵入', reverse: '换端', manual: '待司机牵出', depart: '牵出' })[t.tbStage]],
+        ['折返阶段', ({ none: '—', arrive: '牵入', reverse: '换端', manual: `待${OPERATIONS.uto?.crewLabel ?? '司机'}牵出`, depart: '牵出' })[t.tbStage]],
         ['出入段阶段', ({ none: '—', out: '出段', in: '入段' })[t.depotStage]],
         ['满载率', `${Math.round((t.load / LINE_INFO.capacity) * 100)}%`, t.load > LINE_INFO.capacity ? 'warn' : ''], ['里程', `K${(t.chain / 1000).toFixed(3)}`],
       ];
@@ -391,15 +404,15 @@ export class CommandPanel {
     const release = t0.hold || intervalHeld;
     this.el.append(h('div', { class: 'sect-title' }, '调度命令'));
     this.el.append(h('div', { class: 'cmdgrid' },
-      this.btn(release ? '放行' : '扣车', { title: `${release ? '放行' : '扣车'} 列车 ${t0.svc}-${t0.trip}`, cmd: { c: 'trainHold', train: id, on: !release },
+      this.btn(release ? '放行' : '扣车', { title: `${release ? '放行' : '扣车'} 列车 ${formatTrainNumber(t0.svc, t0.trip, true)}`, cmd: { c: 'trainHold', train: id, on: !release },
         detail: intervalHeld ? '仅放行本站这一次区间限车，仍须信号开放并满足ATP防护。' : undefined }),
-      this.btn('恢复接续', { title: `列车 ${t0.svc}-${t0.trip} 故障恢复接续`, cmd: { c: 'recoverService', train: id }, detail: '仅在已完成车次的终点停站办理。取消已错过的完整往返车次，按原图接续同一终点的近期始发；无近期接续则保留计划，须另行人工调整。已完成车次和历史晚点保留。' }),
-      this.btn('退出服务', { title: `列车 ${t0.svc}-${t0.trip} 退出服务，清客回段`, cmd: { c: 'withdraw', train: id }, detail: '列车在前方站清客后回最近车辆段/停车场，剩余计划车次取消。' }),
-      this.btn('备车接替', { title: `为列车 ${t0.svc}-${t0.trip} 投入热备/备车`, cmd: { c: 'standby', train: id }, detail: '列车晚点、后续车次将晚发时：优先由终点站热备车接替其在该站的始发车次（提前2–3分钟通知），本车到达后转为热备；无热备可用时由车辆段备车出段接替，本车跑完保留车次后回段。' }),
-      t0.dto
-        ? this.btn('恢复DTO', { title: `列车 ${t0.svc}-${t0.trip} 恢复DTO`, cmd: { c: 'trainDto', train: id, on: true }, detail: `当前不能DTO：${t0.dto}。调度命令降级的可恢复；车载故障须先修复。列车在下一站停站时由AM转DTO。` })
-        : this.btn('降级ATO', { title: `列车 ${t0.svc}-${t0.trip} 降级为ATO（司机驾驶室值守）`, cmd: { c: 'trainDto', train: id, on: false }, detail: '仍为CBTC级移动闭塞，司机在下一站停站时转AM：发车需司机按ATO启动按钮，折返时司机换端（多约45秒）。用于DTO相关设备故障、车内异常需司机值守等。' }, 'warn'),
-      this.btn('授权RM运行', { title: `授权列车 ${t0.svc}-${t0.trip} 以RM模式运行`, cmd: { c: 'authRM', train: id }, critical: true, detail: '司机以≤25km/h目视行车600m，可越过故障占用区段或关闭的信号（须确认进路正确、道岔位置正确）。' }),
+      this.btn('恢复接续', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 故障恢复接续`, cmd: { c: 'recoverService', train: id }, detail: '仅在已完成车次的终点停站办理。取消已错过的完整往返车次，按原图接续同一终点的近期始发；无近期接续则保留计划，须另行人工调整。已完成车次和历史晚点保留。' }),
+      this.btn('退出服务', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 退出服务，清客回段`, cmd: { c: 'withdraw', train: id }, detail: '列车在前方站清客后回最近车辆段/停车场，剩余计划车次取消。' }),
+      this.btn('备车接替', { title: `为列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 投入热备/备车`, cmd: { c: 'standby', train: id }, detail: '列车晚点、后续车次将晚发时：优先由终点站热备车接替其在该站的始发车次（提前2–3分钟通知），本车到达后转为热备；无热备可用时由车辆段备车出段接替，本车跑完保留车次后回段。' }),
+      ...(unattended('doorClose') ? [] : [t0.dto
+        ? this.btn('恢复DTO', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 恢复DTO`, cmd: { c: 'trainDto', train: id, on: true }, detail: `当前不能DTO：${t0.dto}。调度命令降级的可恢复；车载故障须先修复。列车在下一站停站时由AM转DTO。` })
+        : this.btn('降级ATO', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 降级为ATO（司机驾驶室值守）`, cmd: { c: 'trainDto', train: id, on: false }, detail: '仍为CBTC级移动闭塞，司机在下一站停站时转AM：发车需司机按ATO启动按钮，折返时司机换端（多约45秒）。用于DTO相关设备故障、车内异常需司机值守等。' }, 'warn')]),
+      this.btn('授权RM运行', { title: `授权列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 以RM模式运行`, cmd: { c: 'authRM', train: id }, critical: true, detail: `${OPERATIONS.uto?.crewLabel ?? '司机'}以≤${Math.round(PERF.vRM * 3.6)}km/h目视行车600m，可越过故障占用区段或关闭的信号（须确认进路正确、道岔位置正确）。` }),
     ));
     const skipSel = h('select', {}, ...ahead.slice(0, 8).map((s) => h('option', { value: s.index }, s.name))) as HTMLSelectElement;
     const tbSel = h('select', {}, ...tbOpts.map((s) => {
@@ -407,16 +420,16 @@ export class CommandPanel {
       return h('option', { value: s.index }, `${s.name}（${tb.kind === 'rear' ? '站后' : '站前'}）`);
     })) as HTMLSelectElement;
     this.el.append(h('div', { class: 'form' }, h('label', {}, '跳停'), skipSel,
-      this.btn('设置跳停', () => void confirmAndSend(this.store, { title: `列车 ${t0.svc}-${t0.trip} 跳停 ${STATIONS[Number(skipSel.value)].name}`, cmd: { c: 'trainSkip', train: id, station: Number(skipSel.value), on: true } }))));
+      this.btn('设置跳停', () => void confirmAndSend(this.store, { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 跳停 ${STATIONS[Number(skipSel.value)].name}`, cmd: { c: 'trainSkip', train: id, station: Number(skipSel.value), on: true } }))));
     this.el.append(h('div', { class: 'form' }, h('label', {}, '人工折返'), tbSel,
-      this.btn('折返', () => tbSel.value && void confirmAndSend(this.store, { title: `列车 ${t0.svc}-${t0.trip} 人工折返于 ${STATIONS[Number(tbSel.value)].name}`, cmd: { c: 'turnback', train: id, station: Number(tbSel.value) }, detail: '列车在折返站清客折返，按调整车次接续反方向运营。' }), 'primary')));
+      this.btn('折返', () => tbSel.value && void confirmAndSend(this.store, { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 人工折返于 ${STATIONS[Number(tbSel.value)].name}`, cmd: { c: 'turnback', train: id, station: Number(tbSel.value) }, detail: '列车在折返站清客折返，按调整车次接续反方向运营。' }), 'primary')));
     if (t0.failed) {
       const behind = this.store.snap!.trains.filter((x) => x.id !== id && this.trainDir(x) === dir && (dir === 'DN' ? x.chain < t0.chain : x.chain > t0.chain))
         .sort((a, b) => Math.abs(a.chain - t0.chain) - Math.abs(b.chain - t0.chain)).slice(0, 4);
-      const rs = h('select', {}, ...behind.map((x) => h('option', { value: x.id }, `${x.svc}-${x.trip}（后方 ${Math.round(Math.abs(x.chain - t0.chain))}m）`))) as HTMLSelectElement;
+      const rs = h('select', {}, ...behind.map((x) => h('option', { value: x.id }, `${formatTrainNumber(x.svc, x.trip, true)}（后方 ${Math.round(Math.abs(x.chain - t0.chain))}m）`))) as HTMLSelectElement;
       this.el.append(h('div', { class: 'sect-title' }, '故障救援'));
       this.el.append(h('div', { class: 'form' }, h('label', {}, '救援列车'), rs,
-        this.btn('组织救援', () => rs.value && void confirmAndSend(this.store, { title: `组织列车 ${rs.selectedOptions[0]?.textContent} 救援故障列车 ${t0.svc}-${t0.trip}`, cmd: { c: 'rescue', failed: id, rescuer: Number(rs.value) }, critical: true, detail: '救援列车清客后以RM模式接近连挂（≤3km/h），推送故障车至前方站清客后回段。' }), 'danger')));
+        this.btn('组织救援', () => rs.value && void confirmAndSend(this.store, { title: `组织列车 ${rs.selectedOptions[0]?.textContent} 救援故障列车 ${formatTrainNumber(t0.svc, t0.trip, true)}`, cmd: { c: 'rescue', failed: id, rescuer: Number(rs.value) }, critical: true, detail: '救援列车清客后以RM模式接近连挂（≤3km/h），推送故障车至前方站清客后回段。' }), 'danger')));
     }
     this.live?.();
   }
@@ -437,8 +450,8 @@ export class CommandPanel {
       ));
     });
     this.el.append(h('div', { class: 'sect-title' }, `${[LINE.signalling.primary, ...LINE.signalling.fallback].join(' / ')} 系统切换`), zbox);
-    this.el.append(h('div', { class: 'sect-title' }, `运营驾驶模式：${snap.atoLine ? 'ATO（DTO兼容模式，司机驾驶）' : 'DTO'}`));
-    this.el.append(h('div', { class: 'cmdgrid' },
+    this.el.append(h('div', { class: 'sect-title' }, `运营驾驶模式：${snap.atoLine ? 'ATO（DTO兼容模式，司机驾驶）' : formatDrivingMode('DTO')}`));
+    if (!unattended('doorClose')) this.el.append(h('div', { class: 'cmdgrid' },
       snap.atoLine
         ? this.btn('全线恢复DTO', { title: '全线恢复 DTO 运营', cmd: { c: 'lineAto', on: false }, critical: true, detail: '各列车在下一站停站时由AM恢复DTO（车载DTO故障或单独降级的列车除外）。' })
         : this.btn('全线转ATO运营', { title: '全线转 ATO 运营（DTO兼容模式）', cmd: { c: 'lineAto', on: true }, critical: true, detail: '仍为CBTC移动闭塞，各列车在下一站停站时由司机转AM驾驶；终点站折返司机换端约多45秒、发车需司机按钮。运行图不变，终点站折返余量吸收换端时间；高峰折返紧张时可能晚点。新运营日也可在“运营日设置”中直接选择ATO运营。' }, 'warn'),

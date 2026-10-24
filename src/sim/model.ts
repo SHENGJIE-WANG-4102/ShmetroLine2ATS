@@ -167,7 +167,23 @@ export type TrainPhase =
   | 'coupling'
   | 'depotExit';
 
+export type UtoAction = 'report' | 'key' | 'famOff' | 'brake' | 'confirm' | 'restoreReport' | 'neutral' | 'famOn';
+export interface UtoControlState {
+  target: 'CM' | 'RM' | 'DTO'; computer: boolean;
+  stage: 'doors' | UtoAction | 'manual' | 'reset'; until: number; detail: string;
+  reason?: 'signalLoss' | 'fault' | 'random' | 'overrun';
+  returnAt?: number; closeAt?: number; retreat?: boolean; resetSuccess?: boolean;
+}
+export interface UtoVehicleState {
+  stage: 'sleep' | 'power' | 'pantograph' | 'selfTest' | 'ready' | 'clear' | 'wash';
+  until: number; cycles: number; lastTakeoverDay?: string;
+}
 export interface Train {
+  uto?: UtoControlState;
+  utoDoorWarningAt?: number;
+  dmiAcknowledged?: string[];
+  randomOverrunBerth?: number;
+  randomOverrunM?: number;
   id: number;
   vehicle: string;
   svc: string;
@@ -368,6 +384,11 @@ export interface DmiPrev { avail: string; comm: boolean; mode: string; eb: boole
 
 /** what the cab DMI needs beyond the train snapshot */
 export interface DmiData {
+  runningLevel?: number;
+  acknowledged?: string[];
+  targetSpeed: number;
+  targetDistance: number;
+  speedWarning: boolean;
   train: number;
   /** "T" + 4 digits */
   trainNo: string;
@@ -520,6 +541,7 @@ export interface SimEvent {
 
 export type FaultKind =
   | 'trainComm'
+  | 'trainUto'
   | 'trainDto'
   | 'zcFail'
   | 'axle'
@@ -585,6 +607,9 @@ export type Command =
   | { c: 'ebRelease'; train: number }
   | { c: 'trainLevel'; train: number; level: ForceLevel }
   /** DTO allowed for the train (on) or degraded to ATO with the driver (off) */
+  | { c: 'utoStep'; train: number; action: UtoAction }
+  | { c: 'utoReset'; train: number }
+  | { c: 'dmiAck'; train: number; message: string; at: number }
   | { c: 'trainDto'; train: number; on: boolean }
   | { c: 'door'; train: number; side: 'L' | 'R' }
   /** whole line: ATO with drivers (on) or back to DTO (off) */
@@ -599,7 +624,7 @@ export type Command =
   | { c: 'trainMaintenance'; fault: number }
   | { c: 'sectionBlock'; sections: number[]; on: boolean }
   | { c: 'switchBlock'; sw: number; on: boolean }
-  | { c: 'manual'; train: number; mode: 'CM' | 'RM' | 'AM' | 'AUTO' }
+  | { c: 'manual'; train: number; mode: 'CM' | 'RM' | 'AM' | 'AUTO'; computer?: boolean }
   | { c: 'reverser'; train: number; position: -1 | 0 | 1 }
   | { c: 'atoButton'; train: number; button: 'f' | 'g'; down: boolean }
   | { c: 'radio'; call: number; option: string }
@@ -653,6 +678,8 @@ export type ToWorker =
   | { type: 'restart'; config: SimConfig };
 
 export interface TrainSnap {
+  uto?: UtoControlState;
+  unattendedStatus?: string;
   id: number;
   /** why DTO is not allowed for the train ('' = it is) */
   dto: string;
@@ -750,6 +777,7 @@ export interface Connection {
 }
 
 export interface PisRow {
+  carLoads?: number[];
   dwellRemaining?: number; dest: string; /** destination station index (-1 unknown) */ destSt: number; /** set-down only here */ noBoard?: boolean; eta: number; status: 'eta' | 'arriving' | 'at' | 'departing'; trip: string; load: number }
 export interface PisData {
   station: number; DN: PisRow[]; UP: PisRow[]; notice: string;
@@ -797,7 +825,7 @@ export interface EnvState {
 export interface YardState { tracks: string[][]; perTrack: number }
 /** One vehicle's maintenance record (D112). Days are operating-day numbers
  * (`dayNumber`); `work` is what keeps it in the depot's workshop until `until`. */
-export interface VehicleRecord { daily: number; monthly: number; km: number; work: '' | 'monthly' | 'overhaul'; depot: number; until: number }
+export interface VehicleRecord { uto?: UtoVehicleState; daily: number; monthly: number; km: number; work: '' | 'monthly' | 'overhaul'; depot: number; until: number }
 
 export interface Metrics {
   since: number;

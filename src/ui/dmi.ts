@@ -13,6 +13,14 @@ import { h } from './dom';
 import type { DmiData, TrainSnap } from '../sim/model';
 import { PERF } from '../sim/dynamics';
 import { FONT_CN, fmtTime } from './theme';
+import { LINE } from '../data/current';
+import { drawStatusGrid, statusGridAlarmAt } from './dmiStatusGrid';
+
+const STYLES = {
+  navyDial: { brand: 'CASCO', draw: null, alarmAt: null },
+  statusGrid: { brand: '', draw: drawStatusGrid, alarmAt: statusGridAlarmAt },
+} as const;
+const STYLE = STYLES[LINE.ui.dmiStyle ?? 'navyDial'];
 
 /** seconds of warning before the permitted speed starts to fall below the present speed */
 
@@ -75,6 +83,7 @@ export class Dmi {
   lever: HTMLElement;
   private notchEls: HTMLElement[] = [];
   onNotch: (n: number) => void = () => undefined;
+  onAck: (message: string, at: number) => void = () => undefined;
   /** selected log row (index into the newest-first log) and first visible row */
   private sel = 0;
   private top = 0;
@@ -98,7 +107,7 @@ export class Dmi {
       this.onNotch(NOTCHES[next].v);
     }, { passive: false });
     // bezel with the maker's name above the screen, as on the cab photo
-    const bezel = h('div', { class: 'dmi-bezel' }, h('div', { class: 'dmi-brand' }, 'CASCO'), this.canvas);
+    const bezel = h('div', { class: 'dmi-bezel' }, h('div', { class: 'dmi-brand' }, STYLE.brand), this.canvas);
     this.el = h('div', { class: 'dmi-wrap' }, bezel, this.lever);
     this.setResolution(resolution());
   }
@@ -128,6 +137,11 @@ export class Dmi {
     const r = this.canvas.getBoundingClientRect();
     const x = ((e.clientX - r.left) * W) / r.width;
     const y = ((e.clientY - r.top) * H) / r.height;
+    if (STYLE.alarmAt) {
+      const alarm = this.last?.d && STYLE.alarmAt(this.last.d, x, y);
+      if (alarm) this.onAck(alarm.m, alarm.t);
+      return;
+    }
     const inside = (b: { x: number; y: number; w: number; h: number }) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
     const n = this.last?.d?.log.length ?? 0;
     if (inside(BTN_UP)) this.select(this.sel - 1, n);
@@ -147,6 +161,12 @@ export class Dmi {
     this.last = { t, d, now };
     const c = this.ctx;
     c.setTransform(this.res, 0, 0, this.res, 0, 0);
+    if (STYLE.draw) {
+      STYLE.draw(c, t, d, now);
+      this.curNotch = t.notch;
+      this.notchEls.forEach((e, i) => e.classList.toggle('on', t.manual && NOTCHES[i].v === t.notch));
+      return;
+    }
     c.fillStyle = C.bg;
     c.fillRect(0, 0, W, H);
     c.textBaseline = 'alphabetic';

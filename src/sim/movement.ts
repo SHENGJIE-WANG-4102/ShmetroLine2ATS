@@ -1,3 +1,4 @@
+import { utoBusy, utoVehicleWait } from './uto';
 /**
  * Train movement: movement-authority scan (ZC / TBTC / on-sight), ATP & ATO
  * control, kinematics and footprint (occupancy) maintenance.
@@ -342,7 +343,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
       }
       if (atp && tr.rmAuth <= d) {
         if (st.tdRoute >= 0 && (st.td === 0 || st.directionEsp && st.tdTrain !== tr.id || nl.normalDir !== 0 && st.td !== nx.dir)) {
-          obstacle(res, d - 5, '反向折返区域TD切除/紧急停车防护', 'DIRECTION_WAIT', false, st.tdTrain === tr.id ? -1 : st.tdTrain); break;
+          obstacle(res, d - 5, '反向折返区域运行方向切除/紧急停车防护', 'DIRECTION_WAIT', false, st.tdTrain === tr.id ? -1 : st.tdTrain); break;
         }
         // the MA already issued into the failed zone stays valid (kept); no new one is given
         if (tr.level === 'CBTC' && zs === 'ZCFAIL') { obstacle(res, Math.max(d - 5, kept), 'ZC故障区域', 'ZC_FAULT'); if (kept <= d - 5) break; }
@@ -705,6 +706,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   if (tr.maCut && tr.v <= 0.01) tr.maCut = false;
   // a train failing on the move keeps braking under its EB until it stands
   if (tr.failed && tr.phase === 'run' && tr.v <= 0.01) tr.phase = 'failed';
+  if((utoBusy(tr)||utoVehicleWait(sim,tr))&&tr.v<.05){tr.lastDs=0;tr.v=0;tr.a=0;tr.vTarget=0;return;}
   const moving = tr.phase === 'run';
   if (!moving) {
     tr.ato = undefined;
@@ -722,7 +724,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     tr.tgtReason = tr.phase === 'dwell' ? '停站' : '';
     return;
   }
-  if (tr.manual && tr.reverser === -1) { manualReverse(sim, tr, dt); return; }
+  if ((tr.manual || tr.uto?.retreat && tr.uto.stage==='manual') && tr.reverser === -1) { manualReverse(sim, tr, dt); return; }
   const scan = scanAhead(sim, tr, goalBerth(tr), MA_NEAR);
   if (scan.maReason === MA_CAP_REASON && tr.maFar > scan.maDist) {
     // authority reaches beyond the near scan: last full MA, shifted by our own travel
@@ -739,6 +741,16 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   }
   tr.nextSignal = scan.nextSignal;
   tr.nextSignalDist = scan.nextSignalDist;
+  const approach=tr.tasks[0];
+  if(OPERATIONS.atoRandomOverrunProbability>0&&!tr.manual&&tr.mode==='DTO'&&approach?.k==='stop'&&approach.doors
+    &&scan.stopDist<100&&scan.stopDist>10&&tr.v>1&&tr.randomOverrunBerth!==approach.berth) {
+    tr.randomOverrunBerth=approach.berth;
+    if(sim.rng()<OPERATIONS.atoRandomOverrunProbability)tr.randomOverrunM=2+sim.rng()*6;
+  }
+  if(tr.randomOverrunM&&approach?.k==='stop'&&tr.randomOverrunBerth===approach.berth) {
+    const remaining=stopError(sim,tr)+tr.randomOverrunM;
+    if(Number.isFinite(remaining)&&scan.maDist>remaining+2)scan.stopDist=Math.max(0,remaining);
+  }
   tr.stopDist = scan.stopDist;
 
   // pending driver mode change while stopped: the train stands until the onboard logic

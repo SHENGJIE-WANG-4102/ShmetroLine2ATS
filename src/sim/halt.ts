@@ -11,6 +11,7 @@
  * following the wait-for edges to the train that is really blocking — is an
  * exempt code (planned dwell / layover, hold, fault, possession ...).
  */
+import { utoBusy, utoVehicleWait } from './uto';
 import type { Sim } from './engine';
 import type { Train, StopTask } from './model';
 import { atoStartReady, simulatedAmDoorWork } from './ats';
@@ -104,6 +105,9 @@ export interface ArsWait { code: HaltCode; train: number; signal: number; t: num
 /** current halt code of a train from its own state (no graph propagation) */
 export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; detail: string; plannedUntil: number } {
   const r = (code: HaltCode, train = -1, detail = '', plannedUntil = 0) => ({ code, train, detail, plannedUntil });
+  const vehicleWait=utoVehicleWait(sim,tr);
+  if(vehicleWait)return r('MODE_CHANGE',-1,vehicleWait);
+  if(utoBusy(tr))return r('MODE_CHANGE',-1,tr.uto!.detail,tr.uto!.until);
   if (tr.phase === 'stabled') return r('STABLED');
   if (tr.failed) return r('FAILED');
   if (tr.phase === 'coupling') return r('COUPLING');

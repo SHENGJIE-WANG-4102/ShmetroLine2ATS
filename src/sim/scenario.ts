@@ -447,6 +447,10 @@ function injectRandom(sim: Sim, kind: string, usedVehicles?: string[]): string {
       const tr = pick(sim, running.filter((t) => t.level === 'CBTC' && t.comm));
       return tr ? result(injectFault(sim, 'trainComm', tr.id, dur(420))) : '';
     }
+    case 'trainUto': {
+      const tr=pick(sim,running.filter(t=>!t.dtoInhibit));
+      return tr?result(injectFault(sim,'trainUto',tr.id,0)):'';
+    }
     case 'trainDto': {
       const tr = pick(sim, running.filter((t) => ['DTO','AM'].includes(t.mode) && !t.dtoInhibit));
       return tr ? result(injectFault(sim, 'trainDto', tr.id, dur(1800))) : '';

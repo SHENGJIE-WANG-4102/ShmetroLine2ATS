@@ -10,17 +10,21 @@ import { CommandPanel, type PanelHooks } from './cmdpanel';
 import { confirmAndSend, toast, showIntegritySnapshot } from './confirm';
 import { FAULT_LABELS } from '../sim/faults';
 import { SCENARIOS, RANDOM_LEVELS } from '../sim/scenario';
-import { LINE, STATIONS, LINE_INFO, WEATHER_RULES } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, WEATHER_RULES, unattended } from '../data/current';
 import type { FaultKind, RadioCall, SimEvent } from '../sim/model';
 import type { Audio } from './audio';
 import { inverterMode, type VvvfMode } from './vvvf';
 import { PERF, tractionAccel } from '../sim/dynamics';
 import { stationFrame, audioTrain, VVVF_MAX_RATE } from './stationaudio';
 import { onboardFrame } from './onboardaudio';
+import { formatTrainNumber } from './trainNumber';
+import { formatDrivingMode } from './drivingMode';
+import { isPlayerDriving } from './utoControls';
 
 const CAT_FILTERS = ['全部', '报警', '调度', '通话', '信号', '列车', '车站', '客流', '施工', '教员'];
 
 const PROCEDURES: Record<FaultKind, string> = {
+  trainUto: '后果：车载全自动功能故障，随车人员先关门，再报OCC、插钥匙、模式开关归0、制动并确认ATPM，人工驾驶。处置：OCC可远程复位；成功后按操作序列恢复FAM，失败后运行至终点或安排回段。',
   trainComm: '后果：ZC 失去列车位置，该车按计轴区段占用防护；列车紧急制动。处置：司机停稳后报告 → 授权缓解并降级TBTC后备（AM）运行；通信恢复后在下一区段边界不停车升级CBTC（DTO）。',
   trainDto: '后果：该车DTO功能不可用（如障碍物检测、车载DTO设备故障），仍在CBTC下运行，但须司机在驾驶室值守：下一站停站时转ATO（AM），折返时司机换端（多约45秒），发车需司机按ATO启动按钮。处置：调度确认司机已上岗；故障修复后停站时恢复DTO，或安排回段检修。',
   zcFail: '后果：区域内CBTC列车失去移动授权，原地转TBTC后备（AM）按固定闭塞运行。处置：“切换TBTC”（二次确认）使后续列车停站降级；ZC修复后“恢复CBTC”，列车不停车升级。',
@@ -179,7 +183,7 @@ export class SidePanel {
     }
     this.audio.setRinging(ringing.length > 0 && !snap.autoRadio);
     // the manual cab: warning above the permitted speed (RM 25 km/h), before the EB
-    const cab = snap.trains.find((t) => t.manual);
+    const cab = snap.trains.find(isPlayerDriving);
     this.audio.setOverspeed(!!cab && cab.phase === 'run' && !cab.eb && cab.v > cab.vPermit + 0.05);
     // Local 02A05 recordings only follow matching stock and actual motor effort.
     const sel = this.store.selection;
@@ -348,12 +352,12 @@ export class SidePanel {
       const sel = this.store.selection?.kind === 'train' && this.store.selection.id === t.id;
       const late = t.inService && t.delay > 120;
       this.trainBody.append(h('tr', { class: sel ? 'sel' : '', style: 'cursor:pointer', onclick: () => { this.store.select({ kind: 'train', id: t.id }); this.hooks.locate(); } },
-        h('td', { class: 'mono' }, `${t.svc}-${t.trip}`), h('td', {}, t.dest),
+        h('td', { class: 'mono' }, `${formatTrainNumber(t.svc, t.trip, true)}`), h('td', {}, t.dest),
         h('td', {}, `${near.name}${Math.abs(near.chain - t.chain) > 150 ? '附近' : ''}`), h('td', { class: 'mono' }, `${Math.round(t.v * 3.6)}`),
-        h('td', { class: 'mono', style: (t.mode !== 'DTO' && t.mode !== 'AM') || t.manual ? 'color:var(--warn)' : '' }, `${t.manual ? '人' : ''}${t.mode}${t.comm ? '' : '×'}`),
+        h('td', { class: 'mono', style: (t.mode !== 'DTO' && t.mode !== 'AM') || t.manual ? 'color:var(--warn)' : '' }, `${t.manual ? '人' : ''}${formatDrivingMode(t.mode)}${t.comm ? '' : '×'}`),
         h('td', { class: 'mono', style: late ? 'color:var(--late)' : '' }, t.inService ? fmtDelay(t.delay) : '—'), h('td', { class: 'mono' }, `${Math.round((t.load / LINE_INFO.capacity) * 100)}%`),
         h('td', { style: t.failed || t.eb ? 'color:var(--bad)' : '', title: t.halt ? `${t.halt.code} ${t.halt.detail}` : '' },
-          t.failed ? '故障' : t.eb ? '紧急制动' : t.hold ? '扣车' : t.hot ? '热备待命' : t.phase === 'dwell' ? '停站' : t.phase === 'reversing' ? '折返' : t.v > 0.1 ? '运行'
+          t.failed ? '故障' : t.eb ? '紧急制动' : t.hold ? '扣车' : t.unattendedStatus ? t.unattendedStatus : t.hot ? '热备待命' : t.phase === 'dwell' ? '停站' : t.phase === 'reversing' ? '折返' : t.v > 0.1 ? '运行'
             : t.halt ? `${t.halt.label}${t.halt.blocker ? `（${t.halt.blocker}）` : ''}` : '停车',
           t.vehicleNote ? h('span', { style: 'color:var(--warn);margin-left:6px' }, t.vehicleNote) : ''),
       ));
@@ -396,11 +400,13 @@ export class SidePanel {
     rain.checked = snap.env.rain;
     const wdur = h('select', {}, ...[[900, '15分钟'], [1800, '30分钟'], [3600, '60分钟'], [0, '持续']].map(([v, t]) => h('option', { value: v }, String(t)))) as HTMLSelectElement;
     wdur.value = '1800';
-    box.append(h('div', { class: 'sect-title' }, '环境（东段高架/地面段）'));
+    box.append(h('div', { class: 'sect-title' }, LINE.ui.environmentTitle ?? '环境（东段高架/地面段）'));
     box.append(h('div', { class: 'form' }, wind, h('label', {}, '暴雨'), rain, wdur,
       h('button', { class: 'btn primary', onclick: async () => { const r = await this.store.command({ c: 'env', wind: Number(wind.value), rain: rain.checked, duration: Number(wdur.value) }); toast(r.msg, r.ok); } }, '设置')));
     // manual fault injection
-    const kind = h('select', {}, ...(Object.keys(FAULT_LABELS) as FaultKind[]).map((k) => h('option', { value: k }, FAULT_LABELS[k]))) as HTMLSelectElement;
+    const kind = h('select', {}, ...(Object.keys(FAULT_LABELS) as FaultKind[])
+      .filter(k => k === 'trainUto' ? unattended('doorClose') : k === 'trainDto' ? !unattended('doorClose') : true)
+      .map((k) => h('option', { value: k }, FAULT_LABELS[k]))) as HTMLSelectElement;
     const target = h('select', { style: 'min-width:420px;max-width:100%' }) as HTMLSelectElement;
     const dur = h('select', {}, ...[[0, '需人工修复'], [120, '2分钟'], [300, '5分钟'], [600, '10分钟'], [1200, '20分钟'], [1800, '30分钟']].map(([v, t]) => h('option', { value: v }, String(t)))) as HTMLSelectElement;
     dur.value = '600';
@@ -417,8 +423,8 @@ export class SidePanel {
       const sel = this.store.selection;
       const opt = (v: number, t: string, chosen = false) => { const o = h('option', { value: v }, t); if (chosen) (o as HTMLOptionElement).selected = true; return o; };
       const s = this.store.snap!;
-      if (k === 'trainComm' || k === 'trainDto' || k === 'trainFail' || k === 'traction' || k === 'door' || k === 'brake' || k === 'pecu') {
-        for (const t of [...s.trains].sort((a, b) => a.svc.localeCompare(b.svc))) if (t.inService || t.phase === 'run') target.append(opt(t.id, `${t.svc}-${t.trip}（${t.vehicle}）`, sel?.kind === 'train' && sel.id === t.id));
+      if (k === 'trainComm' || k === 'trainDto' || k === 'trainUto' || k === 'trainFail' || k === 'traction' || k === 'door' || k === 'brake' || k === 'pecu') {
+        for (const t of [...s.trains].sort((a, b) => a.svc.localeCompare(b.svc))) if (t.inService || t.phase === 'run') target.append(opt(t.id, `${formatTrainNumber(t.svc, t.trip, true)}（${t.vehicle}）`, sel?.kind === 'train' && sel.id === t.id));
         if (k === 'traction' || k === 'door' || k === 'brake') {
           (sev.options[0] as HTMLOptionElement).text = k === 'traction' ? '切除1个单元' : '一般';
           (sev.options[1] as HTMLOptionElement).text = k === 'traction' ? '切除2个单元' : k === 'door' ? '严重（无法切除）' : '严重（多车）';
@@ -440,7 +446,7 @@ export class SidePanel {
         topo.stations.forEach((x) => target.append(opt(x.index, x.name, (sel?.kind === 'platform' && topo.platforms[sel.id].station === x.index) || (sel?.kind === 'station' && sel.id === x.index))));
         extra.append(h('label', {}, '客流倍数'), mult);
       }
-      proc.textContent = PROCEDURES[k];
+      proc.textContent = LINE.ui.faultProcedures?.[k] ?? PROCEDURES[k];
     };
     kind.onchange = fillTargets;
     fillTargets();

@@ -12,7 +12,9 @@ import { CanvasTextMetrics, Container, Graphics, Text, type FederatedPointerEven
 import type { Topology } from '../sim/topology';
 import type { Snapshot, TrainSnap } from '../sim/model';
 import { SEC, SW, PLT, SIG_ASPECT } from '../sim/model';
-import { LINE, STATIONS, LINE_INFO } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, stationOpened } from '../data/current';
+import { formatTrainNumber } from './trainNumber';
+import { formatDrivingMode } from './drivingMode';
 import type { Store, Selection } from './store';
 import { C, FONT_CN, FONT_MONO, delayColor, loadColor } from './theme';
 import { Geometry, type P } from './geometry';
@@ -351,7 +353,7 @@ export class TrackView {
         else { y0 = top + L.dnY + 9; y1 = top + L.dnY + 30; }
       }
       const rect = new Graphics().rect(x0, y0, x1 - x0, y1 - y0).fill({ color: 0xffffff });
-      rect.tint = C.platform;
+      rect.tint = stationOpened(p.station) ? C.platform : 0x454b50;
       rect.eventMode = 'static';
       rect.cursor = 'pointer';
       rect.on('pointertap', this.sel({ kind: 'platform', id: p.id }));
@@ -370,7 +372,7 @@ export class TrackView {
       const top = geom.rows[row].top;
       const size = detail ? 48 : 40;
       const name = st.name;
-      const t = this.mkText(name, size, 0xe6edf4, { bold: true });
+      const t = this.mkText(name, size, stationOpened(st.index) ? 0xe6edf4 : 0x81878d, { bold: true });
       t.eventMode = 'static';
       t.cursor = 'pointer';
       t.on('pointertap', (e: FederatedPointerEvent) => { e.stopPropagation(); if (!this.dragMoved) this.h.station(st.index); });
@@ -845,6 +847,7 @@ export class TrackView {
       if (!g) continue;
       const f = snap.platforms[i];
       const esp = (f & PLT.ESP) !== 0;
+      if (!stationOpened(this.topo.platforms[i].station)) { g.rect.tint = 0x454b50; g.bar.clear(); continue; }
       g.rect.tint = esp ? (this.blink ? 0x7a1010 : 0x3a0a0a) : f & PLT.HOLD ? 0x3a3010 : C.platform;
       g.bar.clear();
       if (this.layers.pax) {
@@ -1081,7 +1084,7 @@ export class TrackView {
         } else {
           const data = inputs.find(t => t.id === p.ids[0])!, tg = this.trains.get(data.id)!;
           tg.box.visible = true;
-          this.drawWindow(tg, data.tr, p.compact ? data.tr.trip : `${data.tr.svc}-${data.tr.trip}`, data.chips, p.r, data.status, data.right);
+          this.drawWindow(tg, data.tr, formatTrainNumber(data.tr.svc, data.tr.trip, !p.compact), data.chips, p.r, data.status, data.right);
           idx.add(p.r, `train:${data.tr.svc}-${data.tr.trip}`);
         }
         leaders.moveTo(p.leader.x1,p.leader.y1).lineTo(p.leader.x2,p.leader.y2).stroke({width:1.5,color:0x5d7086,alpha:.9});
@@ -1177,14 +1180,14 @@ export class TrackView {
     const sides = ([-1, 1] as const).filter(s => crossed(s) === least)
       .sort((p, q) => Math.abs(lines[p < 0 ? 0 : 1] - head.y) - Math.abs(lines[q < 0 ? 0 : 1] - head.y));
     // texts
-    const full = `${tr.svc}-${tr.trip}`;
+    const full = formatTrainNumber(tr.svc, tr.trip, true);
     let chips = '';
     if (tr.failed) chips += '故障';
     else if (tr.eb) chips += 'EB';
     if (!tr.comm) chips += '×';
     else if (tr.level === 'TBTC') chips += 'T';
-    if (tr.manual) chips += tr.mode === 'RM' ? '人RM' : '人CM';
-    else if (tr.mode !== 'DTO' && !(tr.mode === 'AM' && tr.level === 'CBTC' && this.store.snap?.atoLine)) chips += tr.mode;
+    if (tr.manual) chips += `人${formatDrivingMode(tr.mode)}`;
+    else if (tr.mode !== 'DTO' && !(tr.mode === 'AM' && tr.level === 'CBTC' && this.store.snap?.atoLine)) chips += formatDrivingMode(tr.mode);
     if (tr.hold) chips += '扣';
     if (tr.hot) chips += '热备';
     if (tr.inService) chips += lateText(tr.delay);
@@ -1193,7 +1196,7 @@ export class TrackView {
     // label shows now: a trip like 存车 mixes glyph widths, and sizing from the
     // current text made the choice flip every frame.
     const width = trainWindowWidth(this.labelWidth(tg.label, full), chips ? tg.chips.width : 0);
-    const compactWidth = trainWindowWidth(this.labelWidth(tg.label, tr.trip), chips ? tg.chips.width : 0);
+    const compactWidth = trainWindowWidth(this.labelWidth(tg.label, formatTrainNumber(tr.svc, tr.trip)), chips ? tg.chips.width : 0);
     const status = tr.failed || tr.eb ? C.fault : delayColor(tr.delay, tr.inService);
     const keep = !!chips || (this.store.selection?.kind === 'train' && this.store.selection.id === tr.id);
     return { id: tr.id, tr, head: { x: head.x*z, y: head.y*z }, row: head.row, side: sides[0], sides, width, delay: tr.inService ? tr.delay : 0, keep, compactWidth, trip: tr.trip, chips, status, right };

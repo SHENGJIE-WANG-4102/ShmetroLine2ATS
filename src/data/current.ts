@@ -20,6 +20,10 @@ export const {
   SPEED_LIMITS, TURNOUT_SPEEDS, OPERATIONS, EXPOSED, PROFILE_ANCHORS, WEATHER_RULES, POSSESSIONS,
 } = LINE.core;
 
+/** Service availability is derived once from the infrastructure data. */
+export const SERVICE_STATION_IDS = new Set(STATIONS.filter(st => st.opened !== false).map(st => st.id));
+export function stationOpened(st: number): boolean { return SERVICE_STATION_IDS.has(STATIONS[st]?.id); }
+
 export function stationChainages(): number[] {
   let chain = 0;
   return STATIONS.map(station => {
@@ -33,3 +37,6 @@ export function fleetEntry(no: string) {
 
 export const { FIRST_LAST, HQ_LATE_RUN, FIXED_LATE_TRAINS, OFFICIAL_HEADWAYS } = LINE.firstLast;
 export const { OTHER_LAST_TRAINS } = LINE.lastTrains;
+
+/** Behaviour is selected by explicit capability, never by automation display labels. */
+export function unattended(task: keyof typeof LINE.unattended): boolean { return LINE.unattended[task]; }

@@ -389,6 +389,16 @@ export function buildTopology(): Topology {
     addCrossover(chains[x.station] + x.offset, x.kind, x.station);
   }
 
+  /** A second turnout connects a siding or paired middle track back to a main. */
+  const farConnector = (station: number, end: number, s: Dir, link: NonNullable<(typeof LAYOUT.sidings)[number]['link']>): NonNullable<SidingBuild['k']> => {
+    const ch = end + s * link.at;
+    const sw = newSwitch('siding', station);
+    const main: SwBuild = { sw: sw.id };
+    joinFeature(station, ch + s * CON_DX);
+    addSwitchPt(link.main, ch + s * CON_DX, s > 0 ? 'east' : 'west', main);
+    return { sw, main, ch };
+  };
+
   // double Y + diamond into two middle tracks (蟠祥路, 国家会展中心, 淞虹路, 上海科技馆)
   interface PairBuild {
     def: (typeof LAYOUT.pairs)[number]; s: Dir; e: number; mT: number;
@@ -397,6 +407,7 @@ export function buildTopology(): Topology {
     nodes?: { SU: number; SD: number; MU: number; MD: number };
     stubs: { link: number; exitNode: number; exitLink: number; bnd: number; lead?: LeadOut }[];
     cons: number[]; inner: { U: number[]; D: number[]; X: number[] };
+    farLinks: (SidingBuild['k'])[];
   }
   const pairs: PairBuild[] = [];
   for (const pd of LAYOUT.pairs) {
@@ -412,7 +423,8 @@ export function buildTopology(): Topology {
     addSwitchPt('DN', mT, toeSide, d);
     // single-action turnouts: one failed turnout leaves the other middle track usable
     const sw = { SU: newSwitch('siding', pd.station), SD: newSwitch('siding', pd.station), MU: newSwitch('siding', pd.station), MD: newSwitch('siding', pd.station) };
-    pairs.push({ def: pd, s, e, mT, u, d, sw, stubs: [], cons: [], inner: { U: [], D: [], X: [] } });
+    const farLinks = pd.stubs.map(st => st.link ? farConnector(pd.station, e, s, st.link) : undefined);
+    pairs.push({ def: pd, s, e, mT, u, d, sw, stubs: [], cons: [], inner: { U: [], D: [], X: [] }, farLinks });
   }
 
   // terminal tails: scissors (or just the mains) beyond the platform to buffers
@@ -471,15 +483,7 @@ export function buildTopology(): Topology {
     if (connect !== 'DN') { sb.u = { sw: newSwitch(kind, sd.station).id }; addSwitchPt('UP', mainCh, toeSide, sb.u); }
     if (connect !== 'UP') { sb.d = { sw: newSwitch(kind, sd.station).id }; addSwitchPt('DN', mainCh, toeSide, sb.d); }
     if (connect === 'both') { sb.ysw = newSwitch(kind, sd.station); sb.y = { sw: sb.ysw.id }; }
-    if (sd.link) {
-      const ch = e + s * sd.link.at;
-      // both ends of the connector move together, like a crossover
-      const sw = newSwitch('siding', sd.station);
-      const main: SwBuild = { sw: sw.id };
-      joinFeature(sd.station, ch + s * CON_DX);
-      addSwitchPt(sd.link.main, ch + s * CON_DX, s > 0 ? 'east' : 'west', main);
-      sb.k = { sw, main, ch };
-    }
+    if (sd.link) sb.k = farConnector(sd.station, e, s, sd.link);
     sidings.push(sb);
   }
 
@@ -589,7 +593,7 @@ export function buildTopology(): Topology {
     main.reverse = c2.id;
     return [c1.id, c2.id];
   };
-  const sidingBerthInfo: { name: string; station: number; turnback: boolean; link: number; offset: number; dir: Dir; exitNode: number; exitLink: number }[] = [];
+  const sidingBerthInfo: { name: string; station: number; turnback: boolean; link: number; offset: number; dir: Dir; exitNode: number; exitLink: number; bidirectional?: boolean }[] = [];
   /**
    * A stub from `bnd` running `s`-wards: either to a buffer, or (a depot lead)
    * on through a transfer track to the yard gate. Returns the stub link that
@@ -674,7 +678,7 @@ export function buildTopology(): Topology {
     if (sb.def.lead) sb.lead = leads[leads.length - 1];
     sb.stub = ls.id;
     // berth: head stops 15 m short of the dead end / lead throat, travelling outward (+1 on ls)
-    sidingBerthInfo.push({ name: sb.def.name, station: sb.def.station, turnback: sb.def.turnback ?? true, link: ls.id, offset: ls.len - 15, dir: 1, exitNode: sb.exitNode, exitLink: sb.exitLink });
+    if (sb.def.purpose !== 'interline') sidingBerthInfo.push({ name: sb.def.name, station: sb.def.station, turnback: sb.def.turnback ?? true, link: ls.id, offset: ls.len - 15, dir: 1, exitNode: sb.exitNode, exitLink: sb.exitLink });
   }
   // double Y: main turnout → splitter (SU/SD) → own-lane merger (normal) or
   // the diamond leg to the other lane's merger (reverse); merger → middle track
@@ -708,9 +712,14 @@ export function buildTopology(): Topology {
       lt.limit = TURNOUT_SPEEDS.siding;
       M.toe = lt.id;
       (i === 0 ? pb.inner.U : pb.inner.D).push(lt.id);
-      const ls = links[buildStub(bnd, s, st.length - SW_HALF, pb.def.station, st.lead, pb.mT)];
+      const far = pb.farLinks[i];
+      const end = buildStub(bnd, s, st.length - SW_HALF, pb.def.station, st.lead, pb.mT, far);
+      // With a far-end connector, stable before its turnout, clear of both
+      // throats; the short continuation is a buffer overrun, not a train berth.
+      const ls = links[far ? far.links![0] : end];
+      if (far) (i === 0 ? pb.inner.U : pb.inner.D).push(end);
       pb.stubs.push({ link: ls.id, exitNode: bnd.id, exitLink: lt.id, bnd: bnd.id, lead: st.lead ? leads[leads.length - 1] : undefined });
-      sidingBerthInfo.push({ name: st.name, station: pb.def.station, turnback: st.turnback ?? true, link: ls.id, offset: ls.len - 15, dir: 1, exitNode: bnd.id, exitLink: lt.id });
+      sidingBerthInfo.push({ name: st.name, station: pb.def.station, turnback: st.turnback ?? true, link: ls.id, offset: ls.len - 15, dir: 1, exitNode: bnd.id, exitLink: lt.id, bidirectional: !!far });
     });
   }
 
@@ -883,6 +892,10 @@ export function buildTopology(): Topology {
       for (const lid of pb.inner[k]) moveTo(lid, sid);
     }
     for (const st of pb.stubs) moveTo(st.link, newSection('siding', 'SID', links[st.link].chainB).id);
+    for (const far of pb.farLinks) if (far) {
+      const secId = newSection('switch', 'SID', far.ch).id;
+      for (const lid of [far.links![1], far.links![2], far.con![0]]) moveTo(lid, secId);
+    }
   }
   for (const lb of loops) {
     for (const yid of [lb.yw!, lb.ye!]) {
@@ -1054,6 +1067,11 @@ export function buildTopology(): Topology {
   // siding and middle-track exit signals
   for (const b of sidingBerthInfo) addSignal(b.exitNode, b.exitLink, 'exit');
   for (const lb of loops) for (const x of lb.exits) addSignal(x.node, x.link, 'exit');
+  for (const pb of pairs) for (const far of pb.farLinks) if (far) {
+    // Protect the far-end turnout when departing a middle track without
+    // reversing through the station-side double Y.
+    addSignal(links[far.links![0]].b, far.links![1], 'exit');
+  }
   // depot exit signals
   for (const ld of leads) {
     // depot exit signal at the yard end of the transfer track, and the depot
@@ -1108,6 +1126,8 @@ export function buildTopology(): Topology {
   for (const b of sidingBerthInfo) {
     const id = addBerth({ kind: 'siding', link: b.link, offset: b.offset, dir: b.dir, platform: -1, station: b.station, depot: -1, reverse: false, name: b.name });
     if (b.turnback) stationTurnback[b.station].push(id);
+    if (b.bidirectional) addBerth({ kind: 'siding', link: b.link, offset: b.offset - LINE_INFO.trainLength, dir: -1,
+      platform: -1, station: b.station, depot: -1, reverse: false, name: b.name });
   }
   // 广兰路: small-loop trains reverse at the middle-track platform (arriving eastbound)
   for (const lb of loops) {
@@ -1463,6 +1483,9 @@ export function buildTopology(): Topology {
     const yd = laneY('midDN');
     placeLane([pb.inner.U[1], pb.inner.U[2], pb.stubs[0].link], yu);
     placeLane([pb.inner.D[1], pb.inner.D[2], pb.stubs[1].link], yd);
+    pb.farLinks.forEach((far, i) => {
+      if (far) placeLane([...far.links!, ...pb.inner[i === 0 ? 'U' : 'D'].slice(3)], i === 0 ? yu : yd);
+    });
   }
   for (const lb of loops) placeLane([...lb.ends, ...lb.middle], laneY(lb.def.platform ? 'midDN' : 'mid'));
   for (const n of nodes) {

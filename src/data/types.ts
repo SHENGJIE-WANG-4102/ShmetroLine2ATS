@@ -9,6 +9,7 @@ export interface SourceRef {
     used: string;
 }
 export interface StationData {
+    opened?: boolean;
     pisLayout?: 'classic' | 'wide';
     id: string;
     name: string;
@@ -31,6 +32,7 @@ export interface LeadDef {
     flow?: 'in' | 'out';
 }
 export interface SidingDef {
+    purpose?: 'interline';
     id: string;
     name: string;
     station: number;
@@ -48,6 +50,7 @@ export interface SidingDef {
 }
 export type SidingLane = 'mid' | 'midUP' | 'midDN' | 'outUP' | 'outDN';
 export interface PairStubDef {
+    link?: { main: 'UP' | 'DN'; at: number };
     id: string;
     name: string;
     length: number;
@@ -109,6 +112,7 @@ export interface CoreLineData {
   STATIONS: StationData[];
   STATION_EN: Record<string, string>;
   LINE_INFO: {
+    cars?: number;
     name: string;
     shortName: string;
     color: number;
@@ -172,6 +176,16 @@ export interface CoreLineData {
     tail: number;
 };
   OPERATIONS: {
+    /** Per approach, independent of weather; zero preserves the existing adhesion model. */
+    atoRandomOverrunProbability: number;
+    uto?: {
+      crewLabel: string; doorWarningS: number; turnbackS: number;
+      wakeLeadS: number; powerS: number; pantographS: number; selfTestS: number;
+      clearS: number; washEvery: number; washS: number;
+      takeoverStepS: number[]; randomTakeoversPerDay: number; randomTakeoverFromS: number; randomTakeoverSpacingS: number; manualDurationS: number;
+      resetS: number; resetSuccess: number;
+    };
+
     maintenance: {
         dailyLimit: number;
         monthlyPeriod: number;
@@ -226,6 +240,8 @@ export interface CoreLineData {
         origin?: string;
         track?: string;
         nightAfter?: number;
+        /** Store by a separate empty move after serving the requested terminal. */
+        preserveService?: boolean;
     }[];
     hotStandby: {
         station: string;
@@ -233,6 +249,10 @@ export interface CoreLineData {
         berth: number;
         depot?: string;
         incoming?: "UP" | "DN";
+        /** Other real yard sources, in preference order, when the default source cannot supply this standby. */
+        alternatives?: { depot: string; incoming: "UP" | "DN" }[];
+          /** May remain unassigned, with a reported reason, when no safe slot/source exists. */
+          optional?: boolean;
     }[];
     platformPassKmh: number;
     platformStopKmh: number;
@@ -702,7 +722,8 @@ export interface LineData {
   /** Stable public selector; local station/depot/trip ids are scoped by it. */
   id: string;
   branding: { title: string; shortName: string; color: string; badgeUrl: string; logoText: string };
-  signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[] };
+  unattended: { doorClose: boolean; turnback: boolean; wakeSleep: boolean; depotMoves: boolean };
+  signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[]; onLoss: 'fallback' | 'restrictedManual' | 'wait' };
   automation: 'DTO' | 'UTO' | 'ATO';
   core: CoreLineData;
   firstLast: FirstLastData;

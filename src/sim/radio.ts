@@ -1,3 +1,4 @@
+import { crewLabel } from './uto';
 /**
  * Simulated dispatcher radio / phone (调度电话·无线): drivers and station
  * staff call the dispatcher with requests and reports. Each call offers a
@@ -40,6 +41,8 @@ export interface CallSpec {
 }
 
 export function openCall(sim: Sim, spec: CallSpec): RadioCall | null {
+  const crew=crewLabel();
+  if(crew!=='司机')spec={...spec,from:spec.from.replaceAll('司机',crew),text:spec.text.replaceAll('司机',crew),options:spec.options.map(o=>({...o,label:o.label.replaceAll('司机',crew)}))};
   // one ringing call per subject
   if (sim.calls.some((c) => c.state === 'ringing' && c.kind === spec.kind && c.train === spec.train && c.station === spec.station && c.target === spec.target)) return null;
   const same = sim.calls.filter((c) => c.kind === spec.kind && c.train === spec.train && c.station === spec.station && c.target === spec.target);
@@ -62,7 +65,7 @@ export function openCall(sim: Sim, spec: CallSpec): RadioCall | null {
 }
 
 function driverOf(tr: Train) {
-  return `列车 ${trainLabel(tr)} 司机`;
+  return `列车 ${trainLabel(tr)} ${crewLabel()}`;
 }
 
 function stationName(i: number) {

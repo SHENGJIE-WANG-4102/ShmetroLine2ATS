@@ -11,10 +11,13 @@
  */
 import { readFileSync } from 'node:fs';
 import { Sim } from '../src/sim/engine';
+import { SIMULATION, LINE_INFO } from '../src/data/current';
+const evidence = SIMULATION.timetable.diagnostics?.gaode;
+if (!evidence) { console.log(`${LINE_INFO.shortName}：没有高德原始数据，跳过对比。`); process.exit(0); }
 
 const BIN = 15;
-const CHECK: [string, 'UP' | 'DN'][] = [['北新泾', 'UP'], ['世纪公园', 'UP'], ['世纪公园', 'DN'], ['张江高科', 'UP'], ['张江高科', 'DN']];
-const WINDOWS: [number, number][] = [[6 * 60, 11 * 60], [16 * 60, 23 * 60 + 30]];
+const CHECK = evidence.checks;
+const WINDOWS = evidence.windows;
 
 const arg = process.argv.indexOf('--table');
 const table = arg > 0 ? process.argv[arg + 1].split(',') : null;
@@ -23,7 +26,7 @@ const baseline=baselineAt>0?JSON.parse(readFileSync(process.argv[baselineAt+1],'
 const s = new Sim({ dayType: 'weekday', dateLabel: 'gaode-compare', startTime: 4 * 3600, seed: 1 });
 const names = s.topo.stations.map((x) => x.name);
 const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-const gaode = (st: string, dir: string) => readFileSync(`reference/timetable-gaode/${st}-${dir}-weekday.txt`, 'utf8')
+const gaode = (st: string, dir: string) => readFileSync(`${evidence.directory}/${st}-${dir}-weekday.txt`, 'utf8')
   .split(/\r?\n/).filter((l) => /^\d\d:\d\d/.test(l)).map((l) => +l.slice(0, 2) * 60 + +l.slice(3, 5));
 /** minutes of the revenue calls where passengers can board */
 const plan = (st: string, dir: string, arrivals = false) => {
@@ -57,10 +60,7 @@ if (table) {
 
 // Eastern tables are inconsistent with the middle section and are reference
 // only. Do not count their differences as failures or acceptance criteria.
-const EAST = {
-  stations: ['川沙','凌空路','远东大道','海天三路','浦东1号2号航站楼'],
-  from: 8, to: 24,
-};
+const EAST = evidence.reference;
 if (!table) {
   console.log('东段仅作参考（整体不可信，不计入不合格或验收；小时格为高德/计划到站数）');
   for (const station of EAST.stations) {

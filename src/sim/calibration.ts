@@ -64,6 +64,8 @@ export function boardingDemand(day: DayType, station: number, dir: TrackDir, t: 
 /** Interchanges include transfer boardings in the demand weight. Smooth time variation
  * avoids artificial time jumps when a train straddles a template boundary. */
 export function plannedDwell(day: DayType, station: number, dir: TrackDir, t: number, factor = 1): number {
+ // Explicit station budgets are line data; no direction/day-specific station exceptions.
+ if (C.dwellModel === 'station') return Math.max(MIN_DWELL, Math.min(MAX_DWELL, STATIONS[station].dwell * factor));
  const busy=STATIONS[station].demand>=1.4;
  const exchange=(rawDemand(day,station,dir,t)+rawDemand(day,station,dir==='DN'?'UP':'DN',t))/2;
  // D138【假设】: shared platform exchange window, calibrated to paper AM trips.

@@ -72,7 +72,8 @@ const simulation: SimulationData = {
 
 export const TEST_LINE: LineData = {
   id: 'test', branding: { title: '测试线', shortName: '测试线', color: '#9070cc', badgeUrl: '', logoText: 'T' },
-  signalling: { primary: 'CBTC', fallback: [] }, automation: 'DTO',
+  unattended: { doorClose: false, turnback: false, wakeSleep: false, depotMoves: false },
+  signalling: { primary: 'CBTC', fallback: [], onLoss: 'wait' }, automation: 'DTO',
   core, simulation,
   firstLast: { FIRST_LAST: [
     { station: stations[0].name, firstE: '06:00', firstW: '', lastE: '22:00', lastW: '', lastG: '' },

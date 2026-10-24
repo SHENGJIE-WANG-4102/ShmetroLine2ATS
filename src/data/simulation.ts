@@ -18,6 +18,16 @@ export interface ServiceData {
   standby: { from: number; need: number; to: number }[];
 }
 export interface TimetableData {
+  diagnostics?: {
+    firstLastLabels?: [string, string, string];
+    gaode?: { directory: string; checks: [string, TrackDir][]; windows: [number, number][]; reference: { stations: string[]; from: number; to: number } };
+  };
+  /** Common timing reference inside the core; absence retains terminal references. */
+  reference?: Partial<Record<TrackDir, string>>;
+  /** Depot positioning follows stopping timings without taking passengers. */
+  positioningRevenue?: boolean;
+  /** Keep every scheduled passenger origin and destination through circulation. */
+  preserveRevenueRoutes?: boolean;
   templates: Record<string, Template>;
   dayPeriods: Record<DayType, Period[]>;
   shownPeriods: Record<DayType, Period[]>;

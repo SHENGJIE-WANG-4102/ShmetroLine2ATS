@@ -1,5 +1,12 @@
 /** Per-line presentation data; no simulation rules belong here. */
 export interface LineUiData {
+  /** Renderers describe the screen hardware, independently of operating mode. */
+  dmiStyle?: 'navyDial' | 'statusGrid';
+  pisStyle?: 'landscape' | 'column';
+  dmiSpeedWarning?: 'permitted' | 'target';
+  tripNumber?: { prefix: string; source: 'duty'; digits: number };
+  faultProcedures?: Record<string, string>;
+  environmentTitle?: string;
   documentTitle: string;
   bootTitle: string;
   desktopTitle: string;

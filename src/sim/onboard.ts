@@ -12,6 +12,7 @@
  * Behaviour and sources: docs/signalling-model.md §2 (modes, level
  * switchover) and §3 (emergency brake).
  */
+import { utoTrainTick, crewLabel } from './uto';
 import type { Sim } from './engine';
 import type { EbCause, ForceLevel, Level, Mode, Train, ReverseTask } from './model';
 import type { Topology } from './topology';
@@ -21,7 +22,7 @@ import { openCall, unsafeAhead } from './radio';
 import { nextLink } from './topology';
 import { swPos } from './interlocking';
 import { withdrawAuthority } from './movement';
-import { OPERATIONS, supportsSignalSystem } from '../data/current';
+import { OPERATIONS, supportsSignalSystem, unattended, LINE } from '../data/current';
 
 /** driver action time for a mode / level change at standstill (s) 【假设】 */
 export const MODE_CHANGE_TIME = 10;
@@ -71,6 +72,7 @@ export function driverTurnbackKind(topo: Topology, task: Pick<ReverseTask,'chose
 /** The paper measures the complete turn, including its door departures.
  * Deduct those shared driver confirmations from the change-of-ends increment. */
 export function turnbackDwell(mode: Mode, minimum: number, kind: 'front'|'rear' = 'rear', simulatedDriver = false): number {
+  if (unattended('turnback') && mode === 'DTO' && OPERATIONS.uto) return minimum + OPERATIONS.uto.turnbackS;
   const work=OPERATIONS.atoDriverWork;
   const extra=simulatedDriver ? work.turnbackExtraS[kind]-work.turnbackDoorCycles[kind]*work.postLockExtraS : work.legacyEndChangeS;
   return minimum + (mode === 'DTO' ? 0 : extra);
@@ -149,7 +151,7 @@ const needsDegrade = (sim: Sim, tr: Train) => (tr.ebCause === 'comm' || tr.ebCau
 
 /** how a release is authorised: plain release, the SPAD procedure (route
  * verified, RM to the next signal) or the comm-loss degrade to TBTC */
-export type EbProcedure = 'release' | 'spad' | 'degrade';
+export type EbProcedure = 'release' | 'spad' | 'degrade' | 'restricted';
 
 /** dispatcher authorises the release (driver has reported the EB) */
 export function authoriseEBRelease(sim: Sim, tr: Train, by: string, procedure: EbProcedure = 'release'): { ok: boolean; msg: string } {
@@ -159,11 +161,17 @@ export function authoriseEBRelease(sim: Sim, tr: Train, by: string, procedure: E
   if (tr.ebCause === 'spad' && procedure !== 'spad')
     return { ok: false, msg: '冒进信号紧急制动须按冒进处置程序办理（无线电：核实进路后RM运行至前方信号机）' };
   const viaDegrade = procedure === 'degrade' && needsDegrade(sim, tr);
-  if (tr.ebCause !== 'spad' && !viaDegrade && !ebCauseCleared(sim, tr))
+  const viaRestricted=procedure==='restricted'&&LINE.signalling.onLoss==='restrictedManual'&&(tr.ebCause==='comm'||tr.ebCause==='zc');
+  if (tr.ebCause !== 'spad' && !viaDegrade && !viaRestricted && !ebCauseCleared(sim, tr))
     return { ok: false, msg: `紧急制动原因未消除（${tr.ebReason}）${needsDegrade(sim, tr) ? supportsSignalSystem('TBTC') ? '：须同意缓解并降级TBTC后备运行（司机来电选项）' : '：本线路无TBTC后备，须等待通信或区域控制恢复' : ''}` };
   tr.ebAuth = true;
   releaseEB(sim, tr, by);
   return { ok: true, msg: `列车 ${trainLabel(tr)} 紧急制动缓解` };
+}
+
+export function releaseForRestrictedManual(sim:Sim,tr:Train) {
+  if(LINE.signalling.onLoss!=='restrictedManual'||!['comm','zc'].includes(tr.ebCause))return {ok:false,msg:'不是通信或 ZC 丢失制动，须走原有紧急制动处置'};
+  return authoriseEBRelease(sim,tr,`${crewLabel()}报告 OCC，准备 RM 接管`,'restricted');
 }
 
 function releaseEB(sim: Sim, tr: Train, by: string) {
@@ -186,7 +194,7 @@ function callEbRelease(sim: Sim, tr: Train) {
         : [{ key: 'wait', label: '原地等待通信或区域控制恢复' }]
       : [{ key: 'release', label: '同意缓解紧急制动' }, { key: 'wait', label: '原地等待' }];
   openCall(sim, {
-    kind: 'ebRelease', from: `列车 ${trainLabel(tr)} 司机`, train: tr.id,
+    kind: 'ebRelease', from: `列车 ${trainLabel(tr)} ${crewLabel()}`, train: tr.id,
     text: spad ? `列车冒进信号 ${tr.spadSig >= 0 ? sim.topo.signals[tr.spadSig].name : ''}，紧急制动停车，请求处置` : `列车紧急制动停车（${tr.ebReason}），请求缓解`,
     // auto-answer never authorises RM (SPAD stays until the dispatcher decides)
     options, auto: spad ? 'wait' : comm ? backup ? 'degrade' : 'wait' : 'release', timeout: 120,
@@ -284,6 +292,7 @@ export function cmdTrainLevel(_sim: Sim, tr: Train, level: ForceLevel): { ok: bo
 
 /** dispatcher: degrade one train to ATO with the driver (on = false), or let it run DTO again */
 export function cmdTrainDto(sim: Sim, tr: Train, on: boolean): { ok: boolean; msg: string } {
+  if(unattended('doorClose'))return {ok:false,msg:'全自动线路由随车人员办理 ATPM / RM 接管或恢复 FAM'};
   if (!on) {
     if (tr.dtoInhibit) return { ok: false, msg: `列车已不能DTO运行（${tr.dtoInhibit}）` };
     tr.dtoInhibit = '调度命令降级ATO';
@@ -297,6 +306,7 @@ export function cmdTrainDto(sim: Sim, tr: Train, on: boolean): { ok: boolean; ms
 
 /** dispatcher: the whole line runs ATO with drivers (DTO compatibility mode) or DTO again */
 export function cmdLineAto(sim: Sim, on: boolean): { ok: boolean; msg: string } {
+  if(unattended('doorClose'))return {ok:false,msg:'全自动线路不使用全线有人值守 ATO 切换，请按列车办理接管'};
   if (sim.atoLine === on) return { ok: false, msg: on ? '已是全线ATO运营' : '已是全线DTO运营' };
   sim.atoLine = on;
   sim.log('B', '调度', on
@@ -385,6 +395,7 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
 export function updateOnboard(sim: Sim) {
   const { topo } = sim;
   for (const tr of sim.trainList) {
+    if(utoTrainTick(sim,tr))continue;
     // ---- emergency brake: driver report → dispatcher authorisation → release
     if (tr.eb) {
       if (tr.v > 0.01) continue;
@@ -475,7 +486,7 @@ function nextStopZone(sim: Sim, tr: Train) {
 export function callDegrade(sim: Sim, tr: Train) {
   const backup = supportsSignalSystem('TBTC');
   return openCall(sim, {
-    kind: 'degrade', from: `列车 ${trainLabel(tr)} 司机`, train: tr.id,
+    kind: 'degrade', from: `列车 ${trainLabel(tr)} ${crewLabel()}`, train: tr.id,
     text: backup ? '车载与轨旁通信中断，列车已停车，请求降级为TBTC后备ATO运行' : '车载与轨旁通信中断，列车已停车，本线路无TBTC后备，等待通信恢复',
     options: backup ? [{ key: 'approve', label: '同意降级TBTC后备运行' }, { key: 'wait', label: '原地等待' }] : [{ key: 'wait', label: '原地等待通信恢复' }], auto: backup ? 'approve' : 'wait', timeout: 120,
   });

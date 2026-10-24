@@ -43,7 +43,7 @@ export const SCALARS = [
 ] as const;
 
 /** Train-owned state (doors, reverser, retreat, recent path, CM advisory, ATO buttons, DMI sequence,
- * departureDisplay.at/readyAt) is carry: cloneTrain saves it with the vehicle and carryTrain shifts its clocks.
+ * departureDisplay.at/readyAt, UTO control/door warning/acknowledgement clocks) is carry: cloneTrain saves it with the vehicle and carryTrain shifts its clocks.
  * DAY_STATE below lists Sim-owned fields only; no duplicate top-level display clock is needed. */
 /** Every checkpoint field must explicitly declare its operating-day ownership. */
 export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number], 'carry' | 'daily'> = {
@@ -63,7 +63,7 @@ export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number
   noRouteLogged: 'daily',
   truncatedTrips: 'daily',
   yards: 'carry',
-  vehicles: 'carry',
+  vehicles: 'carry', // VehicleRecord.uto work and daily selection follow the real vehicle; carryWorld shifts its clock.
   stabledPool: 'carry',
   calls: 'carry',
   pendingCalls: 'carry',
@@ -111,6 +111,8 @@ export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number
 function cloneTrain(tr: Train): Train {
   return {
     ...tr,
+    uto: tr.uto && {...tr.uto},
+    dmiAcknowledged: tr.dmiAcknowledged?.slice(),
     hist: tr.hist.slice(),
     vfault: tr.vfault ? { ...tr.vfault } : null,
     body: tr.body.map((b) => ({ ...b })),

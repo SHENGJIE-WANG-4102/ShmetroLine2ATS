@@ -3350,3 +3350,25 @@ validate-plan两日型、firstlast、gaode-compare的完整输出与基线逐字
 **三条等待链。** 103/F2：回段车进入换端站台之前已拿到退出范围；对向定位车在最后安全停车处被挡住，车尾不能先压住该范围。108/F3：站台里回段车的实际占用及换端后入段路径优先，远处空预约不能压住它；远车留在上游安全点。119/F4：出段请求若退出转换轨后还要等始发窗口，准入直接拒绝，车留库内；不能先出库再在共用轨上按图等待。已在共享轨内的车先按已授退出动作清空它。
 
 **代价和验证。** 对向车可能比现有逐段放行早一个接近段停车；【估算，非实测】新增等待约为一次换端加咽喉走行，数十秒至约两分钟，不应一律预约整条后续车次。独立股道按实际区段/道岔交集允许并行；长停留点若不满足安全点定义，设计可能降低容量，实现时必须报告这部分等待，不能为保速度撤保护。验收逐一复测 103/108/119 的三类链，及 13501、13502、13812、13813、13821 原配置（13812 两份现场分别重放），再按原任务跑随机批、用户龙阳路回段场景、测试线跨日天气；公共代码须保持两日计划哈希及测试线回归。不放宽完整性阈值，不把提前失败算两日通过。
+
+## D??? 14号线共用接口与能力扩展（2026-10-24，编号送审时分配）
+
+用户决定：14号线数据独立，压测沿用两日/天气/随机调度的验证类型，场景和能力从本线数据生成；不照搬2号线逐站数据、运行图、故障池或测试预期。线路假设完整列在 `docs/design-decisions-line14.md` L14-01～L14-05，配线逐站6倍复核。以下仅列公共代码，14号线自身文件另在其文档列出。
+
+第一组（数据能力、开通状态、拓扑、固定客运请求与脚本）：`src/data/types.ts`、`current.ts`、`registry.ts`、`simulation.ts`、`simulationExtras.ts`、`ui.ts`；`src/data/lines/line2/index.ts`、`line2.ts`、`simulation.ts` 只补显式缺省值或原诊断常量，`src/data/lines/test/index.ts` 补显式能力；`src/sim/topology.ts`、新 `routeTable.ts`（原ATS构建器原样迁移、ATS兼容重导出，热备复用同一有向路径表）、`calendar.ts`、`calibration.ts`、`timetable.ts`；`scripts/firstlast.ts`、`gaode-compare.ts`；`tests/line-data.test.ts`、新 `tests/depot-stock-prefix.test.ts`。营业站派生一次，跳停/PIS/客流共用；未建模施工区段不作候选。双端中间线复用既有连接器，一个实车停位的两朝向不重复增加容量。大小交路、统一走行余量和站表停站只来自数据，不改单趟钟点。修复已配对到达重复接续而丢失原服务、未选定位候选误计占用、热备固定来源未纳入库存分配，详见L14-03。
+
+第二组（UTO状态与真实人工操作）：新 `src/sim/uto.ts`、`utoActions.ts`；`src/sim/model.ts`、`state.ts`、`operatingDay.ts`、`engine.ts`、`commands.ts`、`ats.ts`、`onboard.ts`、`movement.ts`、`faults.ts`、`halt.ts`、`radio.ts`、`scenario.ts`、`vehicle.ts`、`yard.ts`；`scripts/fuzz-day.ts`、`tests/fuzz-roots.test.ts`。按四个unattended能力分流，2号线/测试线关闭，不按线路ID或automation标签分支。ATO原保护、人工手柄、车门、退行继续共用。新增跨日时钟全部搬运，随机接管以物理车为单位。压测按本线实际能力选择操作/故障/天气，UTO另核查接管步骤、故障ATPM、复位、恢复FAM及拒绝乱序；N/A明确列出，完整性检查/收车时限不变。
+
+第三组（DMI/PIS及可视状态）：`src/sim/dmi.ts`、`pis.ts`；`src/ui/app.ts`、`cmdpanel.ts`、`dmi.ts`、`pisview.ts`、`side.ts`、`tooltip.ts`、`trackview.ts`、`yardview.ts`；新 `src/ui/dmiStatusGrid.ts`、`drivingMode.ts`、`pisColumn.ts`、`pisColumn.css`、`trainNumber.ts`、`utoControls.ts`。新样式通过渲染表分派，旧样式保持缺省；8节拥挤度均分总载客率为明确假设。告警确认、车门、接管/复位按钮均走sim.command，浏览器实际走完11条操作，最终恢复FAM。
+
+任务的唯一等待点：D142资源仲裁尚未实现；比较本工作树基点与最新 `claude/nifty-faraday-mdr3ug` 的src/scripts/tests没有差异，新增仅文档，未制造合并提交。严守不改 `trainDesire`、`reversalGuard`、`depotEntryBlocker`、`resolveDepot`、`spawnDue`。目前不是整线可玩版本，静态与动态验收结果以L14-06最终记录为准；失败不作已知豁免。
+
+公共改动各组共同基线结果（同一最终冻结源码）：
+
+| 组 | 2号线/测试线基线 | 额外验证 |
+|---|---|---|
+| 第一组：数据、配线、运行图、脚本 | 两日两线8个trips/blocks哈希全原值；2号线validate-plan两日/firstlast/gaode四份输出逐字节原值；test-line3项过 | 14两日0error，工作日蓝天可选热备仅1条明确warning；真实有向泊位路径/库存回归过 |
+| 第二组：UTO状态与操作 | 同上；随机种子2号线142031、测试线142032与改前的操作序列/等待链完全一致，同样失败，未豁免 | UTO21项；跨日/回放/共故障终点退出均过，压力结果详见L14-06 |
+| 第三组：DMI/PIS/ATS显示 | 同上；旧DMI/PIS/operating-day等公共回归62项过 | 新样式/手机/长站名/真实按钮与教员台验证，JS错误0 |
+
+修前热备路径缺陷和工作日蓝天可选未开行的最终处理见L14-03/L14-06；三处必需热备、库存/90秒间隔/泊位/完整性检查均保留。新routeTable模块只复用原ATS构建器，不新增第二套寻路。最终短测13文件112项通过，类型检查/构建通过。2号线及测试线随机压测仍未通过，其失败现场与改前逐项相同，不能表述为0完整性违例通过。
