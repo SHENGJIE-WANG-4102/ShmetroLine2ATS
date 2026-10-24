@@ -10,12 +10,13 @@ import { capture, restore, fingerprint } from '../src/sim/state';
 import { computePis } from '../src/sim/pis';
 import { yardCount } from '../src/sim/yard';
 import { LINE_INFO, FLEET, fleetEntry } from '../src/data/current';
-import { nextLink } from '../src/sim/topology';
-import { scanAhead, goalBerth, refreshAuthority, MA_NEAR } from '../src/sim/movement';
+import { nextLink, orderedStations } from '../src/sim/topology';
+import { computeBody, indexBodies, scanAhead, goalBerth, refreshAuthority, MA_NEAR } from '../src/sim/movement';
 import { dmiTrainNo, computeDmi } from '../src/sim/dmi';
 import { PERF } from '../src/sim/dynamics';
 import { platformBerth } from '../src/sim/timetable';
-import { platformSide } from '../src/sim/ats';
+import { platformSide, runARS } from '../src/sim/ats';
+import { computeOccupancy, releaseRoute } from '../src/sim/interlocking';
 import type { Train } from '../src/sim/model';
 import { DOOR_CLOSE_S } from '../src/sim/calibration';
 import { closeDoors } from '../src/sim/psd';
@@ -138,10 +139,25 @@ describe('manual driving', () => {
 
 describe('driver doors and the acceleration limit', () => {
   it('CM departs after the 5.7s lock sequence after actual lock confirmation and records one negative-delay departure', () => {
-    const sim=makeSim('weekday',H),tr=dwellingDN(sim);
-    const stop=tr.tasks[0];expect(stop.k).toBe('stop');if(stop.k!=='stop')return;
-    const p=sim.topo.berths[stop.berth].platform;
-    tr.tasks[0]={...stop,dep:sim.t+32};tr.dwellUntil=sim.t+32;
+    const sim=new Sim({dayType:'weekday',dateLabel:'doors',startTime:14400,seed:7,noPossessions:true}),tr=sim.trainList[0];
+    for(const other of [...sim.trainList])if(other!==tr)sim.removeTrain(other);
+    for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
+    for(const block of sim.plan.blocks)sim.blockDone.add(block.id);
+    sim.resourceTransit.clear();sim.berthRes.clear();
+    const station=sim.topo.stations.find(st=>st.chain>9000&&st.chain<20000)!.index;
+    const nextStation=orderedStations('DN',station)[1];
+    const berth=sim.topo.berths[platformBerth(sim.topo,station,'DN')],next=platformBerth(sim.topo,nextStation,'DN');
+    const trip={id:sim.plan.trips.length,no:'DOORS',dir:'DN' as const,kind:'big' as const,from:station,to:nextStation,block:-1,revenue:true,
+      stops:[{st:station,arr:sim.t-30,dep:sim.t+32,stop:true},{st:nextStation,arr:sim.t+240,dep:sim.t+240,stop:true}]};
+    sim.plan.trips.push(trip);
+    const stop={k:'stop' as const,berth:berth.id,station,trip:trip.id,arr:sim.t-30,dep:sim.t+32,doors:true,revenue:true};
+    Object.assign(tr,{link:berth.link,off:berth.offset,dir:berth.dir,hist:[{link:berth.link,dir:berth.dir}],phase:'dwell',v:0,
+      tripId:trip.id,tripNo:trip.no,inService:true,block:-1,delay:0,dwellUntil:sim.t+32,doorsOpen:true,doorsAwait:false,doorMotion:undefined,
+      doorSide:'',tbStage:'none',depotStage:'none',pendingDeparture:undefined,departureDisplay:undefined,
+      tasks:[stop,{...stop,berth:next,station:nextStation,arr:sim.t+240,dep:null}]});
+    const p=berth.platform;sim.plat[p].psd='open';sim.plat[p].psdTrain=tr.id;
+    computeBody(sim,tr);indexBodies(sim);computeOccupancy(sim);
+    const scan=scanAhead(sim,tr,next);tr.nextSignal=scan.nextSignal;tr.nextSignalDist=scan.nextSignalDist;runARS(sim);
     expect(closeDoors(sim,tr,p)).toBe(0);
     expect(sim.command({c:'manual',train:tr.id,mode:'CM'}).ok).toBe(true);
     sim.drive(tr.id,4);

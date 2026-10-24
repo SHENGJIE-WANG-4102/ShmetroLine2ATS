@@ -1,3 +1,4 @@
+import { arbitrateResources, type ResourceTransit } from './resourceArbitration';
 /**
  * Simulation engine: owns all dynamic state and advances it with a fixed
  * time step. Runs inside a Web Worker (src/sim/worker.ts) or headless in
@@ -86,6 +87,7 @@ export class Sim {
   nextTrainId = 1;
   linkBodies = new Map<number, { train: number; from: number; to: number }[]>();
   berthRes = new Map<number, number>();
+  resourceTransit = new Map<number, ResourceTransit>();
   depotStock: number[];
   depotShortLogged = new Set<number>();
   blockDone = new Set<number>();
@@ -272,6 +274,7 @@ export class Sim {
     this.log('I','客流',`当日客流目标 ${this.ridershipTarget.toLocaleString('zh-CN')} 人次`);
     if (config.randomFaults) setRandomFaults(this, config.randomFaults);
     initConnections(this);
+    arbitrateResources(this);
     spawnDue(this);
     if (from) this.startState = capture(this);
   }
@@ -300,6 +303,7 @@ export class Sim {
     this.trains.delete(tr.id);
     this.trainList = this.trainList.filter((x) => x.id !== tr.id);
     for (const [b, t] of this.berthRes) if (t === tr.id) this.berthRes.delete(b);
+    this.resourceTransit.delete(tr.id);
     // the occupancy map is rebuilt next step; until then nobody may see the removed train
     for (const [l, segs] of this.linkBodies) if (segs.some((x) => x.train === tr.id)) this.linkBodies.set(l, segs.filter((x) => x.train !== tr.id));
     for (const k of ['eb', 'comm', 'tf', 'tfr', 'spad', 'late']) this.clearAlarm(`${k}-${tr.id}`);
@@ -424,11 +428,12 @@ export class Sim {
 
   private secondTick(dt: number) {
     refreshAuthority(this);
+    arbitrateResources(this);
     spawnDue(this);
     updateOnboard(this);
     psdTick(this);
     driverRM(this);
-    runARS(this);
+    runARS(this, true);
     passengersTick(this, dt);
     faultsTick(this);
     envTick(this);
