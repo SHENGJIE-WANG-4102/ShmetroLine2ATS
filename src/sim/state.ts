@@ -11,6 +11,7 @@ import type { Sim } from './engine';
 import type { Train, Plan, SimEvent } from './model';
 import { indexBodies } from './movement';
 import { initVehicles } from './yard';
+import { invalidateResourceAllocation } from './resourceArbitration';
 import { assertScope, currentScope, type LineScope } from '../data/scope';
 
 export interface Checkpoint {
@@ -32,7 +33,7 @@ export interface Checkpoint {
 }
 
 export const CLONED = [
-  'sw', 'sec', 'sig', 'plat', 'zoneState', 'routes', 'routeUnlockedSw', 'berthRes', 'depotStock', 'depotShortLogged', 'blockDone',
+  'sw', 'sec', 'sig', 'plat', 'zoneState', 'routes', 'routeUnlockedSw', 'berthRes', 'resourceTransit', 'depotStock', 'depotShortLogged', 'blockDone',
   'faults', 'alarms', 'noRouteLogged', 'truncatedTrips', 'yards', 'vehicles', 'stabledPool', 'calls', 'pendingCalls', 'env', 'possessions',
   'instructorSchedule', 'instructorOccurred', 'randomSchedule', 'randomFaultVehicles', 'ridership', 'metrics', 'scenario', 'dispatcher', 'integrity', 'bookmarks', 'incidents', 'connections', 'vehicleResets', 'energy',
 ] as const;
@@ -55,6 +56,7 @@ export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number
   routes: 'carry',
   routeUnlockedSw: 'carry',
   berthRes: 'carry',
+  resourceTransit: 'carry',
   depotStock: 'carry',
   depotShortLogged: 'daily',
   blockDone: 'daily',
@@ -166,10 +168,12 @@ export function capture(sim: Sim): Checkpoint {
 }
 
 export function restore(sim: Sim, cp: Checkpoint) {
+  invalidateResourceAllocation(sim);
   assertScope(cp.scope);
   for (const input of cp.inputs ?? []) assertScope(input.scope);
   const rec = sim as unknown as Record<string, unknown>;
   for (const k of CLONED) if (k in cp.data) rec[k] = structuredClone(cp.data[k]);
+  if (!('resourceTransit' in cp.data)) sim.resourceTransit.clear();
   for (const k of SCALARS) if (k in cp.data) rec[k] = cp.data[k];
   // D74: old checkpoints used a line-wide default of 1. Missing mode means
   // migrate to diagram operation; new manual overrides retain their level.

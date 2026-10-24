@@ -25,6 +25,31 @@ export { ahead } from './topologyOrder';
 export type TrackKind = 'DN' | 'UP' | 'X' | 'SID' | 'CON' | 'DEP';
 export type Dir = 1 | -1;
 
+export interface TrackPoint { link: number; off: number; dir: Dir }
+
+/** Compare positions along an explicitly oriented path, including a path
+ * after a cab change. The caller must supply that phase's direction. */
+export function pointAhead(point: TrackPoint, from: number, to: number): boolean {
+  return (to - from) * point.dir > 0;
+}
+
+/** Head after changing ends, walking the incoming path for a consist which
+ * spans several links (including a rescue formation). Never clip its length. */
+export function reversedBerthPoint(topo: Topology, berth: number, length: number, incoming: RouteStep[] = []): TrackPoint | undefined {
+  const b = topo.berths[berth];
+  let link = b.link, dir = b.dir, off = b.offset, remaining = length;
+  let i = incoming.length - 1;
+  while (i >= 0 && incoming[i].link !== link) i--;
+  for (;;) {
+    const available = dir === 1 ? off : topo.links[link].len - off;
+    if (remaining <= available) return { link, off: off - dir * remaining, dir: -dir as Dir };
+    remaining -= available;
+    if (--i < 0) return undefined;
+    ({ link, dir } = incoming[i]);
+    off = dir === 1 ? topo.links[link].len : 0;
+  }
+}
+
 export interface NodePos { row: number; x: number; y: number }
 
 export interface TNode {
