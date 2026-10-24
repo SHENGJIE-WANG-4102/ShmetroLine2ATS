@@ -2,6 +2,85 @@
 
 分支 `claude/line14-ats-renovation-8298b1`，工作区就是这个 worktree。用户要一次做完再玩，中间不交可玩版本。所以除了第 6 节第 5 步那一个等待点，**一口气做完再汇报**。
 
+## 第二轮：D142 已合入，接着做第 6 节第 5、6 步（2026-10-24）
+
+**现状**
+- 第一轮成果提交为 `f061a62`，结论在 `docs/design-decisions-line14.md` 的 L14-01 至 L14-06。
+- 之后合并了 D142 第一版（`origin/claude/d142-arbitration` 的 `602a480`）。合并只有两处冲突，都已解决：
+  - `src/sim/engine.ts` 两处：先调 `utoFleetTick(this)`，再调 `arbitrateResources(this)`，然后才是 `spawnDue`；
+  - `docs/design-decisions.md`：两边内容都保留。
+- `ats.ts` 自动合并，结果等于「D142 版本加你第一轮的 63 行 UTO 改动」，D142 删掉的旧规则没有回来。
+- 合并提交是 `a2630b3`，这一轮从它开始做。改前基线一律用 `a2630b3`，不再用 `ac0f437`。
+- 合并后我跑过一遍：
+  - `tsc` 通过；
+  - 2号线两种日型的哈希，和 L14-06 记的一致；
+  - line-data、test-line、fuzz-roots、depot-stock-prefix 和 6 个 `line14-*` 测试全过；
+  - core、features 一共 4 条红：
+    - `core.test.ts:1171`，cancels only missed whole cycles，结果是 false；
+    - `core.test.ts:1305`，standby D45 relieves a late train，结果是 false；
+    - `features.test.ts:398`，scenario scored report，0.167 不大于 0.5；
+    - `features.test.ts:407`，manual radio clean line，27 大于 2。
+- 这 4 条已经查清，**归 D142，你不用管**：
+  - 2号线对话核过，它们在 `602a480` 上单独跑也红，失败值完全一样；
+  - 在 D142 之前的 `99521fd` 上，这 4 条都是绿的。
+  - 汇报里写「合并前已有，归 D142」。2号线那边修好后会追加提交，我再合进来。
+  - 这 4 条之外，core、features 再有新红的，才算你的。
+
+**要做的事**
+1. **合并后先回归**：
+   - 第 7 节「14号线」全部检查重跑一遍；
+   - 2号线、测试线的哈希，`test-line`、`fuzz-roots`、`core`、`features`；
+   - 结果和 `f061a62` 对比，哪项变了逐条说明原因。
+2. **重跑第一轮失败的 6 个压测种子**，参数和 L14-06 表一致（14号线 140241–140244，2号线 142031，测试线 142032）。
+   - 第一轮的三条等待链都是 D142 要解的：
+     - 桂桥路 39↔14：`reversalGuard` 的伪需求预约；
+     - 封浜 F2 闭环：回段车和 id34 互持 G0129/G0131；
+     - 封浜 10→24→22→10。
+   - 逐条确认是不是解了。
+3. **还失败的，按根因分三类处理**：
+   - **14号线配线或运营数据**不对，比如泊位没登记进 `turnbackBerths`/`storageBerths`、尾轨长度不够整列停稳、热备来源不合法：直接在 `src/data/lines/line14/` 修，按「顺手修」列出来。
+   - **14号线自己的 UTO 模块**（`uto.ts`、`utoActions.ts`）和仲裁打架：在 `uto` 这边改，让它服从仲裁的准入结果，用 `resourceAllocation` 和 `routeResourceBlocker` 查，不另判一套资源。
+   - **问题在 D142 核心里**：`resourceArbitration.ts`、五条规则、它的拓扑资源推导。**不要改**。把种子、时刻、等待链、你认为该怎么改写进 `work/line14-d142-issues.md`，汇报里列出来，我转给 2号线对话。
+4. **UTO 的唤醒、休眠、自动出库暂时不进仲裁**。
+   - 如果失败是因为它们没进仲裁，比如唤醒中的车占着出段线，而仲裁不知道：归第 3 类，写进 issues 文件。
+   - 不要自己在仲裁里加动作阶段。
+5. 全部检查通过以后，再交第 7 节完整验收。
+
+**D142 的约束（2号线对话定的，不许违反）**
+- 资源全部从拓扑推出来，有三类：
+  - tail/siding 泊位；
+  - `transferPaths` 里 `flow='shared'` 的线；
+  - 当前任务要在该站台换端的站台。
+- 能整列停稳、又不压咽喉的独立尾轨，就是安全等候点。
+- 仲裁不读 `automation`，也不读 `unattended`。14号线只靠数据接入，不加代码分支。
+- 不许改 `src/sim/resourceArbitration.ts`，也不许改 D142 的五条规则（`docs/design-decisions.md` 里 D142 的「判断条件 → 规则」表）。
+- 下面这些 `ats.ts` 里已经删掉的旧规则，一律不许加回来，换个名字也不行：
+  - `exitOnLead`
+  - `passBooking`/`trainBefore`
+  - `reversalGuard` 的空预约
+  - `YIELD_EXIT`/`nextExitOver`
+  - `waitsForTrain`
+  - `tailsBlocked`/`firstInTails`
+  - 旧的 1500 m/2500 m 回段抑制门限
+
+  注意 `ats.ts` 里现在还有 `dist > 2500`、`dist < 1500`，那是 D142 自己留下的，不算。
+- `src/sim/routeTable.ts`（你第一轮从 `ats.ts` 抽出来的）是公共结构改动，要单独送审。D142 的 `routesToBerth` 依赖 `sim.routeTable.next.get(goal)[signal]` 这个结构。**`RouteTable` 的结构和算法一行都不要改**；要改，先停下来问我。
+- D142 还在补跑验证，可能在同一分支追加修复。我收到新提交号会合进来，告诉你重跑哪些。你不要自己去 fetch 或合并。
+
+**公共改动送审**
+- 第一轮你的公共改动分三组，清单在 `docs/design-decisions.md` 的 D???。我会把它们拆成单独的提交，带去 2号线对话审。
+- 这一轮如果又动了公共文件，在 D??? 里补到对应的组，或者新开第四组，写明文件和理由。能放进 `src/data/lines/line14/` 解决的，就别动公共代码。
+
+**内存规矩**（用户 2026-10-24 定的，nifty-faraday 的 `AGENTS.md` 已写进去，这个分支还没合到）：
+- 这台机器只有 32 GB 内存，和用户的其他软件、2号线的 Codex 共用。
+- 整天的日志、轨迹、结果 JSON，一律逐行流式读取，边读边汇总，只留结果。不许一次 `json.load` 或 `read_text` 读进整个大文件。
+- 起整天仿真或批量压测之前，先看当前可用内存，再估算单个进程要用多少。并行的几个任务加起来不超过约 16 GB；6 个种子不一定要全开，可以分批跑。
+- 跑的过程中，发现某个进程超过 8 GB，先停掉它，改成流式读法再重跑。
+
+**这一轮的汇报**，在第 10 节的基础上再加：
+- 6 个种子改前改后的对照表：失败时刻、类型、等待链；
+- issues 文件里的条目数，每条一句话。
+
 ## 先读这些（都在 `reference/line14/`）
 
 | 文件 | 内容 |
@@ -251,9 +330,7 @@
 2. 不停车的站（`opened`）、`onLoss`、冲标随机触发，加上第 5 节两项。这是第一组公共改动。
 3. 运行图，跑通第 7 节 14号线的那几项检查。
 4. UTO 的列车状态机、门、折返、接管、故障，以及 DMI/PIS（第二、第三组公共改动）。
-5. **出入段仲裁**：
-   - 开始前，先合并最新的 `claude/nifty-faraday-mdr3ug`；
-   - 如果 D142（F2/F3/F4 资源仲裁）还没落地，就在这里停，汇报前 4 步的结果。**这是唯一允许中途停的地方。**
+5. **出入段仲裁**：D142 已经合进来了，做法见上面「第二轮」一节。第一轮停在这里，是按约定停的。
 6. 跑第 7 节的全部检查，然后汇报。
 
 公共改动按组分开列文件清单，不和 14号线的数据混在一起，方便用户分组带去 2号线对话审。
@@ -278,7 +355,7 @@
 
 ### 2号线和测试线（基座第 4 节）
 
-- `npx tsx scripts/plan-hash.ts` 四个哈希和合并基点一致。
+- `npx tsx scripts/plan-hash.ts` 四个哈希和合并基点一致。第二轮的合并基点是 D142 的 `602a480`，D142 没改 2号线哈希，所以数值和 L14-06 记的一样。
 - 2号线 `validate-plan`、`firstlast`、`gaode-compare` 的输出和改前一致。
 - `tests/test-line.test.ts` 通过；`ATS_LINE=test npx tsx scripts/plan-hash.ts` 不变。
 - 测试失败表和基线相同。
@@ -300,7 +377,7 @@
 
 - 不许写 `if (LINE_ID === '14')`、`automation === 'UTO'` 这类按线路判断的分支；行为差异只能来自数据或能力判据。
 - 不许改变 2号线的行为和结果。`lines/line2/` 下只能补新字段的显式值。
-- D142 落地前，不改 `ats.ts` 里出入段的进路和资源仲裁。
+- 不改 `src/sim/resourceArbitration.ts` 和 D142 的五条规则，D142 删掉的旧让行规则不许加回来（见「第二轮」一节）。
 - 不许为了对上首末班或车数去加车、删车、改单趟时刻；冲突只能在 `MAX_DIAGRAM_SHIFT_S` 以内平移，平移不掉就报错。
 - PDF 上没有的配线不许编，曹杨路也一样。
 - 不改 `reference/line14/` 里用户已定的口径。发现和现实或代码冲突，在汇报里说。

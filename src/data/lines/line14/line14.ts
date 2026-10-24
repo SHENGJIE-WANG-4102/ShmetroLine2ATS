@@ -40,7 +40,9 @@ export const STATION_EN = {"FB": "Fengbang", "LXL": "Lexiu Road", "LTL": "Lintao
 
 /** PDF 示意不按比例。所有道岔偏移、存车线有效长度均为【假设】，按 185.6m 单列位与咽喉净空建模；不是 PDF 测距。 */
 export const LAYOUT: CoreLineData['LAYOUT'] = {
-  tails: [{ station: 0, side: 'west', length: 260, scissors: true }],
+  // 【假设】PDF不按比例。段接轨道岔会切入总尾轨预算；420米使末端独立容车长度
+  // 下行225/上行275米，均容纳185.6米整列并清出咽喉；两条既有尾轨不增加泊位。
+  tails: [{ station: 0, side: 'west', length: 420, scissors: true }],
   pairs: [
     { id: 'ZXX', station: 5, side: 'west', at: -240, stubs: [
       { id: 'ZXX1', name: '真新新村1道折返线', length: 420, link: { main: 'UP', at: 375 } },

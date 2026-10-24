@@ -1610,7 +1610,7 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   // keep stops up to the turnback station
   const keep: Task[] = [];
   for (const t of tr.tasks) {
-    if (t.k === 'stop' && ((d === 'DN' && t.station >= station) || (d === 'UP' && t.station <= station))) break;
+    if (t.k === 'stop' && (t.station === station || ahead(d, station, t.station))) break;
     if (t.k !== 'stop') break;
     keep.push(t);
   }
@@ -1626,7 +1626,7 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   if (block && curTrip) {
     const idx = block.trips.indexOf(curTrip.id);
     const nextTrip = block.trips.slice(idx + 1).map((i) => plan.trips[i]).find((t) => !t.cancelled);
-    if (nextTrip && nextTrip.dir === back) {
+    if (nextTrip && nextTrip.dir === back && ahead(back, station, nextTrip.to)) {
       // adjusted trip: from turnback station to the next trip's destination
       // depart as soon as the turnback allows (a station-front turnback occupies the opposite platform)
       const depAt = est + 240;

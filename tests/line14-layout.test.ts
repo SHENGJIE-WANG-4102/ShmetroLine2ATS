@@ -36,6 +36,23 @@ describe('14号线PDF配线拓扑', () => {
     expect(topo.links.every(l => l.section >= 0 && topo.sections[l.section].links.includes(l.id))).toBe(true);
   });
 
+  it('封浜两条尾轨在段接轨咽喉外各容纳一整列，不增加停车容量', () => {
+    const station = topo.stations.find(st => st.id === 'FB')!;
+    expect(station.turnbackBerths).toHaveLength(2);
+    expect(station.storageBerths).toHaveLength(0);
+    expect(new Set(station.turnbackBerths.map(id => topo.berths[id].link)).size).toBe(2);
+    for (const id of station.turnbackBerths) {
+      const berth = topo.berths[id], link = topo.links[berth.link];
+      expect(berth.kind).toBe('tail');
+      expect(topo.nodes[berth.dir === 1 ? link.b : link.a].kind).toBe('end');
+      expect(topo.sections[link.section].kind).toBe('tail');
+      // The final uninterrupted tail section ends at the last throat. A
+      // nominal tail length that includes a depot switch is not usable room.
+      const room = berth.dir === 1 ? berth.offset : link.len - berth.offset;
+      expect(room, berth.name).toBeGreaterThanOrEqual(185.6);
+    }
+  });
+
   it('两基地都有双向出入段路径且库位只算14号线部分', () => {
     expect(topo.depots.map(d => [d.key, d.capacity])).toEqual([['FBD', 16], ['GQD', 36]]);
     for (const yard of topo.depots) for (const dir of ['DN', 'UP'] as const) {

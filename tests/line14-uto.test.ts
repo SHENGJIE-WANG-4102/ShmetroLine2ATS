@@ -83,6 +83,45 @@ describe('unattended line operating procedures',()=>{
     sim.t=tr.doorLockedAt!;psd.doorMotionTick(sim);
     expect(sim.command({c:'utoStep',train:tr.id,action:'report'}).ok).toBe(true);
   });
+  it.each(['AUTO','CM','RM'] as const)('computer mode change %s after manual RM arrival completes the pending physical door cycle',mode=>{
+    const tr=fixture(4),stop=tr.tasks[0] as {berth:number};
+    Object.assign(tr,{manual:true,mode:'RM',doorsAwait:true,autoOpenAt:undefined});
+    tr.uto={target:'RM',computer:true,stage:'manual',until:sim.t,detail:'随车人员 RM 驾驶'};
+    expect(sim.command({c:'manual',train:tr.id,mode,computer:true}).ok).toBe(true);
+    expect(sim.command({c:'utoStep',train:tr.id,action:mode==='AUTO'?'restoreReport':'report'}).ok).toBe(false);
+    uto.utoTrainTick(sim,tr);
+    expect(tr.doorsAwait).toBe(false);expect(tr.doorsOpen).toBe(true);
+    expect(tr.doorMotion?.kind).toBe('opening');expect(tr.mode).toBe('RM');expect(tr.manual).toBe(true);
+    expect(sim.plat[sim.topo.berths[stop.berth].platform].psdTrain).toBe(tr.id);
+    sim.t=Math.max(tr.doorMotion!.trainAt,tr.doorMotion!.psdAt);psd.doorMotionTick(sim);
+    sim.t=Math.max(sim.t,tr.uto!.closeAt!,tr.dwellUntil);uto.utoTrainTick(sim,tr);
+    expect(tr.doorMotion?.kind).toBe('closing');expect(tr.uto?.stage).toBe('doors');
+    sim.t=tr.doorLockedAt!;psd.doorMotionTick(sim);
+    expect(tr.doorsOpen).toBe(false);expect(tr.doorsAwait).toBe(false);
+    sequence(tr);
+    expect(tr.mode).toBe(mode==='AUTO'?'DTO':mode);expect(tr.manual).toBe(mode!=='AUTO');
+    if(mode==='AUTO')expect(tr.uto).toBeUndefined();else expect(tr.uto?.stage).toBe('manual');
+  });
+  it('player restores FAM after manual arrival using the original door command before the restore steps',()=>{
+    const tr=fixture(4),stop=tr.tasks[0] as {berth:number};
+    Object.assign(tr,{manual:true,mode:'RM',doorsAwait:true,autoOpenAt:undefined});
+    tr.uto={target:'RM',computer:false,stage:'manual',until:sim.t,detail:'随车人员 RM 驾驶'};
+    expect(sim.command({c:'manual',train:tr.id,mode:'AUTO'}).ok).toBe(true);
+    uto.utoTrainTick(sim,tr);expect(tr.doorsAwait).toBe(true);expect(tr.doorsOpen).toBe(false);
+    const side=ats.platformSide(sim,tr,sim.topo.berths[stop.berth].platform);
+    expect(sim.command({c:'door',train:tr.id,side}).ok).toBe(true);
+    expect(tr.doorsAwait).toBe(false);expect(tr.doorMotion?.kind).toBe('opening');
+    expect(sim.command({c:'utoStep',train:tr.id,action:'restoreReport'}).ok).toBe(false);
+    sim.t=Math.max(tr.doorMotion!.trainAt,tr.doorMotion!.psdAt);psd.doorMotionTick(sim);
+    expect(sim.command({c:'door',train:tr.id,side}).ok).toBe(true);
+    expect(tr.doorMotion?.kind).toBe('closing');sim.t=tr.doorLockedAt!;psd.doorMotionTick(sim);
+    for(const action of ['restoreReport','neutral','famOn'] as const){
+      expect(sim.command({c:'utoStep',train:tr.id,action}).ok).toBe(true);
+      sim.t=tr.uto!.until;uto.utoTrainTick(sim,tr);
+    }
+    expect(tr.mode).toBe('DTO');expect(tr.manual).toBe(false);expect(tr.uto).toBeUndefined();
+    expect(sim.inputLog.filter(i=>'cmd'in i&&i.cmd.c==='door')).toHaveLength(2);
+  });
   it('computer attendant closes the physical doors before taking ATPM, then departs with that mode',()=>{
     const tr=fixture();tr.doorsOpen=true;sim.plat[sim.topo.berths[(tr.tasks[0] as {berth:number}).berth].platform].psd='open';
     expect(sim.command({c:'manual',train:tr.id,mode:'CM',computer:true}).ok).toBe(true);
@@ -126,7 +165,15 @@ describe('unattended line operating procedures',()=>{
       expect(sawRm).toBe(true);expect(maxReverse*3.6).toBeLessThanOrEqual(data.OPERATIONS.reverseKmh+.1);
       expect(tr.phase,`${tr.halt.detail} ${tr.ebReason} ${movement.stopError(sim,tr)}`).toBe('dwell');
       expect(Math.abs(movement.stopError(sim,tr))).toBeLessThanOrEqual(1);
-      expect(tr.drv.stops.at(-1)?.note).toBe('过标退行');expect(sim.integrity.violations).toEqual([]);
+      expect(tr.drv.stops.at(-1)?.note).toBe('过标退行');
+      expect(tr.overrun).toBe(0);expect(tr.stopUntil).toBeLessThanOrEqual(sim.t);
+      expect(sim.calls.some(c=>c.kind==='overrun'&&c.train===tr.id&&c.state==='ringing')).toBe(false);
+      for(let n=0;n<1800&&tr.mode!=='DTO';n++)sim.step();
+      expect(tr.mode).toBe('DTO');expect(tr.manual).toBe(false);expect(tr.uto).toBeUndefined();
+      expect(tr.doorsAwait).toBe(false);expect(tr.doorsOpen).toBe(false);
+      expect(tr.overrun).toBe(0);expect(tr.stopUntil).toBeLessThanOrEqual(sim.t);
+      expect(sim.calls.some(c=>c.kind==='overrun'&&c.train===tr.id&&c.state==='ringing')).toBe(false);
+      expect(sim.integrity.violations).toEqual([]);
     } finally {data.OPERATIONS.atoRandomOverrunProbability=probability;}
   });
   it('full-auto equipment failure degrades to ATPM and exposes the remote reset command',()=>{

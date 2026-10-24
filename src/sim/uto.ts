@@ -104,6 +104,12 @@ export function utoTrainTick(sim:Sim,tr:Train):boolean {
   }
   if (tr.v>=.05) return true;
   // Simulated attendants operate the existing guarded door mechanism.
+  // A manual arrival has no automatic opening timer. Complete its pending
+  // passenger door cycle before this same attendant can close and change modes.
+  if(u.stage==='doors') {
+    u.detail=tr.doorsAwait?'等待开门办理本站客运':'等待车门关闭并锁紧';
+    if(u.computer&&tr.manual&&tr.doorsAwait)attendantDoors(sim,tr);
+  }
   if(u.computer&&u.stage==='doors'&&tr.doorsOpen&&!tr.doorMotion&&sim.t>=(u.closeAt??0)) {
     const task=tr.tasks[0];if(task?.k==='stop')sim.command({c:'door',train:tr.id,side:platformSide(sim,tr,sim.topo.berths[task.berth].platform)},crewLabel());
   }
@@ -152,9 +158,13 @@ export function utoAttendantEffort(tr:Train) {
 /** Uses the existing retreat path and permission check, never changes a route. */
 export function utoRetreatEffort(sim:Sim,tr:Train) {
   if(!tr.uto?.retreat||!tr.uto.computer||tr.uto.stage!=='manual'||tr.mode!=='RM')return;
-  const remaining=Math.max(0,-stopError(sim,tr));
+  const remaining=Math.max(0,-stopError(sim,tr)), atTarget=remaining<.2;
+  // Once stopped at the controller's existing target, let manualArrival
+  // accept the mark. Requesting another reverse step would recheck a return
+  // footprint after the car is already back and can create a false overrun.
+  if(atTarget&&tr.v<.05){tr.reverser=1;tr.notch=-7;return;}
   tr.reverser=-1;
-  tr.notch=remaining<.2?-7:tr.v>Math.min(OPERATIONS.reverseKmh/3.6-.2,Math.sqrt(remaining*.7))?-4:2;
+  tr.notch=atTarget?-7:tr.v>Math.min(OPERATIONS.reverseKmh/3.6-.2,Math.sqrt(remaining*.7))?-4:2;
 }
 export function utoDoorWarningReady(sim:Sim,tr:Train):boolean {
   if(!unattended('doorClose')||!OPERATIONS.uto||tr.mode!=='DTO')return true;
