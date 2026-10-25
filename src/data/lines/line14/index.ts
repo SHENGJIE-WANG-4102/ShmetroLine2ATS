@@ -6,6 +6,7 @@ import { LINE14_SIMULATION } from './simulation';
 import { LINE14_UI } from './ui';
 import * as onboardbank from './onboardbank';
 import * as soundbank from './soundbank';
+import * as doorbank from './doorbank';
 
 // 同为8A自动门的物理时间预算【假设】；实录音库不改变门运动和锁闭时刻。
 const silentAudio = emptyAudio(LINE14_CORE.STATIONS, { openingS: 2.5, warningToMotionS: 2.2, motionToLockedS: 4.5 });
@@ -15,7 +16,8 @@ export const LINE_14: LineData = {
   unattended: { doorClose: true, turnback: true, wakeSleep: true, depotMoves: true },
   signalling: { primary: 'CBTC', fallback: [], onLoss: 'restrictedManual' }, automation: 'UTO',
   core: LINE14_CORE, firstLast: LINE14_FIRST_LAST, lastTrains: { OTHER_LAST_TRAINS: [] },
-  // 仅覆盖本线已核对的车厢片；站台/门/VVVF等无实录的目录仍为空。
-  audio: { ...silentAudio, soundbank, onboardbank: { ...silentAudio.onboardbank, ...onboardbank } },
+  // 用户试听确认的连续报站/门音；物理预算仍用原值，其他缺录音目录留空。
+  audio: { ...silentAudio, soundbank, onboardbank: { ...silentAudio.onboardbank, ...onboardbank },
+    doorbank: { ...silentAudio.doorbank, ...doorbank } },
   simulation: LINE14_SIMULATION, ui: LINE14_UI,
 };

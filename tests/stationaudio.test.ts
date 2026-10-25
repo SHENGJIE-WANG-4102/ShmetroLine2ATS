@@ -229,7 +229,7 @@ describe('separate recorded door clocks', () => {
     const split = doorCycleSplit();
     expect(split.opening).toBe(3); expect(split.warning).toBe(2.7); expect(split.motion).toBeCloseTo(3, 12);
     expect(split.confirmation).toBeCloseTo(0);
-    for (const take of DOOR_TAKES) expect(take.close[0] - take.warn[0]).toBeCloseTo(2.7, 2);
+    for (const take of DOOR_TAKES) if (take.close && take.warn) expect(take.close[0] - take.warn[0]).toBeCloseTo(2.7, 2);
   });
   it('opens with one mechanical recording and no fabricated warning', () => {
     const p = new DoorSoundPlanner(); p.update(df(100, false));
@@ -250,6 +250,21 @@ describe('separate recorded door clocks', () => {
     expect(movement[0].offsetS).toBeCloseTo(0,10); expect(movement[0].rate).toBe(rate);
     expect(clipDuration(movement[0].clips[0])+2.7).toBeCloseTo(6.25,10);
     expect(movement[0].volume).toBe(warning[0].volume);
+  });
+  it('random selection varies the take by station, repeats it for the same trip and station, and keeps warning and mechanism together', () => {
+    const closeAt = (selection: 'primary' | 'random', nextStation: number) => {
+      const p = new DoorSoundPlanner(SOUND_BANK, selection), train = { nextStation };
+      p.update(df(100, true, { trains: [tr({ v: 0, atStation: true, phase: 'dwell', doors: true, doorClosing: false, ...train })] }));
+      const closing = { trains: [tr({ v: 0, atStation: true, phase: 'dwell', doors: true, doorClosing: true, ...train })] };
+      const warn = plays(p.update(df(100.2, false, closing)).commands).map(c => c.clips[0].id);
+      const motion = plays(p.update(df(102.9, false, closing)).commands).map(c => c.clips[0].id);
+      return { warn: warn[0]?.replace('door-warn-close-', ''), motion: motion[0]?.replace('door-motion-close-', '') };
+    };
+    const picks = Array.from({ length: 30 }, (_, s) => closeAt('random', s));
+    for (const p of picks) expect(p.motion).toBe(p.warn);
+    expect(new Set(picks.map(p => p.warn)).size).toBeGreaterThan(1);
+    expect(closeAt('random', 7)).toEqual(picks[7]);
+    expect(new Set(Array.from({ length: 30 }, (_, s) => closeAt('primary', s).warn))).toEqual(new Set(['kjg']));
   });
   it('cancels the closing warning if the door reopens', () => {
     const p = new DoorSoundPlanner(); p.update(df(100, true)); p.update(df(100.2, false));
@@ -450,6 +465,18 @@ describe('selected train interior audio', () => {
     expect(speech(p.update(onboard(110.4, { v: 4, distance: 1000 }, { doorSide: 'R' })))).toEqual([]);
     const commands = speech(p.update(onboard(111.4, { v: 4, distance: 1000 })));
     expect(commands.map(c => c.clips[0].id)).toEqual(['test-departure']); expect(commands[0].offsetS).toBeCloseTo(1);
+  });
+  it('holds the arrival while a long next-station phrase plays, then starts it whole before the stop', () => {
+    const p = planner(); p.update(onboard(100, { phase: 'dwell', v: 0, nextStation: station }));
+    p.update(onboard(100.2, { phase: 'run', v: 0 })); p.update(onboard(100.4, { v: .005 }));
+    const heard: { id: string; t: number; offset: number }[] = [];
+    for (let t = 101; t <= 150; t++) {
+      const train = t < 120 ? { v: 4, distance: 1000 } : countdown(155 - t, { nextStation: target });
+      for (const c of speech(p.update(onboard(t, train)))) heard.push({ id: c.clips[0].id, t, offset: c.offsetS });
+    }
+    // the next phrase starts at 110.4 s and runs 32 s; the arrival was due at 120 s
+    expect(heard.map(h => h.id)).toEqual(['test-departure', 'test-arrival']);
+    expect(heard[1].t).toBe(143); expect(heard[1].offset).toBe(0);
   });
   it('waits for the worker to shift the departure stop without losing its onset time', () => {
     const p = planner(); p.update(onboard(100, { phase: 'dwell', v: 0, nextStation: station }));

@@ -502,26 +502,29 @@ export interface DoorbankData {
     readonly warningToMotionS: number;
     readonly motionToLockedS: number;
 };
+  /** A part a take never recorded is omitted, not given an invented window; its clip is simply absent from DOOR_BANK. */
   DOOR_TAKES: readonly ({
     readonly id: string;
     readonly station: string;
     readonly primary: true;
-    readonly open: readonly [number, number];
-    readonly warn: readonly [number, number];
-    readonly close: readonly [number, number];
-    readonly lockedAt: number;
+    readonly open?: readonly [number, number];
+    readonly warn?: readonly [number, number];
+    readonly close?: readonly [number, number];
+    readonly lockedAt?: number;
     readonly confidence: string;
 } | {
     readonly id: string;
     readonly station: string;
     readonly primary: false;
-    readonly open: readonly [number, number];
-    readonly warn: readonly [number, number];
-    readonly close: readonly [number, number];
-    readonly lockedAt: number;
+    readonly open?: readonly [number, number];
+    readonly warn?: readonly [number, number];
+    readonly close?: readonly [number, number];
+    readonly lockedAt?: number;
     readonly confidence: string;
 })[];
   DOOR_BANK: readonly SoundClip[];
+  /** 'random': every eligible take plays, picked per trip, station and event; default plays the primary take only. */
+  DOOR_SELECTION?: 'primary' | 'random';
 }
 export interface VvvfClip {
     file: string;

@@ -60,13 +60,14 @@ export class OnboardSoundPlanner {
   private departing: { at: number; from: number; trip: string; direction: 'DN' | 'UP' } | null = null;
   private pending: { key: string; at: number; next: OnboardAnnouncement['next']; direction: 'DN' | 'UP' } | null = null;
   private done = new Set<string>();
+  private queued = new Set<string>();
   private active = new Map<string, { until: number; predicted?: number; target?: string; speech: boolean; hold?: boolean }>();
   constructor(private bank: readonly SoundClip[] = SOUND_BANK,
     private announcements: readonly OnboardAnnouncement[] = ONBOARD_ANNOUNCEMENTS,
     private nextDelayS = ONBOARD_NEXT_DELAY_S, private arrivalAdvanceS = ONBOARD_ARRIVAL_ADVANCE_S) {}
   reset(): StationSoundCommand[] {
     const commands: StationSoundCommand[] = [...this.active.keys()].map(key => ({ kind: 'stop', key }));
-    this.active.clear(); this.done.clear(); this.pending = null; this.departing = null;
+    this.active.clear(); this.done.clear(); this.queued.clear(); this.pending = null; this.departing = null;
     this.selected = -1; this.time = NaN; this.rate = 0; this.armed = false; this.origin = -1; this.nextHold = NaN;
     return commands;
   }
@@ -147,9 +148,16 @@ export class OnboardSoundPlanner {
       const advance = arrival.measuredAdvance ? arrival.advanceS : this.arrivalAdvanceS;
       const offset = Math.abs(frame.t - (predicted - advance)) < 1e-6 ? 0 : frame.t - (predicted - advance);
       const key = `arrived|${call}`;
-      if (Number.isFinite(advance) && offset >= 0 && offset <= STATION_ALIGNMENT_S && !this.done.has(key)) {
-        const clip = this.bank.find(c => c.id === arrival.clipId && c.station === STATIONS[tr.nextStation]?.name && c.direction === tr.direction && c.kind === 'interior-arrival');
-        if (clip) { this.done.add(key); play(key, [clip], offset, 1, false, predicted); }
+      // A phrase still playing (a long next-station message, the stop PA) is
+      // never talked over: the arrival waits and then starts whole, before the stop.
+      const queued = this.queued.has(key);
+      if (Number.isFinite(advance) && offset >= 0 && (offset <= STATION_ALIGNMENT_S || queued) && !this.done.has(key)) {
+        if ([...this.active.values()].some(s => s.speech)) this.queued.add(key);
+        else {
+          this.queued.delete(key);
+          const clip = this.bank.find(c => c.id === arrival.clipId && c.station === STATIONS[tr.nextStation]?.name && c.direction === tr.direction && c.kind === 'interior-arrival');
+          if (clip) { this.done.add(key); play(key, [clip], queued ? 0 : offset, 1, false, predicted); }
+        }
       } else if (offset > STATION_ALIGNMENT_S) this.done.add(key);
     }
     return commands;
