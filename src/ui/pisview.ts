@@ -16,6 +16,7 @@ import { h, clear } from './dom';
 import type { PisData, PisRow, TrackDir } from '../sim/model';
 import { LINE, STATIONS, STATION_EN, DIRECTIONS } from '../data/current';
 import { renderColumnPis } from './pisColumn';
+import { renderBannerPis } from './pisBanner';
 import { advancePisCycle, formatPisCountdown, selectPisFirstLast, PIS_TIMING, type PisCycleState, type PisFirstLast } from '../sim/pis';
 import metroLogo from './assets/metro-logo.png';
 import { stationRange, downstreamTerminal } from '../sim/topology';
@@ -317,5 +318,14 @@ function renderLandscapePis(el: HTMLElement, pis: PisData | null, t: number, dat
   }
 }
 
-const PIS_STYLES = { landscape: renderLandscapePis, column: renderColumnPis };
-export const renderPis = PIS_STYLES[LINE.ui.pisStyle ?? 'landscape'];
+const PIS_STYLES = { landscape: renderLandscapePis, column: renderColumnPis, banner: renderBannerPis };
+const shown = new WeakMap<HTMLElement, keyof typeof PIS_STYLES>();
+
+/** Each station may carry its own hardware; switching hardware stops the previous board's timer first. */
+export function renderPis(el: HTMLElement, pis: PisData | null, t: number, dateLabel = '', track?: TrackDir) {
+  const style = pis ? STATIONS[pis.station]?.pisStyle ?? LINE.ui.pisStyle ?? 'landscape' : shown.get(el) ?? LINE.ui.pisStyle ?? 'landscape';
+  const prev = shown.get(el);
+  if (prev && prev !== style) PIS_STYLES[prev](el, null, 0);
+  shown.set(el, style);
+  PIS_STYLES[style](el, pis, t, dateLabel, track);
+}

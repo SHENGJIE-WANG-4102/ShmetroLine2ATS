@@ -26,7 +26,7 @@ export const STATIONS: StationData[] = [
   {"id": "PDD", "name": "浦东大道", "interM": 655.96, "transfers": ["4"], "dwell": 35, "demand": 1.2},
   {"id": "YSL", "name": "源深路", "interM": 1172.334, "transfers": [], "dwell": 25, "demand": 0.8, "sidePlatform": ["DN", "UP"]},
   {"id": "CYI", "name": "昌邑路", "interM": 884.722, "transfers": ["18"], "dwell": 40, "demand": 1.2},
-  {"id": "XPL", "name": "歇浦路", "interM": 1347.29, "transfers": [], "dwell": 20, "demand": 0.7},
+  {"id": "XPL", "name": "歇浦路", "interM": 1347.29, "transfers": [], "dwell": 20, "demand": 0.7, "pisStyle": "column"},
   {"id": "LJL", "name": "龙居路", "interM": 938.803, "transfers": [], "dwell": 0, "demand": 0, "opened": false},
   {"id": "YSN", "name": "云山路", "interM": 1882.663, "transfers": ["6"], "dwell": 30, "demand": 1.1},
   {"id": "LTN", "name": "蓝天路", "interM": 1271.387, "transfers": ["9"], "dwell": 30, "demand": 1.1},

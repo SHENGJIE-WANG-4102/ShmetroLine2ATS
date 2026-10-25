@@ -1,5 +1,5 @@
 import type { SimulationData } from './simulation';
-import type { LineUiData } from './ui';
+import type { LineUiData, PisStyle } from './ui';
 
 /** Shared schemas. Values and per-line evidence live under data/lines/. */
 export interface SourceRef {
@@ -11,6 +11,8 @@ export interface SourceRef {
 export interface StationData {
     opened?: boolean;
     pisLayout?: 'classic' | 'wide';
+    /** this station's PIS hardware when it differs from the line's `ui.pisStyle` */
+    pisStyle?: PisStyle;
     id: string;
     name: string;
     dmiName?: string;

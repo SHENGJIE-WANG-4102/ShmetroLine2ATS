@@ -8,7 +8,16 @@ export const LINE14_UI: LineUiData = {
   headerTitle: '上海轨道交通14号线列车自动监控系统',
   headerSubtitle: 'ATS · OCC 行车调度 · CBTC / FAM 全自动运行',
   lineNameEn: 'Line 14', pisColorCss: '#626020', preferencePrefix: 'ats14',
-  dmiStyle: 'statusGrid', pisStyle: 'column', dmiSpeedWarning: 'target',
+  // 横向屏依据浦东大道照片、真如视频（2026-10-25）；歇浦路是立柱屏（STATIONS 里单独标注）。
+  // 其余车站未实拍，按横向屏处理【假设】（用户决定，2026-10-25）。
+  dmiStyle: 'statusGrid', pisStyle: 'banner', dmiSpeedWarning: 'target',
+  // 横向屏线路图上换乘圈在站名条左侧/右侧，按两处实拍逐站记录；浦东南路实拍无换乘圈。
+  // 未列出的车站（曹杨路）按交替规则摆放【假设】。
+  pisRouteBadges: {
+    '铜川路': [['15'], []], '真如': [[], ['11']], '武宁路': [['13'], []], '静安寺': [['7'], ['2']],
+    '一大会址·黄陂南路': [['1'], []], '大世界': [[], ['8']], '豫园': [['10'], []], '陆家嘴': [[], ['2']],
+    '浦东南路': [[], []], '浦东大道': [[], ['4']], '昌邑路': [[], ['18']], '云山路': [['6'], []], '蓝天路': [[], ['9']],
+  },
   tripNumber: { prefix: '14', source: 'duty', digits: 3 },
   environmentTitle: '环境（全地下正线）',
   faultProcedures: {

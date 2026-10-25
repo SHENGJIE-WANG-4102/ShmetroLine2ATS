@@ -24,7 +24,9 @@ describe('column platform and status-grid cab presentation', () => {
   afterAll(() => { vi.unstubAllEnvs(); vi.resetModules(); });
 
   it('uses explicit screen styles and duty-based train numbers without changing trip identity', () => {
-    expect(data.LINE.ui).toMatchObject({ dmiStyle: 'statusGrid', pisStyle: 'column', dmiSpeedWarning: 'target' });
+    // banner screens above the doors; Xiepu Road was photographed with a column
+    expect(data.LINE.ui).toMatchObject({ dmiStyle: 'statusGrid', pisStyle: 'banner', dmiSpeedWarning: 'target' });
+    expect(data.STATIONS.filter((s: { pisStyle?: string }) => s.pisStyle).map((s: { name: string; pisStyle?: string }) => `${s.name}:${s.pisStyle}`)).toEqual(['歇浦路:column']);
     expect(formatTrainNumber('034', '8765')).toBe('14034');
     expect(formatTrainNumber(7, '8765', true)).toBe('14007');
     expect(screen.cabModeName('CM')).toBe('ATPM');
