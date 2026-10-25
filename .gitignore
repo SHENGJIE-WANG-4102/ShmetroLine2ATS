@@ -10,6 +10,7 @@ tests/out
 
 # Local field recordings and generated placeholders (D71), never redistributed.
 /public/sounds/field-20261014/
+/public/sounds/line14/
 
 # Python bytecode from scripts/audio
 __pycache__/

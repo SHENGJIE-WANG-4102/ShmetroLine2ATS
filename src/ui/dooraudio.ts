@@ -74,9 +74,10 @@ export class DoorSoundPlanner {
       if (!closing && !opening) continue;
       const kind = closing ? 'close' : 'open';
       events.push({ kind, key, at: f.t });
-      const primary = DOOR_TAKES.find(t => t.primary)!.id;
+      // a line without door recordings has no takes: nothing matches, the caller falls back
+      const primary = DOOR_TAKES.find(t => t.primary)?.id;
       const find = (soundKind: SoundKind) => this.bank.find(c => c.kind === soundKind && c.confidence !== 'low' &&
-        (f.perspective === 'platform' ? c.source.startsWith('platform-') : c.id === `${soundKind}-${primary}`));
+        (f.perspective === 'platform' ? c.source.startsWith('platform-') : primary !== undefined && c.id === `${soundKind}-${primary}`));
       const warning = f.perspective === 'onboard' ? find(closing ? 'door-warn-close' : 'door-warn-open') : undefined;
       const mechanism = find(f.perspective === 'onboard' ? closing ? 'door-motion-close' : 'door-motion-open' : closing ? 'close-motion' : 'open');
       if (warning) play(`door|${key}|warn|${f.t}`, warning, 0, tr, closing, closing);
@@ -110,12 +111,12 @@ export class DoorAudio extends RecordedSoundPlayer {
     this.apply(commands);
     if (f.perspective !== 'onboard') return;
     for (const event of events) {
-      const primary = DOOR_TAKES.find(t => t.primary)!.id;
+      const primary = DOOR_TAKES.find(t => t.primary)?.id;
       // An opening lock clunk is motion, not a separate warning. Synthesise
       // once only if the whole opening has no ready recording. For closing,
       // a missing warning falls back once even if the mechanism is ready.
       const kinds = event.kind === 'close' ? ['door-warn-close'] : ['door-warn-open', 'door-motion-open'];
-      if (!this.bank.some(c => kinds.includes(c.kind) && c.id.endsWith(`-${primary}`) && this.hasClip(c.id))) this.fallback(event.kind === 'close', f.rate);
+      if (!this.bank.some(c => primary !== undefined && kinds.includes(c.kind) && c.id.endsWith(`-${primary}`) && this.hasClip(c.id))) this.fallback(event.kind === 'close', f.rate);
     }
   }
 }

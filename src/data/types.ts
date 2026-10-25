@@ -442,6 +442,8 @@ export interface OnboardAnnouncement {
         clipId: string;
         phraseAt: number;
         delayS: number | null;
+        /** delayS was measured for this clip and replaces the line's ONBOARD_NEXT_DELAY_S */
+        measuredDelay?: boolean;
         confidence: SoundClip['confidence'];
     };
     arrived?: {

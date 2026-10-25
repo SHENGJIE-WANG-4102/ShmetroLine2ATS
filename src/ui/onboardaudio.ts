@@ -124,16 +124,22 @@ export class OnboardSoundPlanner {
       if (departure.trip !== tr.trip || departure.direction !== tr.direction || frame.t - departure.at > this.nextDelayS + STATION_ALIGNMENT_S) this.departing = null;
       else if (tr.nextStation !== departure.from && frame.willStop) {
         this.departing = null;
-        if (slot?.next && Number.isFinite(this.nextDelayS)) this.pending = { key: `next|${call}`, at: departure.at + this.nextDelayS, next: slot.next, direction: tr.direction };
+        // like arrived.measuredAdvance: a clip's own measured delay wins over the line's mean
+        const delay = slot?.next?.measuredDelay && slot.next.delayS != null ? slot.next.delayS : this.nextDelayS;
+        if (slot?.next && Number.isFinite(delay)) this.pending = { key: `next|${call}`, at: departure.at + delay, next: slot.next, direction: tr.direction };
       }
     }
     if (this.pending && (!frame.willStop || this.pending.direction !== tr.direction || this.pending.key !== `next|${call}`)) this.pending = null;
-    if (this.pending && frame.t >= this.pending.at && announces(tr) && !tr.eb) {
-      const pending = this.pending; this.pending = null;
+    const pending = this.pending;
+    if (pending && frame.t >= pending.at && announces(tr) && !tr.eb) {
       const offset = Math.max(0, frame.t - pending.at);
-      const clip = this.bank.find(c => c.id === pending.next?.clipId && c.station === STATIONS[tr.nextStation]?.name && c.direction === tr.direction);
-      if (offset <= STATION_ALIGNMENT_S && clip && !this.done.has(pending.key)) {
-        this.done.add(pending.key); play(pending.key, [clip], offset, 1);
+      if (offset > STATION_ALIGNMENT_S) this.pending = null;
+      // Not frozen until it starts: a destination/door-side change that no
+      // longer selects this clip holds it, and only a match within the window plays.
+      else if (slot?.next?.clipId === pending.next?.clipId) {
+        this.pending = null;
+        const clip = this.bank.find(c => c.id === pending.next?.clipId && c.station === STATIONS[tr.nextStation]?.name && c.direction === tr.direction);
+        if (clip && !this.done.has(pending.key)) { this.done.add(pending.key); play(pending.key, [clip], offset, 1); }
       }
     }
     if (slot?.arrived && predicted !== null && announces(tr) && !tr.eb && frame.willStop && tr.phase === 'run') {

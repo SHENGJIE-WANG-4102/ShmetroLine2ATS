@@ -434,6 +434,23 @@ describe('selected train interior audio', () => {
     expect(commands).toHaveLength(1); expect(commands[0].clips.map(c => c.id)).toEqual(['test-departure']);
     expect(speech(p.update(onboard(110.6, { v: 4, distance: 1000 })))).toEqual([]);
   });
+  it('drops a queued next-station phrase when the destination or door side changes before it starts', () => {
+    for (const globals of [{ destination: '淞虹路' }, { doorSide: 'R' as const }]) {
+      const p = planner(); p.update(onboard(100, { phase: 'dwell', v: 0, nextStation: station }));
+      p.update(onboard(100.2, { phase: 'run', v: 0 })); p.update(onboard(100.4, { v: .005 }));
+      const heard: string[] = [];
+      for (let t = 101; t <= 116; t++) heard.push(...speech(p.update(onboard(t, { v: 4, distance: 1000 }, t >= 105 ? globals : {}))).map(c => c.clips[0].id));
+      expect(heard).toEqual([]);
+    }
+  });
+  it('plays a queued phrase late when a transient metadata change clears inside the window', () => {
+    const p = planner(); p.update(onboard(100, { phase: 'dwell', v: 0, nextStation: station }));
+    p.update(onboard(100.2, { phase: 'run', v: 0 })); p.update(onboard(100.4, { v: .005 }));
+    for (let t = 101; t < 110; t++) p.update(onboard(t, { v: 4, distance: 1000 }));
+    expect(speech(p.update(onboard(110.4, { v: 4, distance: 1000 }, { doorSide: 'R' })))).toEqual([]);
+    const commands = speech(p.update(onboard(111.4, { v: 4, distance: 1000 })));
+    expect(commands.map(c => c.clips[0].id)).toEqual(['test-departure']); expect(commands[0].offsetS).toBeCloseTo(1);
+  });
   it('waits for the worker to shift the departure stop without losing its onset time', () => {
     const p = planner(); p.update(onboard(100, { phase: 'dwell', v: 0, nextStation: station }));
     p.update(onboard(100.2, { v: .005, nextStation: station }, { willStop: false }));
