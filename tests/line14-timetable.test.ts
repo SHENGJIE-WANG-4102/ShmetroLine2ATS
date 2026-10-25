@@ -92,6 +92,41 @@ describe('14号线官方窗口与完整交路',()=>{
    }
   });
  }
+ it('双休日日间网格对齐两处PIS的六个到站观测，保持七分钟而不追逐实拍瞬时间隔',()=>{
+  const sim=get('weekend');
+  for(const row of [
+   {station:'ZR',dir:'DN',times:[19*3600+6*60+31,19*3600+13*60+31,19*3600+20*60+31]},
+   {station:'PDD',dir:'UP',times:[19*3600+33*60+58,19*3600+40*60+47,19*3600+47*60+47]},
+  ]){
+   const station=data.STATIONS.findIndex(s=>s.id===row.station);
+   const times=sim.plan.trips.filter(t=>t.revenue&&!t.cancelled&&t.dir===row.dir)
+    .flatMap(t=>t.stops.filter(p=>p.st===station&&p.stop&&!p.noBoard).map(p=>p.arr));
+   const matched=row.times.map(observed=>times.reduce((a,b)=>Math.abs(a-observed)<Math.abs(b-observed)?a:b));
+   for(let i=0;i<matched.length;i++)expect(Math.abs(matched[i]-row.times[i]),`${row.station} 第${i+1}班`).toBeLessThanOrEqual(20);
+   expect(matched[1]-matched[0]).toBeCloseTo(420,5);
+   expect(matched[2]-matched[1]).toBeCloseTo(420,5);
+  }
+ });
+ it('双休日早间并入不插短班、不留超过750秒的空档，首末班保持官方',()=>{
+  const sim=get('weekend');
+  for(const dir of ['DN','UP'] as const){
+   const station=data.STATIONS.findIndex(s=>s.id===data.SIMULATION.timetable.reference![dir]);
+   const calls=sim.plan.trips.filter(t=>t.revenue&&!t.cancelled&&t.dir===dir)
+    .flatMap(t=>t.stops.filter(p=>p.st===station&&p.stop).map(p=>p.dep)).sort((a,b)=>a-b);
+   const join=calls.findIndex(t=>t>=7*3600);
+   for(let i=join-2;i<=join+2;i++){
+    const gap=calls[i]-calls[i-1];
+    expect(gap,`${dir} 并入间隔`).toBeGreaterThanOrEqual(420-.001);
+    expect(gap,`${dir} 并入间隔`).toBeLessThanOrEqual(750);
+   }
+   const daytime=calls.filter(t=>t>=7*3600&&t<21*3600);
+   const anchor=data.SIMULATION.timetable.serviceData.weekend.peaks.weekend[dir]!;
+   for(let i=0;i<daytime.length;i++){
+    expect((daytime[i]-anchor)/420).toBeCloseTo(Math.round((daytime[i]-anchor)/420),5);
+    if(i)expect(daytime[i]-daytime[i-1]).toBeCloseTo(420,5);
+   }
+  }
+ });
  it('未开通站不产生候车人，也不成为任何图定停车点',async()=>{
   const sim=get('weekday'),st=data.STATIONS.findIndex(s=>s.id==='LJL');
   expect(sim.plan.trips.flatMap(t=>t.stops.filter(p=>p.st===st)).every(p=>!p.stop)).toBe(true);

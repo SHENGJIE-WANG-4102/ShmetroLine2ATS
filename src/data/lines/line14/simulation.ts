@@ -75,7 +75,15 @@ export const LINE14_SIMULATION: SimulationData = {
     templates, dayPeriods, shownPeriods: dayPeriods,
     dwellBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },
     runBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },
-    serviceData: { weekday: service(), weekend: service() },
+    serviceData: { weekday: service(), weekend: {
+      ...service(),
+      // 用户决定2026-10-25：双休日日间7分钟网格锚定实拍，工作日不动。
+      // 真如DN19:06:31到站+1058s预算→大世界19:24:09发车；
+      // 浦东大道UP19:33:58到站+577.9s预算→大世界19:43:35.9发车。
+      // 按420s取同相位的首个7点后参考时刻；早间由通用join并入。
+      // 换算及六观测复核：work/line14-r4/derive-grid.ts。
+      peaks: { ...service().peaks, weekend: { DN: H(7,2) + 9, UP: H(7) + 35.9 } },
+    } },
     // 【假设】基地非载客整备及出车窗口，不代表新增营业首班。
     opening: { outerAlternation: 0, stockUntil: H(28), redirectFrom: H(4), emptyFeedersFrom: H(20), feederUntil: H(26), stableUntil: H(10), dayStart: H(4), defaultStableDeparture: H(6) },
     outerBandMargin: 0, overlays: [],

@@ -430,6 +430,7 @@ function layoutService(ctx: PlanContext) {
   // A peak is a whole-core promise, not an origin departure change. Allow
   // the complete core traversal plus one headway for its leading wave.
   const peaks = periods.filter(p => TEMPLATES[p.template].peak);
+  const waves = periods.filter(p => TEMPLATES[p.template].peak || service.peaks[p.template]);
   const peakHw = (p: Period, dir?: TrackDir) => (dir && TEMPLATES[p.template].directionalHeadway?.[dir]) ?? TEMPLATES[p.template].headway;
   const coreLead = new Map(peaks.map(p => {
     const hw = peakHw(p);
@@ -450,7 +451,7 @@ function layoutService(ctx: PlanContext) {
   }
   const morningUpStart = service.denseUp === undefined ? undefined : service.denseUp + upPhase;
   const peakStart = (p: Period, dir: TrackDir) => service.peaks[p.template]?.[dir]
-    ?? (dir === 'UP' && morningUpStart !== undefined ? morningUpStart : p.from - coreLead.get(p)!);
+    ?? (dir === 'UP' && morningUpStart !== undefined ? morningUpStart : p.from - (coreLead.get(p) ?? 0));
   /** Reference-station service waves; all directional differences come from data. */
   const streamAt = (t: number, dir: TrackDir): Period & { steady?: boolean } => {
     const override = service.overrides.find(p => p.dir === dir && t >= p.from && t < p.to);
@@ -460,7 +461,8 @@ function layoutService(ctx: PlanContext) {
       const start = peakStart(peaks[0], dir);
       if (t < start) return { from: 0, to: start, template: peaks[0].template, headway: service.openingDn!.find(p => t < p.to)!.headway, label: '东行开班过渡' }; // 【假设】
     }
-    for (const peak of peaks) {
+    for (const peak of waves) {
+      if (!TEMPLATES[peak.template].peak && service.peaks[peak.template]?.[dir] === undefined) continue;
       const hw = peakHw(peak, dir);
       const start = peakStart(peak, dir), transition = start - OUTER_BAND_MARGIN;
       const end = dir === 'UP' ? service.peaks[peak.template]?.upEnd ?? peak.to : peak.to;
@@ -499,9 +501,12 @@ function layoutService(ctx: PlanContext) {
     const p = streamAt(t, dir);
     const candidate = t + headwayAt(p.steady ? t : t + headwayAt(t, dir) / 2, dir);
     if (morningUpStart !== undefined && dir === 'UP' && t < morningUpStart && candidate >= morningUpStart) return morningUpStart;
-    // Join the leading peak wave without a short insertion or a long gap.
-    const join = peaks.map(p => ({ b: peakStart(p, dir), hw: peakHw(p, dir) })).find(x => x.b > t && x.b <= candidate);
-    if (join) return join.b - t >= 90 ? join.b : join.b + join.hw;
+    // Join a data-anchored wave through the existing transition. Nonpeak
+    // grids retain a full headway rather than inserting a short peak gap.
+    const join = waves.filter(p => TEMPLATES[p.template].peak || service.peaks[p.template]?.[dir] !== undefined)
+      .map(p => ({ b: peakStart(p, dir), hw: peakHw(p, dir), min: TEMPLATES[p.template].peak ? 90 : peakHw(p, dir) }))
+      .find(x => x.b > t && x.b <= candidate);
+    if (join) return join.b - t >= join.min ? join.b : join.b + join.hw;
     return candidate;
   };
 

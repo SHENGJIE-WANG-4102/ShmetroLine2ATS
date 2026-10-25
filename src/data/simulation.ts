@@ -9,6 +9,7 @@ export interface ServiceData {
   openingUp?: { at: number; headway: number; template: string; label: string };
   denseUp?: number;
   openingDn?: { to: number; headway: number }[];
+  /** Reference departure wave starts, keyed by template; also supports nonpeak grids. */
   peaks: Record<string, { DN?: number; UP?: number; upEnd?: number }>;
   overrides: (Period & { dir: TrackDir })[];
   openingSupplements: { from: number; to: number; headway: number; terminal: string }[];
