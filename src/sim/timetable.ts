@@ -19,6 +19,7 @@ import { STATIONS, OPERATIONS, LINE_INFO, SIMULATION, stationOpened, type FixedR
 import { FIXED_LATE_TRAINS } from '../data/current';
 import { FIRST_LAST } from '../data/current';
 import type { ClockBand } from '../data/simulation';
+import { plannedWaiting } from './plannedWaiting';
 
 export interface Template {
   id: string;
@@ -4011,7 +4012,7 @@ export interface PlanIssue {
   /** Circulations contributing to this conflict; used by pure overlay fitting. */
   blocks?: number[];
   severity: 'error' | 'warn';
-  code: 'SERVICE_STRUCTURE' | 'TURN_SHORT' | 'TURN_UNAVAILABLE' | 'BLOCK_BREAK' | 'TERMINAL_FULL' | 'TAIL_ORDER' | 'FRONT_CONFLICT' | 'LAYOVER_LONG' | 'DEPOT_CONFLICT' | 'HEADWAY' | 'FLEET' | 'TIME_ORDER' | 'UNASSIGNED' | 'STABLE_CONFLICT' | 'TURN_HEADWAY' | 'YARD_CAPACITY' | 'YARD_BALANCE' | 'POSSESSION';
+  code: 'SERVICE_STRUCTURE' | 'TURN_SHORT' | 'TURN_UNAVAILABLE' | 'BLOCK_BREAK' | 'TERMINAL_FULL' | 'TAIL_ORDER' | 'FRONT_CONFLICT' | 'LAYOVER_LONG' | 'UNSAFE_WAIT' | 'DEPOT_CONFLICT' | 'HEADWAY' | 'FLEET' | 'TIME_ORDER' | 'UNASSIGNED' | 'STABLE_CONFLICT' | 'TURN_HEADWAY' | 'YARD_CAPACITY' | 'YARD_BALANCE' | 'POSSESSION';
   t: number;
   text: string;
 }
@@ -4194,9 +4195,10 @@ export class DepIndex {
  * Errors make the plan infeasible for the signalling model; warnings are
  * tight but workable.
  */
-export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = true, allHeadways = false): PlanIssue[] {
+export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = true, allHeadways = false, options: {checkWaiting?:boolean} = {}): PlanIssue[] {
   const { topo } = ctx;
   const out: PlanIssue[] = [...(generationIssues.get(plan) ?? [])];
+  if (options.checkWaiting) out.push(...plannedWaiting(ctx, plan).issues);
   const name = (st: number) => STATIONS[st].name;
   const live = plan.trips.filter((t) => !t.cancelled);
   const storage = storageOccupancy(topo, plan);

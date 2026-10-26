@@ -30,6 +30,8 @@ import { recordTransition } from './invariants';
 import { TURNBACK } from './fsm';
 import { canStopBeforeSignal } from './protection';
 import { arbitrateResources, resourceAllocation, routeResourceBlocker, adoptSpawnResources, resourceRouteReserved, resourceWaitDetail, sourceReadyAt, routeNeedsResourceProtection, resourceAdmissionBlocked } from './resourceArbitration';
+import { walkRouteToBerth, type TaskPathVisitor } from './routePath';
+export type { RouteTable, TaskPathVisitor } from './routePath';
 
 /** Every actual turnback stage is observed at the event, including atomic platform turns. */
 function setTurnbackStage(sim: Sim, tr: Train, next: Train['tbStage']) {
@@ -39,33 +41,11 @@ function setTurnbackStage(sim: Sim, tr: Train, next: Train['tbStage']) {
 
 // ---------------------------------------------------------------- route table
 
-export { buildRouteTable, type RouteTable } from './routeTable';
+export { buildRouteTable } from './routeTable';
 
 /** Physical distance, separate from the weighted route-choice cost. */
-export type TaskPathVisitor = (link: number, from: number, to: number) => void;
 export function distanceToBerth(sim: Sim, sig: number, goal: number, visit?: TaskPathVisitor): number {
-  const berth = sim.topo.berths[goal];
-  const table = sim.routeTable.next.get(goal);
-  const seen = new Set<number>();
-  let distance = 0;
-  while (sig >= 0 && !seen.has(sig)) {
-    seen.add(sig);
-    const rid = table?.[sig] ?? -1;
-    if (rid < 0) return Infinity;
-    const route = sim.topo.routes[rid];
-    for (const step of route.steps) {
-      const link = sim.topo.links[step.link];
-      const entry = step.dir === 1 ? 0 : link.len;
-      if (step.link === berth.link && step.dir === berth.dir) {
-        visit?.(step.link, entry, berth.offset);
-        return distance + (step.dir === 1 ? berth.offset : link.len - berth.offset);
-      }
-      visit?.(step.link, entry, step.dir === 1 ? link.len : 0);
-      distance += link.len;
-    }
-    sig = route.end;
-  }
-  return Infinity;
+  return walkRouteToBerth(sim.topo, sim.routeTable, { signal: sig }, goal, visit);
 }
 
 /** does the route set at its start signal lead (reasonably) towards the goal berth? */
