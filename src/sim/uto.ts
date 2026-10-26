@@ -1,17 +1,20 @@
 /** Capability-selected unattended procedures. Infrastructure arbitration remains in ATS. */
 import type { Sim } from './engine';
-import type { Train, UtoAction, UtoControlState } from './model';
+import type { Train, StopTask, UtoAction, UtoControlState } from './model';
 import { LINE, OPERATIONS, unattended } from '../data/current';
 import { cbtcAvailable, setMode, releaseForRestrictedManual } from './onboard';
 import { platformSide } from './ats';
 import { stopError } from './movement';
 import { DOOR_CLOSE_S } from './calibration';
 import { depotMoves } from './timetable';
+import { sourceDepartureAt } from './resourceArbitration';
 
 export const crewLabel = () => OPERATIONS.uto?.crewLabel ?? '司机';
 import {nextUtoAction, utoActions, UTO_ACTION_LABELS as LABELS} from './utoActions';
 export {nextUtoAction} from './utoActions';
 export function utoBusy(tr: Train): boolean { return !!tr.uto && tr.uto.stage !== 'manual'; }
+/** A simulated attendant keeps the same manual cab and dispatch permissions as a player. */
+export function computerCrew(tr: Train): boolean { return tr.manual && tr.uto?.computer === true && tr.uto.stage === 'manual'; }
 const takeoverDay = (sim: Sim): string => sim.config.date ?? `seed:${sim.config.seed}`;
 export function requestUtoControl(sim: Sim, tr: Train, mode: 'CM'|'RM'|'AM'|'AUTO', computer=false) {
   if (!unattended('doorClose') || !OPERATIONS.uto) return {ok:false,msg:'本线路没有无人驾驶接管流程'};
@@ -92,6 +95,11 @@ export function utoTrainTick(sim:Sim,tr:Train):boolean {
       sim.command({c:'manual',train:tr.id,mode:'RM',computer:u.computer},crewLabel());
       if(tr.uto)tr.uto.reason='signalLoss';
       return true;
+    }
+    // Dispatch may grant this already staffed cab a bounded RM sweep. Its
+    // original protected target stays CM; expiry does not restore faulty FAM.
+    if(computerCrew(tr)&&u.target==='CM'&&tr.mode==='RM'&&tr.rmAuth<=0&&!u.retreat&&available) {
+      if(setMode(sim,tr,'CM',tr.level,'RM压道结束，恢复 ATPM'))u.detail='随车人员 ATPM 驾驶';
     }
     if(u.reason==='signalLoss'&&available)u.returnAt=sim.t;
     if(u.computer)attendantDoors(sim,tr);
@@ -203,7 +211,17 @@ export function utoFleetTick(sim:Sim) {
     const r=sim.vehicles.get(tr.vehicle);if(!r||!r.uto||r.uto.stage==='ready')continue;
     if(r.depot>=0)continue;
     const u=r.uto;
-    if(u.stage==='sleep'){const dep=tr.tasks.find(t=>t.k==='stop'&&t.dep!==null);if(dep?.k!=='stop'||dep.dep!-sim.t>rule.wakeLeadS)continue;u.stage='power';u.until=sim.t+rule.powerS;}
+    if(u.stage==='sleep'){
+      const trips=sim.plan.blocks[tr.block]?.trips.map(id=>sim.plan.trips[id])
+        .filter(trip=>trip&&!trip.cancelled&&!trip.completed)??[];
+      const active=new Set(trips.map(trip=>trip.id));
+      const stops=tr.tasks.filter((t):t is StopTask=>t.k==='stop'&&(t.trip<0||active.has(t.trip)));
+      // Wake and release share the same clock, including a dep=null feeder.
+      // The lookup also keeps a live intermediate hold's own departure.
+      const departure=stops.map(task=>sourceDepartureAt(sim,task)).find(at=>at!==null&&Number.isFinite(at));
+      if(departure==null||!Number.isFinite(departure)||departure-sim.t>rule.wakeLeadS)continue;
+      u.stage='power';u.until=sim.t+rule.powerS;
+    }
     else if(u.stage==='power'&&sim.t>=u.until){u.stage='pantograph';u.until=sim.t+rule.pantographS;}
     else if(u.stage==='pantograph'&&sim.t>=u.until){u.stage='selfTest';u.until=sim.t+rule.selfTestS;}
     else if(u.stage==='selfTest'&&sim.t>=u.until){u.stage='ready';u.until=0;}

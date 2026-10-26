@@ -20,6 +20,7 @@ import { HALT, type HaltCode } from './halt';
 import { nextLink } from './topology';
 import { swPos } from './interlocking';
 import { answerVehicle } from './vehicle';
+import { computerCrew } from './uto';
 
 export const AUTO_DELAY = 15;
 const REPEAT = 120;
@@ -43,6 +44,10 @@ export interface CallSpec {
 export function openCall(sim: Sim, spec: CallSpec): RadioCall | null {
   const crew=crewLabel();
   if(crew!=='司机')spec={...spec,from:spec.from.replaceAll('司机',crew),text:spec.text.replaceAll('司机',crew),options:spec.options.map(o=>({...o,label:o.label.replaceAll('司机',crew)}))};
+  // Section-tagged preset requests, including queued expiry retries, share
+  // one publication gate even when submitted by different attendants.
+  if(spec.kind==='rmPreset'&&spec.target!==undefined&&sim.calls.some(c=>
+    c.kind==='rmPreset'&&c.state==='ringing'&&c.target===spec.target))return null;
   // one ringing call per subject
   if (sim.calls.some((c) => c.state === 'ringing' && c.kind === spec.kind && c.train === spec.train && c.station === spec.station && c.target === spec.target)) return null;
   const same = sim.calls.filter((c) => c.kind === spec.kind && c.train === spec.train && c.station === spec.station && c.target === spec.target);
@@ -446,8 +451,18 @@ function nearStationName(sim: Sim, tr: Train): string {
 // ---------------------------------------------------------------- call factories used by other modules
 
 export function callRmPreset(sim: Sim, tr: Train) {
+  const crew=computerCrew(tr);
+  const route=tr.nextSignal>=0?sim.sig[tr.nextSignal]?.route??-1:-1;
+  const target=crew&&route>=0?sim.topo.routes[route].sections.find(s=>sim.sec[s].preset):undefined;
+  if(crew) {
+    const last=sim.calls.slice().reverse().find(c=>c.kind==='rmPreset'&&c.train===tr.id
+      &&(c.state==='ringing'||c.target===target));
+    // Reuse the existing preset retry interval after an answer or expiry;
+    // the same pending section never creates a new request each fleet tick.
+    if(last&&(last.state==='ringing'||sim.t-(last.answeredAt??last.deadline)<REPEAT/2))return null;
+  }
   return openCall(sim, {
-    kind: 'rmPreset', from: driverOf(tr), train: tr.id,
+    kind: 'rmPreset', from: driverOf(tr), train: tr.id, ...(crew?{target}:{}),
     text: '前方区段计轴预复位，请求以RM模式压道运行',
     options: [{ key: 'approve', label: '同意RM压道', critical: true }, { key: 'wait', label: '原地等待' }], auto: 'wait', timeout: 120,
   });

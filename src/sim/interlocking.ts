@@ -4,7 +4,7 @@ import { canStopBeforeSignal } from './protection';
  */
 import type { Sim } from './engine';
 import type { ActiveRoute, Train } from './model';
-import { withdrawAuthority, rescueRouteReady } from './movement';
+import { withdrawAuthority, rescueRouteReady, retreatRouteBlocker } from './movement';
 import { checkArsCancellation } from './invariants';
 
 export const SWITCH_TIME = 5; // s, point machine throw time (approx)
@@ -37,6 +37,7 @@ export function bindRouteApproach(sim: Sim, rid: number, train: number) {
   const ar = sim.routes.get(rid);
   const tr = sim.trains.get(train);
   if (!ar || !tr || ar.entered && !ar.fleeting && ar.owner !== train) return;
+  if (retreatRouteBlocker(sim, rid, train)) return;
   ar.directionTrain = train;
   const task = tr.tasks[tr.phase === 'reversing' ? 1 : 0];
   ar.directionPullout = tr.phase === 'reversing' || ['manual', 'depart'].includes(tr.tbStage);
@@ -61,6 +62,11 @@ export function trySetRoute(sim: Sim, rid: number, opts: { manual?: boolean; fle
   if (sg.failed && !opts.guide) return { ok: false, msg: `${sname} 信号机故障，无法开放（可办理引导进路）` };
   const approaching = opts.train !== undefined ? sim.trains.get(opts.train)
     : sim.trainList.filter(t => t.nextSignal === r.start).sort((a, b) => a.nextSignalDist - b.nextSignalDist)[0];
+  // A new following route may otherwise claim the return's section while its
+  // MA stops at that return, leaving both trains waiting on each other. Use
+  // the same protected footprint as the MA scan, before any route mutation.
+  const returning = retreatRouteBlocker(sim, rid, approaching?.id);
+  if (returning) return { ok: false, msg: returning.detail };
   const reverseInterval = r.wrongDir && reverseIntervalApproach(sim, rid, approaching?.id);
   if (reverseInterval && approaching?.level === 'TBTC') return { ok: false, msg: 'TBTC不能自动反向区间折返（P3 §2.4.2）' };
   if (sg.route >= 0) {

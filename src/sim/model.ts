@@ -351,7 +351,7 @@ export interface Train {
   recentBody?: BodySeg[];
   /** Derived CM advisory only; carried/replayed with the train, refreshed by motion. */
   vRecommended?: number;
-  retreat?: { distance: number; authorised: boolean };
+  retreat?: { distance: number; authorised: boolean; reported?: boolean };
   dmiQueue?: { at: number; message: 'active' | 'located' | 'available' }[];
   dmiContext?: { task: string; cab: number };
   dmiCab?: number;

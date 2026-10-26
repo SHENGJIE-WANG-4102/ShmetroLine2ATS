@@ -5,7 +5,6 @@ import { utoBusy, utoVehicleWait } from './uto';
  */
 import type { Sim } from './engine';
 import type { Train, BodySeg } from './model';
-import { STANDBY_CALL } from './model';
 import { nextLink, linkChain, type Dir } from './topology';
 import { profileOf, heightAt, chainSense, gradeAccelAt, brakingSpeedH } from './gradient';
 import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
@@ -13,14 +12,14 @@ import { levelAccel, trainLevel } from './energy';
 import { swPos } from './interlocking';
 import { TRACTION_UNITS } from './vehicle';
 import { PERF, brakingSpeed, jerkLimited, tractionAccel, atoTractionAccel, atoControl, atoStopApproachDistance, atoBrakeProfile, atoLimitSpeed, sectionPlan, sectionRecommended, sectionEta, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
-import { routeLeadsTo, distanceToBerthFrom, atoOverrun, type TaskPathVisitor } from './ats';
+import { routeLeadsTo, distanceToBerthFrom, type TaskPathVisitor } from './ats';
 import type { HaltCode } from './halt';
 import { applyEB } from './onboard';
 import { psdSafe } from './psd';
 import type { EbCause } from './model';
 import { OPERATIONS } from '../data/current';
 import { SIGNAL_MARGIN, canStopBeforeSignal, restrictionDistanceAt } from './protection';
-import { resourceAuthorityBlocker } from './resourceArbitration';
+import { resourceAuthorityBlocker, sourceReadyAt } from './resourceArbitration';
 
 /** speed limits / platform stops further than this do not influence the braking curves */
 const LOOKAHEAD = 1400;
@@ -188,6 +187,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
   // a manually driven RM train is on sight: authority limits are advisory, the scan goes on to find physical obstacles
   const onSight = tr.manual && tr.mode === 'RM';
   const cbtc = tr.level === 'CBTC' && tr.comm;
+  const returns = retreatOccupancy(sim);
   const rescueTarget = tr.tasks[0]?.k === 'rescue' ? (tr.tasks[0] as { target: number }).target : -1;
   const dt0 = tr.tasks[0]?.k === 'depot' ? tr.tasks[0] as { depot: number; berth?: number } : null;
   const depotGoal = dt0 ? (dt0.berth !== undefined && dt0.berth >= 0 ? dt0.berth : topo.depots[dt0.depot].berth) : -1;
@@ -218,7 +218,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
     && topo.platforms[berth.platform].station === tr.lastStation;
   // (a hot standby not yet called out does not queue for the platform, D70)
   const t0 = tr.tasks[0];
-  const standing = t0?.k === 'stop' && (t0.standby || t0.stabledOut) && t0.dep !== null && t0.dep - sim.t > STANDBY_CALL;
+  const standing = t0?.k === 'stop' && sourceReadyAt(sim, t0) > sim.t;
   // The preceding reversal (or overnight spawn) already placed the body at
   // its registered berth. Withholding ARS alone still lets ATO creep to the
   // exit signal. Keep authority here until the scheduled call-out instead.
@@ -244,7 +244,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
   // moving head overruns it, including across the following short links.
   if (berth && gb === goalBerth(tr) && stopError(sim, tr) < 0) res.stopDist = 0;
   // other trains on current link ahead
-  checkTrainsOnLink(sim, tr, link, dir, -(dir === 1 ? tr.off : l0.len - tr.off), rescueTarget, cbtc, atp, res);
+  checkTrainsOnLink(sim, tr, link, dir, -(dir === 1 ? tr.off : l0.len - tr.off), rescueTarget, cbtc, atp, res, returns);
 
   // zone check for current position
   const z0 = sim.zoneState[l0.zone];
@@ -293,6 +293,13 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
       // the next signal (for ARS / approach locking) is only reported within the look-ahead range
       if (res.nextSignal < 0 && d < LOOKAHEAD) { res.nextSignal = sigId; res.nextSignalDist = d; }
       const sg = sim.sig[sigId];
+      // A route may predate consent. Stop new authority before its entrance,
+      // rather than let a follower acquire ownership inside the return.
+      const returning = sg.route >= 0 ? retreatRouteBlocker(sim, sg.route, tr.id, returns) : undefined;
+      if (returning) {
+        obstacle(res, d - SIGNAL_MARGIN, returning.detail, 'TRAIN_AHEAD', true, returning.train);
+        break;
+      }
       let ok = false;
       if (sg.route >= 0) {
         const ar = sim.routes.get(sg.route)!;
@@ -366,7 +373,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
       }
     }
     // other trains on this link (before the platform checks below, which end the walk)
-    checkTrainsOnLink(sim, tr, nx.link, nx.dir, d, rescueTarget, cbtc, atp, res);
+    checkTrainsOnLink(sim, tr, nx.link, nx.dir, d, rescueTarget, cbtc, atp, res, returns);
     // platform protections
     if (nl.platform >= 0) {
       const ps = sim.plat[nl.platform];
@@ -456,17 +463,25 @@ export function notchAccel(v: number, notch: number): number {
 
 function checkTrainsOnLink(
   sim: Sim, tr: Train, link: number, dir: Dir, dEntry: number, rescueTarget: number, cbtc: boolean, atp: boolean,
-  res: ScanResult,
+  res: ScanResult, returns: readonly RetreatOccupancy[],
 ) {
-  const segs = sim.linkBodies.get(link);
-  if (!segs) return;
+  const physical = sim.linkBodies.get(link);
+  if (!returns.length && !physical) return;
+  const segs: { train: number; from: number; to: number; retreat?: boolean }[] = returns.length ? [...(physical ?? [])] : physical!;
+  // An authorised return still needs its untravelled footprint. Admit new
+  // authorities against that same projection, before they can enter it;
+  // the physical body index and other trains' routes remain untouched.
+  for (const other of returns) {
+    for (const b of other.swept)
+      if (b.link === link) segs.push({ train: other.train, from: b.from, to: b.to, retreat: true });
+  }
   const len = sim.topo.links[link].len;
   for (const s of segs) {
     if (s.train === tr.id) continue;
     const near = dir === 1 ? s.from : len - s.to;
     const dist = dEntry + near;
     if (dist < -0.5) continue; // behind us on the same link
-    if (s.train === rescueTarget) {
+    if (s.train === rescueTarget && !s.retreat) {
       obstacle(res, dist - 0.3, '救援连挂', 'RESCUE', true, s.train);
       res.constraints.push(Math.max(0, dist - 25), PERF.vCouple);
       continue;
@@ -630,13 +645,34 @@ function runLevelAccel(sim: Sim, tr: Train, vT: number, vCruise: number, stopAt:
   return levelAccel(tr, regulated || plannedEmpty ? trainLevel(sim, tr) : 1, vT, vCruise, stopAt, tr.atoMove, protection);
 }
 
-/** Full swept footprint on the train's actual recent path, never a new route.
- * Check the whole return before permitting traction; repeat while reversing. */
-export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -stopError(sim, tr))) {
-  if (!tr.retreat?.authorised)
-    return { ok: false, detail: '等待调度同意退行', train: -1 };
-  if (tr.tasks[0]?.k !== 'stop') return { ok: false, detail: '退行缺少停车对标任务', train: -1 };
-  if (!Number.isFinite(distance)) return { ok: false, detail: '退行停车点不在本车已走路径内', train: -1 };
+/** A direction association is not route ownership, but an issued ATP authority
+ * must still stay clear of the entire return. Include a retained braking MA. */
+function authorityOverlaps(sim: Sim, tr: Train, swept: BodySeg[]): boolean {
+  if (tr.mode === 'RM') return true; // There is no issued boundary proving separation.
+  const distances = [tr.maDist, tr.lastMa].filter(Number.isFinite);
+  if (!distances.length) return true;
+  let left = Math.max(0, ...distances) - tr.lastDs;
+  let link = tr.link, off = tr.off, dir = tr.dir;
+  const seen = new Set<string>();
+  while (left > .001) {
+    const key = `${link}:${dir}`;
+    if (seen.has(key)) return true; // An unresolved issued path cannot be released.
+    seen.add(key);
+    const distance = Math.min(left, dir === 1 ? sim.topo.links[link].len - off : off);
+    const end = off + dir * distance;
+    if (swept.some(b => b.link === link
+      && Math.max(b.from, Math.min(off, end)) < Math.min(b.to, Math.max(off, end)) - .001)) return true;
+    left -= distance;
+    if (left <= .001) return false;
+    const next = nextLink(sim.topo, link, dir, sw => swPos(sim, sw));
+    if (!next) return true;
+    link = next.link; dir = next.dir; off = dir === 1 ? 0 : sim.topo.links[link].len;
+  }
+  return false;
+}
+
+/** Pure remaining return geometry, shared by admission and new MA scans. */
+function retreatSweep(sim: Sim, tr: Train, distance: number) {
   const projected = { ...tr, hist: tr.hist.slice(), body: tr.body.slice() };
   const swept = tr.body.slice();
   let left = distance;
@@ -647,25 +683,75 @@ export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -s
     swept.push(...projected.body);
     left -= step;
   }
+  return { projected, swept };
+}
+
+interface RetreatOccupancy { train: number; swept: BodySeg[] }
+const NO_RETREATS: readonly RetreatOccupancy[] = [];
+const retreatGeometry = new WeakMap<Train, { sim: Sim; topo: Sim['topo']; key: string; occupancy: RetreatOccupancy }>();
+
+/** The remaining authorised return is protected occupancy for both MA and
+ * route admission. Discover consent every call: commands and motion can change
+ * it within one sim.t. Only active returns need a geometry key/allocation. */
+export function retreatOccupancy(sim: Sim): readonly RetreatOccupancy[] {
+  let active: RetreatOccupancy[] | undefined;
+  for (const tr of sim.trainList) {
+    if (!tr.retreat?.authorised || tr.tasks[0]?.k !== 'stop') continue;
+    const distance = Math.max(0, -stopError(sim, tr));
+    if (!Number.isFinite(distance) || distance <= .001) continue;
+    const key = JSON.stringify([sim.t, tr.link, tr.off, tr.dir, tr.len, distance, tr.hist, tr.body]);
+    let cached = retreatGeometry.get(tr);
+    if (!cached || cached.sim !== sim || cached.topo !== sim.topo || cached.key !== key) {
+      cached = { sim, topo: sim.topo, key, occupancy: { train: tr.id, swept: retreatSweep(sim, tr, distance).swept } };
+      retreatGeometry.set(tr, cached);
+    }
+    (active ??= []).push(cached.occupancy);
+  }
+  return active ?? NO_RETREATS;
+}
+
+/** Route locks protect whole sections, including a return's projected tail. */
+export function retreatRouteBlocker(sim: Sim, rid: number, self = -1, occupied = retreatOccupancy(sim)) {
+  const route = sim.topo.routes[rid];
+  for (const returning of occupied) {
+    if (returning.train === self) continue;
+    if (returning.swept.some(b => route.sections.includes(sim.topo.links[b.link].section)))
+      return { train: returning.train, detail: `进路 ${route.name} 经过列车${returning.train}获准退行的剩余占用范围` };
+  }
+  return undefined;
+}
+
+/** Full swept footprint on the train's actual recent path, never a new route.
+ * Check the whole return before permitting traction; repeat while reversing. */
+export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -stopError(sim, tr))): { ok: boolean; detail: string; train: number; code: HaltCode } {
+  if (!tr.retreat?.authorised)
+    return { ok: false, detail: '等待调度同意退行', train: -1, code: 'DISPATCHER' };
+  if (tr.tasks[0]?.k !== 'stop') return { ok: false, detail: '退行缺少停车对标任务', train: -1, code: 'ROUTE_CONFLICT' };
+  if (!Number.isFinite(distance)) return { ok: false, detail: '退行停车点不在本车已走路径内', train: -1, code: 'ROUTE_CONFLICT' };
+  const { projected, swept } = retreatSweep(sim, tr, distance);
   const endError = stopError(sim, projected);
   if (!Number.isFinite(endError) || Math.abs(endError) > 1 || projected.body.reduce((s, b) => s + b.to - b.from, 0) < tr.len - .01)
-    return { ok: false, detail: '退行范围超出本车已占用路径', train: -1 };
+    return { ok: false, detail: '退行范围超出本车已占用路径', train: -1, code: 'ROUTE_CONFLICT' };
   for (const b of swept) {
     const visited = tr.recentBody?.find(v => v.link === b.link);
     if (!visited || b.from < visited.from - .01 || b.to > visited.to + .01)
-      return { ok: false, detail: '退行范围超出本车已占用路径', train: -1 };
+      return { ok: false, detail: '退行范围超出本车已占用路径', train: -1, code: 'ROUTE_CONFLICT' };
     const section = sim.topo.links[b.link].section, sec = sim.sec[section];
     const other = trainInSection(sim, section, tr.id);
-    if (other >= 0) return { ok: false, detail: `退行后方区段被列车${other}占用`, train: other };
+    if (other >= 0) return { ok: false, detail: `退行后方区段被列车${other}占用`, train: other, code: 'TRAIN_AHEAD' };
     const route = sec.lockRoute >= 0 ? sim.routes.get(sec.lockRoute) : undefined;
-    const claimant = route && [route.owner, route.arsTrain ?? -1, route.committed, route.directionTrain ?? -1]
+    const claimant = route && [route.owner, route.arsTrain ?? -1, route.committed]
       .find(id => id >= 0 && id !== tr.id);
     const opposing = route && route.owner < 0 && sim.topo.routes[route.route].steps.some(step =>
       swept.some(b => b.link === step.link) && tr.hist.find(h => h.link === step.link)?.dir !== step.dir);
     if (route && (claimant !== undefined || opposing))
-      return { ok: false, detail: `退行后方区段锁闭给进路${route.route}`, train: claimant ?? route.owner };
+      return { ok: false, detail: `退行后方区段锁闭给进路${route.route}`, train: claimant ?? route.owner, code: (claimant ?? route.owner) >= 0 ? 'TRAIN_AHEAD' : 'ROUTE_CONFLICT' };
+    const associated = route?.directionTrain !== undefined && route.directionTrain !== tr.id
+      ? sim.trains.get(route.directionTrain) : undefined;
+    if (associated && authorityOverlaps(sim, associated, swept))
+      return { ok: false, detail: associated.mode === 'RM' ? '关联列车RM无授权边界' : `退行范围与列车${associated.id}已发移动授权重叠`, train: associated.id, code: 'TRAIN_AHEAD' };
     if (sec.blocked || sec.envTsr < 0 || sec.directionEsp || sec.disturbed)
-      return { ok: false, detail: '退行后方区段防护/故障', train: -1 };
+      return { ok: false, detail: '退行后方区段防护/故障', train: -1, code: 'ROUTE_CONFLICT' };
   }
   // Every historical link transition still has the same detected point position.
   for (let i = projected.hist.length - projected.body.length; i < tr.hist.length - 1; i++) {
@@ -673,9 +759,9 @@ export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -s
     const h = tr.hist[i], next = tr.hist[i + 1];
     const actual = nextLink(sim.topo, h.link, h.dir, sw => swPos(sim, sw));
     if (!actual || actual.link !== next.link || actual.dir !== next.dir)
-      return { ok: false, detail: '退行路径道岔未在原位', train: -1 };
+      return { ok: false, detail: '退行路径道岔未在原位', train: -1, code: 'ROUTE_CONFLICT' };
   }
-  return { ok: true, detail: '司机退行对标', train: -1 };
+  return { ok: true, detail: '司机退行对标', train: -1, code: 'STOP_POINT' };
 }
 
 function manualReverse(sim: Sim, tr: Train, dt: number) {
@@ -684,13 +770,11 @@ function manualReverse(sim: Sim, tr: Train, dt: number) {
   // next station as reached while the reverser is still in reverse.
   const goal = goalBerth(tr), err = goal >= 0 ? berthError(sim, tr, goal) : NaN;
   const permit = reversePermission(sim, tr);
-  if (!permit.ok && tr.retreat && !tr.overrun && tr.tasks[0]?.k === 'stop')
-    atoOverrun(sim, tr, tr.tasks[0], Number.isFinite(err) ? err : -tr.retreat.distance, permit.detail);
   const limit = OPERATIONS.reverseKmh / 3.6;
   tr.stopDist = Number.isFinite(err) ? Math.max(0, -err) : Infinity; tr.vPermit = permit.ok ? limit : 0; tr.vEbi = tr.vPermit;
   tr.maDist = 0; // No forward authority; lastMa below is the separately supervised return distance.
   tr.maSigs = []; tr.maFar = 0; tr.maReason = permit.detail;
-  tr.maCode = permit.ok ? 'STOP_POINT' : permit.train >= 0 ? 'TRAIN_AHEAD' : 'DIRECTION_WAIT'; tr.maTrain = permit.train;
+  tr.maCode = permit.code; tr.maTrain = permit.train;
   tr.vTarget = permit.ok ? limit : 0;
   tr.vRecommended = 0;
   if (!tr.eb && (tr.v > limit + 1e-6 || err > 1)) {

@@ -389,3 +389,69 @@ describe('overdue UTO depot readiness',()=>{
     expect(peekVehicle(world,0,block)).toBe(vehicle);
   });
 });
+
+describe('UTO stabled first-motion readiness',()=>{
+  beforeAll(()=>{vi.stubEnv('ATS_LINE','14');vi.resetModules();});
+  afterAll(()=>{vi.unstubAllEnvs();vi.resetModules();});
+  const stop=(trip:number,station:number,dep:number|null,stabledOut=false)=>({
+    k:'stop' as const,trip,station,berth:0,arr:dep===null?10500:null,dep,stabledOut,doors:false,revenue:false,
+  });
+  function world(tasks:import('../src/sim/model').StopTask[],trips:import('../src/sim/model').Trip[]){
+    const vehicle='14001',record={depot:-1,work:'',uto:{stage:'sleep' as import('../src/sim/model').UtoVehicleState['stage'],until:0,cycles:0}};
+    const block={id:0,svc:'001',train:1,start:{kind:'stable',station:0,berth:0},end:{kind:'none'},trips:trips.map(t=>t.id)};
+    const train={id:1,vehicle,block:0,tasks}as Train;
+    return {sim:{t:0,topo:{depots:[],berths:[{station:0}]},plan:{blocks:[block],trips},blockDone:new Set(),vehicles:new Map([[vehicle,record]]),trainList:[train]}as unknown as Simulator,record};
+  }
+  const trip=(id:number,dep:number)=>({id,block:0,from:0,to:1,dir:'DN',kind:'empty',no:`test-${id}`,revenue:false,
+    stops:[{st:0,arr:dep,dep,stop:false},{st:1,arr:dep+500,dep:dep+500,stop:true}]}as import('../src/sim/model').Trip);
+
+  it('wakes for a dep=null positioning trip before its later passenger departure',async()=>{
+    const {utoFleetTick}=await import('../src/sim/uto');const {OPERATIONS}=await import('../src/data/current');
+    const first=trip(0,10000),next=trip(1,12000),{sim,record}=world([stop(0,1,null,true),stop(1,1,12000)],[first,next]);
+    sim.t=10000-OPERATIONS.uto!.wakeLeadS-1;utoFleetTick(sim);expect(record.uto.stage).toBe('sleep');
+    sim.t++;utoFleetTick(sim);expect(record.uto.stage).toBe('power');expect(record.uto.until).toBe(sim.t+OPERATIONS.uto!.powerS);
+    for(const seconds of [OPERATIONS.uto!.powerS,OPERATIONS.uto!.pantographS,OPERATIONS.uto!.selfTestS]){sim.t+=seconds;utoFleetTick(sim);}
+    expect(record.uto.stage).toBe('ready');expect(sim.t).toBeLessThan(first.stops[0].dep);
+  });
+  it.each(['completed','cancelled','consumed']as const)('ignores an earlier %s trip when the assigned block still has a future first motion',async(reason)=>{
+    const {utoFleetTick}=await import('../src/sim/uto');const {OPERATIONS}=await import('../src/data/current');
+    const old=trip(0,1000),first=trip(1,20000),next=trip(2,23000);
+    if(reason==='completed')old.completed=true;if(reason==='cancelled')old.cancelled=true;
+    const tasks=[...(reason==='consumed'?[]:[stop(0,1,null,true)]),stop(1,1,null,true),stop(2,1,23000)];
+    const {sim,record}=world(tasks,[old,first,next]);
+    sim.t=20000-OPERATIONS.uto!.wakeLeadS-1;utoFleetTick(sim);expect(record.uto.stage).toBe('sleep');
+    sim.t++;utoFleetTick(sim);expect(record.uto.stage).toBe('power');
+  });
+  it('does not discard an overdue unexecuted positioning trip in favour of its future service',async()=>{
+    const {utoFleetTick}=await import('../src/sim/uto');
+    const {sim,record}=world([stop(0,1,null,true),stop(1,1,40000)],[trip(0,1000),trip(1,40000)]);
+    sim.t=20000;utoFleetTick(sim);expect(record.uto.stage).toBe('power');
+  });
+  it('uses the live intermediate departure after the original trip origin has already been passed',async()=>{
+    const {utoFleetTick}=await import('../src/sim/uto');const {OPERATIONS}=await import('../src/data/current');
+    const hold=stop(0,1,20000);hold.arr=19000;
+    const {sim,record}=world([hold],[trip(0,1000)]);
+    sim.t=20000-OPERATIONS.uto!.wakeLeadS-1;utoFleetTick(sim);expect(record.uto.stage).toBe('sleep');
+    sim.t++;utoFleetTick(sim);expect(record.uto.stage).toBe('power');
+  });
+  it.each(['completed','cancelled']as const)('excludes an earlier finite departure from a %s trip while waiting at a live intermediate stop',async(reason)=>{
+    const {utoFleetTick}=await import('../src/sim/uto');const {OPERATIONS}=await import('../src/data/current');
+    const old=trip(0,1000);old[reason]=true;
+    const hold=stop(1,1,20000);hold.arr=19000;
+    const {sim,record}=world([stop(0,0,1000),hold],[old,trip(1,10000)]);
+    sim.t=20000-OPERATIONS.uto!.wakeLeadS-1;utoFleetTick(sim);expect(record.uto.stage).toBe('sleep');
+    sim.t++;utoFleetTick(sim);expect(record.uto.stage).toBe('power');
+  });
+  it.each(['completed','cancelled']as const)('stays asleep when only a %s trip still has a finite departure task',async(reason)=>{
+    const {utoFleetTick}=await import('../src/sim/uto');
+    const old=trip(0,1000);old[reason]=true;
+    const {sim,record}=world([stop(0,0,1000)],[old]);
+    sim.t=20000;utoFleetTick(sim);expect(record.uto.stage).toBe('sleep');
+  });
+  it('retains the actual task departure for an unplanned assignment without a diagram trip',async()=>{
+    const {utoFleetTick}=await import('../src/sim/uto');const {OPERATIONS}=await import('../src/data/current');
+    const {sim,record}=world([stop(-1,1,20000)],[]);
+    sim.t=20000-OPERATIONS.uto!.wakeLeadS-1;utoFleetTick(sim);expect(record.uto.stage).toBe('sleep');
+    sim.t++;utoFleetTick(sim);expect(record.uto.stage).toBe('power');
+  });
+});

@@ -121,7 +121,7 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   lastBigEastboundDep: 22.5 * 3600, lastLateEastboundDep: 22.5 * 3600,
   lastBigWestboundDep: 22.5 * 3600, lastBigWestboundArrival: (23 * 60 + 37) * 60,
   peakCoreHeadway: HEADWAYS.morning.DN / 2,
-  minTurnback: { FB: 150, GQL: 150, ZXX: 150, LTN: 150 }, // 【假设】含驶入折返线、换端、驶出
+  minTurnback: { FB: 270, GQL: 300, ZXX: 270, LTN: 150 }, // 【假设】完整作业FB252.4/GQL282.3/ZXX251.2秒加余量；含到达、入尾、换端、出尾及始发门作业
   platformTurnClear: {},
   depotReturns: [{ depot: 'FBD', dir: 'UP', station: 'FB' }, { depot: 'GQD', dir: 'DN', station: 'GQL' }],
   // 用户决定：三列正线过夜；feeder使用已有存车线泊位规则。
