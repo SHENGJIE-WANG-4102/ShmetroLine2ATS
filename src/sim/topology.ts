@@ -25,6 +25,47 @@ export { ahead } from './topologyOrder';
 export type TrackKind = 'DN' | 'UP' | 'X' | 'SID' | 'CON' | 'DEP';
 export type Dir = 1 | -1;
 
+export interface TrackPoint { link: number; off: number; dir: Dir }
+
+/** A head position and its actual, rear-to-head route history. The last
+ * incoming step may be the head's link; earlier steps must connect to it.
+ * After a cab change, supply the new head and orient this history accordingly. */
+export interface WaitingPoint extends TrackPoint { incoming?: readonly RouteStep[] }
+
+/** Geometry of the immediately following movement, without tasks or clocks.
+ * destination is a berth ID; path starts at the supplied head, in travel order.
+ * protectedLinks excludes a resource and its exit geometry from an approach
+ * waiting point. Callers add their existing clearance margin to length. */
+export interface WaitingStage {
+  destination?: number;
+  path?: readonly { link: number; from: number; to: number }[];
+  afterTurn?: boolean;
+  protectedLinks?: ReadonlySet<number>;
+}
+
+/** Compare positions along an explicitly oriented path, including a path
+ * after a cab change. The caller must supply that phase's direction. */
+export function pointAhead(point: TrackPoint, from: number, to: number): boolean {
+  return (to - from) * point.dir > 0;
+}
+
+/** Head after changing ends, walking the incoming path for a consist which
+ * spans several links (including a rescue formation). Never clip its length. */
+export function reversedBerthPoint(topo: Topology, berth: number, length: number, incoming: RouteStep[] = []): TrackPoint | undefined {
+  const b = topo.berths[berth];
+  let link = b.link, dir = b.dir, off = b.offset, remaining = length;
+  let i = incoming.length - 1;
+  while (i >= 0 && incoming[i].link !== link) i--;
+  for (;;) {
+    const available = dir === 1 ? off : topo.links[link].len - off;
+    if (remaining <= available) return { link, off: off - dir * remaining, dir: -dir as Dir };
+    remaining -= available;
+    if (--i < 0) return undefined;
+    ({ link, dir } = incoming[i]);
+    off = dir === 1 ? topo.links[link].len : 0;
+  }
+}
+
 export interface NodePos { row: number; x: number; y: number }
 
 export interface TNode {
@@ -220,6 +261,115 @@ export interface Topology {
   layout: LayoutGeom;
   chainToX: (chain: number, row: number) => number;
   chainRow: (chain: number) => number;
+}
+
+const waitingResources = new WeakMap<Topology, { shared: ReadonlySet<number>; all: ReadonlySet<number> }>();
+
+function waitingResourceLinks(topo: Topology) {
+  let cached = waitingResources.get(topo);
+  if (!cached) {
+    const shared = new Set<number>();
+    for (const depot of topo.depots) for (const path of depot.transferPaths) if (path.flow === 'shared') {
+      if (path.stub >= 0) shared.add(path.stub);
+      for (const link of path.links) shared.add(link);
+    }
+    const all = new Set(shared);
+    for (const berth of topo.berths) if (berth.kind === 'tail' || berth.kind === 'siding') all.add(berth.link);
+    waitingResources.set(topo, cached = { shared, all });
+  }
+  return cached;
+}
+
+/** Static physical resources for this immutable topology. Clone before adding
+ * movement-specific platforms or hazards; never mutate this shared inventory. */
+export function topologyResourceLinks(topo: Topology): ReadonlySet<number> {
+  return waitingResourceLinks(topo).all;
+}
+
+/** Includes the shared transfer path's stub as well as its through links. */
+export function sharedTransferLink(topo: Topology, link: number): boolean {
+  return waitingResourceLinks(topo).shared.has(link);
+}
+
+/** One geometric waiting-point rule for runtime admission and plan validation.
+ *
+ * The whole length must fit along the head and its supplied, connected incoming
+ * path. Missing history never shortens a consist. Independent tail/siding
+ * parking links may hold it; ordinary plain/platform track must carry it in
+ * the normal direction, clear of switches, shared transfers and protectedLinks.
+ *
+ * A platform after changing ends is considered first, before ordinary platform
+ * safety: its next destination must not be another resource, and the real next
+ * path must take the whole consist onto normal main line before entering
+ * another physical parking/shared resource. Unberthed siding connectors are
+ * throat geometry, not independent parking places or another resource.
+ * Without that next-stage proof the platform is not a safe boundary
+ * (including a platform-to-depot cab change).
+ * No timetable, signal state, driving level or train-specific state is read. */
+export function safeWaitingPoint(topo: Topology, at: number | WaitingPoint, length: number, next: WaitingStage = {}): boolean {
+  const berth = typeof at === 'number' ? topo.berths[at] : undefined;
+  if (typeof at === 'number' && !berth) return false;
+  const point: WaitingPoint = berth ? { link: berth.link, off: berth.offset, dir: berth.dir } : at as WaitingPoint;
+  if (!Number.isFinite(length) || length <= 0 || point.dir !== 1 && point.dir !== -1) return false;
+  const headLink = topo.links[point.link];
+  if (!headLink || !Number.isFinite(point.off) || point.off < 0 || point.off > headLink.len) return false;
+  const incoming = point.incoming ?? [], body: { link: TLink; dir: Dir }[] = [];
+  let link = headLink, off = point.off, dir = point.dir, remaining = length, index = incoming.length - 1;
+  if (incoming[index]?.link === link.id) {
+    if (incoming[index].dir !== dir) return false;
+    index--;
+  }
+  for (;;) {
+    const available = dir === 1 ? off : link.len - off;
+    if (available > 0) {
+      // Approach hazards take precedence over every kind of safe location.
+      if (next.protectedLinks?.has(link.id)) return false;
+      body.push({ link, dir });
+      remaining -= available;
+      if (remaining <= 0) break;
+    }
+    const previous = incoming[index--], previousLink = previous && topo.links[previous.link];
+    if (!previousLink || previous.dir !== 1 && previous.dir !== -1
+      || (previous.dir === 1 ? previousLink.b : previousLink.a) !== (dir === 1 ? link.a : link.b)) return false;
+    link = previousLink; dir = previous.dir; off = dir === 1 ? link.len : 0;
+  }
+  if (body.some(part => sharedTransferLink(topo, part.link.id))) return false;
+  const kind = (part: { link: TLink }) => topo.sections[part.link.section]?.kind;
+  const resources = topologyResourceLinks(topo);
+  if (body.every(part => resources.has(part.link.id) && (kind(part) === 'tail' || kind(part) === 'siding'))) return true;
+
+  const ordinary = (current: TLink, direction: Dir) => {
+    const section = topo.sections[current.section];
+    return (section?.kind === 'plain' || section?.kind === 'platform') && current.normalDir === direction;
+  };
+  if (next.afterTurn) {
+    const platform = headLink.platform, destination = next.destination === undefined ? undefined : topo.berths[next.destination];
+    if (platform < 0 || !body.every(part => kind(part) === 'platform' && part.link.platform === platform)
+      || !destination || destination.kind !== 'platform' || destination.reverse
+      || resources.has(destination.link) || !next.path?.length) return false;
+    let cursor: TrackPoint = point, clear = 0;
+    for (const step of next.path) {
+      const current = topo.links[step.link];
+      if (!current || !Number.isFinite(step.from) || !Number.isFinite(step.to)
+        || step.from < 0 || step.to < 0 || step.from > current.len || step.to > current.len) return false;
+      if (step.from === step.to) continue;
+      const direction: Dir = step.to > step.from ? 1 : -1;
+      if (current.id === cursor.link) {
+        if (step.from !== cursor.off || direction !== cursor.dir) return false;
+      } else {
+        const previous = topo.links[cursor.link];
+        if (cursor.off !== (cursor.dir === 1 ? previous.len : 0)
+          || step.from !== (direction === 1 ? 0 : current.len)
+          || (cursor.dir === 1 ? previous.b : previous.a) !== (direction === 1 ? current.a : current.b)) return false;
+      }
+      if (next.protectedLinks?.has(current.id) || current.platform !== platform && resources.has(current.id)) return false;
+      clear = current.platform !== platform && ordinary(current, direction) ? clear + Math.abs(step.to - step.from) : 0;
+      if (clear >= length) return true;
+      cursor = { link: current.id, off: step.to, dir: direction };
+    }
+    return false;
+  }
+  return body.every(part => ordinary(part.link, part.dir));
 }
 
 /** Design-space geometry (3840 × 2160 reference). */

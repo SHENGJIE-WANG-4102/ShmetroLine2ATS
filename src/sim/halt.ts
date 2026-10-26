@@ -78,6 +78,18 @@ export const HALT: Record<HaltCode, HaltInfo> = {
   STOP_POINT: { label: '停车点', exempt: false },
 };
 
+/** Each option is an alternative movement; its blockers are required conditions.
+ * Only the cause actually limiting that option in the current allocation is
+ * recorded. A later blocker is not inferred before that cause clears. */
+export interface WaitAlternative {
+  entrySignal?: number;
+  choices: { index: number; berth: number }[];
+  blockers: { code: HaltCode; train: number; detail: string }[];
+}
+
+export const copyWaitAlternatives = (alternatives: WaitAlternative[] | undefined): WaitAlternative[] | undefined =>
+  alternatives?.map(a => ({ ...a, choices: a.choices.map(c => ({ ...c })), blockers: a.blockers.map(b => ({ ...b })) }));
+
 export interface Halt {
   code: HaltCode;
   /** blocking train (wait-for edge), -1 none */
@@ -92,6 +104,8 @@ export interface Halt {
   logged: boolean;
   /** since when the train's own code is non-exempt (0 while exempt): the liveness clock */
   unplannedSince: number;
+  /** Current whole-movement alternatives, not additional mandatory wait edges. */
+  alternatives?: WaitAlternative[];
 }
 
 export function newHalt(): Halt {
@@ -99,10 +113,44 @@ export function newHalt(): Halt {
 }
 
 /** ATS route-setting state of a train (written by runARS each second) */
-export interface ArsWait { code: HaltCode; train: number; signal: number; t: number; detail: string }
+export interface ArsWait {
+  code: HaltCode; train: number;
+  /** Actual signal/device at which the whole movement is blocked. */
+  signal: number;
+  /** Entrance at which this whole-movement explanation was obtained. */
+  entrySignal?: number;
+  t: number; detail: string;
+  alternatives?: WaitAlternative[];
+}
+
+function freshArsWait(sim: Sim, tr: Train): ArsWait | undefined {
+  const wait = tr.arsWait;
+  if (!wait || sim.t - wait.t < 0 || sim.t - wait.t > 2.5) return;
+  return tr.nextSignal < 0 || (wait.entrySignal ?? wait.signal) === tr.nextSignal ? wait : undefined;
+}
+
+/** The same authority explanation applies to automatic and manual driving. */
+function authorityHalt(sim: Sim, tr: Train): { code: HaltCode; train: number; detail: string; alternatives?: WaitAlternative[] } {
+  let code = tr.maCode, train = tr.maTrain, detail = tr.maReason;
+  let alternatives: WaitAlternative[] | undefined;
+  const wait = freshArsWait(sim, tr);
+  if (code === 'ROUTE_WAIT' || code === 'ROUTE_MISMATCH') {
+    if (wait) {
+      code = wait.code;
+      train = wait.train;
+      detail = wait.detail || detail;
+      alternatives = wait.alternatives;
+    } else if (tr.nextSignal >= 0 && !sim.sig[tr.nextSignal].ars) code = 'ARS_OFF';
+  }
+  // Keep a direct physical MA cause authoritative. If the same current
+  // admission cause explains it, retain its other movement options too.
+  if (!alternatives && wait?.code === code && wait.train === train) alternatives = wait.alternatives;
+  if (code === 'NONE') code = tr.maDist < 40 ? 'ROUTE_WAIT' : 'NONE';
+  return { code, train, detail, alternatives };
+}
 
 /** current halt code of a train from its own state (no graph propagation) */
-export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; detail: string; plannedUntil: number } {
+export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; detail: string; plannedUntil: number; alternatives?: WaitAlternative[] } {
   const r = (code: HaltCode, train = -1, detail = '', plannedUntil = 0) => ({ code, train, detail, plannedUntil });
   if (tr.phase === 'stabled') return r('STABLED');
   if (tr.failed) return r('FAILED');
@@ -122,8 +170,8 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
     const planned = tr.dwellUntil;
     if (sim.t < tr.dwellUntil) return r(st && st.arr === null && st.dep !== null && sim.t < st.dep - 30 ? 'LAYOVER' : 'DWELL', -1, '', planned);
 
-    const wait = tr.arsWait;
-    if (wait && sim.t - wait.t <= 2.5) return r(wait.code, wait.train, wait.detail, planned);
+    const wait = freshArsWait(sim, tr);
+    if (wait) return { ...r(wait.code, wait.train, wait.detail, planned), alternatives: wait.alternatives };
     if (tr.doorsAwait || tr.manual) return r('MANUAL', -1, '等待司机关门发车', planned);
     return r('ROUTE_WAIT', tr.maTrain, tr.maReason || '停站已结束，等待发车条件', planned);
   }
@@ -144,7 +192,7 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (tr.manual) {
     const hold = manualTractionHold(sim, tr);
     if (hold) return r('MANUAL', -1, hold);
-    if (tr.maDist <= 1 && tr.maCode !== 'NONE') return r(tr.maCode, tr.maTrain, tr.maReason);
+    if (tr.maDist <= 1 && tr.maCode !== 'NONE') return { ...authorityHalt(sim, tr), plannedUntil: 0 };
     return r('MANUAL', -1, tr.notch <= 0 ? '等待司机加牵引' : '司机牵引起步');
   }
   if (!tr.tasks.length) return r('NO_TASK');
@@ -153,24 +201,11 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (Number.isFinite(tr.stopDist) && tr.stopDist <= tr.maDist
     && (tr.maCode === 'ROUTE_WAIT' || tr.maDist > 40 && tr.stopDist < 1.5))
     return r('STOP_POINT', -1, `停车点前 ${tr.stopDist.toFixed(1)} m，授权足够`, plannedUntil);
-  let code = tr.maCode;
-  let train = tr.maTrain;
-  let detail = tr.maReason;
-  if (code === 'ROUTE_WAIT' || code === 'ROUTE_MISMATCH') {
-    const w = tr.arsWait;
-    // the ATS explanation applies when it concerns the signal we stand at
-    if (w && sim.t - w.t <= 2.5 && (w.signal === tr.nextSignal || tr.nextSignal < 0)) {
-      code = w.code;
-      train = w.train;
-      detail = w.detail || detail;
-    } else if (tr.nextSignal >= 0 && !sim.sig[tr.nextSignal].ars) code = 'ARS_OFF';
-  }
-  if (code === 'NONE') code = tr.maDist < 40 ? 'ROUTE_WAIT' : 'NONE';
-  return r(code, train, detail, plannedUntil);
+  return { ...authorityHalt(sim, tr), plannedUntil };
 }
 
 /** follow wait-for edges to the root cause; returns the root and whether a cycle was met */
-export function rootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; cycle: number[] | null } {
+function selectedRootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; cycle: number[] | null } {
   const seen: number[] = [];
   let cur = tr;
   for (let i = 0; i < 80; i++) {
@@ -186,6 +221,88 @@ export function rootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; c
     cur = nx;
   }
   return { root: cur, code: cur.halt.code, cycle: null };
+}
+
+/** Read the stored halt evidence only. An OR movement is closed only when
+ * every option still requires a member of a closed dependency set. Peeling
+ * off completing options avoids treating a selected edge as the only exit. */
+export function rootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; cycle: number[] | null; alternatives?: boolean } {
+  const selected = selectedRootCause(sim, tr);
+  if (!selected.cycle) return selected;
+  type Blocker = WaitAlternative['blockers'][number];
+  const nodes = new Map<number, { train: Train; options: Blocker[][] }>();
+  const pending = [tr];
+  let hasAlternatives = false;
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (nodes.has(current.id)) continue;
+    const h = current.halt;
+    const options = h.code === 'NONE' ? [] : h.alternatives?.length
+      ? h.alternatives.map(a => a.blockers)
+      : h.train >= 0 ? [[{ train: h.train, code: h.code, detail: h.detail }]] : [];
+    hasAlternatives ||= !!h.alternatives?.length;
+    nodes.set(current.id, { train: current, options });
+    for (const option of options) for (const blocker of option) {
+      const next = sim.trains.get(blocker.train);
+      if (next && !nodes.has(next.id)) pending.push(next);
+    }
+  }
+  if (!hasAlternatives) return selected;
+  const closed = new Set(nodes.keys());
+  // Remember the actual exit that removed each node. Its dependencies have
+  // already left the closed set, so following this witness cannot loop.
+  const exits = new Map<number, Blocker[]>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const id of closed) {
+      const options = nodes.get(id)!.options;
+      const exit = options.find(option => option.every(b => !closed.has(b.train)));
+      if (!options.length || exit) {
+        closed.delete(id); exits.set(id, exit ?? []); changed = true;
+      }
+    }
+  }
+  if (closed.has(tr.id)) {
+    // Only closed sink components are the circular roots. Queued ancestors
+    // can join or leave without changing the root's identity or its clock.
+    // Keep every sink: different options can lead to distinct true cycles.
+    const edges = (id: number) => [...new Set(nodes.get(id)!.options.flatMap(option => option
+      .filter(b => closed.has(b.train)).map(b => b.train)))];
+    let index = 0;
+    const indices = new Map<number, number>(), low = new Map<number, number>();
+    const stack: number[] = [], active = new Set<number>(), components: number[][] = [];
+    const visit = (id: number) => {
+      indices.set(id, index); low.set(id, index++); stack.push(id); active.add(id);
+      for (const next of edges(id)) {
+        if (!indices.has(next)) { visit(next); low.set(id, Math.min(low.get(id)!, low.get(next)!)); }
+        else if (active.has(next)) low.set(id, Math.min(low.get(id)!, indices.get(next)!));
+      }
+      if (low.get(id) !== indices.get(id)) return;
+      const component: number[] = [];
+      let next: number;
+      do { next = stack.pop()!; active.delete(next); component.push(next); } while (next !== id);
+      components.push(component);
+    };
+    for (const id of closed) if (!indices.has(id)) visit(id);
+    const membership = new Map<number, number>();
+    components.forEach((component, i) => component.forEach(id => membership.set(id, i)));
+    const cycle = components.filter((component, i) => component.every(id => edges(id)
+      .every(next => membership.get(next) === i))).flat().sort((a, b) => a - b);
+    const root = nodes.get(cycle[0])!.train;
+    return { root, code: root.halt.code, cycle, alternatives: true };
+  }
+  let current = tr;
+  for (;;) {
+    const blockers = exits.get(current.id) ?? [];
+    if (!blockers.length) return { root: current, code: current.halt.code, cycle: null };
+    // Today's admission stores one actual controlling cause per option.
+    // Prefer a non-train condition if a future producer supplies several.
+    const blocker = blockers.find(b => !nodes.has(b.train)) ?? blockers[0];
+    const next = nodes.get(blocker.train)?.train;
+    if (!next) return { root: current, code: blocker.code, cycle: null };
+    current = next;
+  }
 }
 
 const hhmm = (t: number) => {
@@ -212,6 +329,7 @@ export function updateHalts(sim: Sim) {
     n.train = c.train;
     n.detail = c.detail;
     n.plannedUntil = c.plannedUntil;
+    n.alternatives = c.alternatives;
     if (HALT[c.code].exempt) n.unplannedSince = 0;
     else if (!n.unplannedSince) n.unplannedSince = sim.t;
   }

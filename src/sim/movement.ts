@@ -18,7 +18,8 @@ import { applyEB } from './onboard';
 import { psdSafe } from './psd';
 import type { EbCause } from './model';
 import { OPERATIONS } from '../data/current';
-import { SIGNAL_MARGIN, canAcceptRestriction } from './protection';
+import { SIGNAL_MARGIN, canStopBeforeSignal, restrictionDistanceAt } from './protection';
+import { resourceAuthorityBlocker } from './resourceArbitration';
 
 /** speed limits / platform stops further than this do not influence the braking curves */
 const LOOKAHEAD = 1400;
@@ -309,6 +310,16 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
         // a committed train keeps the authority of a route cancelled in front of it
         if (!ok && ar.committed === tr.id && ar.state === 'locked' && !consumed && swOk) ok = true;
         if (atp && tr.level === 'TBTC' && ar.directionReverse) ok = false;
+        if (ok) {
+          const hold = resourceAuthorityBlocker(sim, tr, sg.route);
+          // Existing authority which can no longer accept a restrictive
+          // supervision curve remains valid; a denied new entry cannot acquire it.
+          if (hold && (!tr.maSigs.includes(sigId) || canStopBeforeSignal(sim, tr, sigId, 'supervision'))) {
+            obstacle(res, d - SIGNAL_MARGIN, hold.detail, hold.code, false, hold.train);
+            ok = false;
+            if (!onSight) break;
+          }
+        }
         if (ok && atp) sigPass.push(sigId, d);
       } else if (!atp && tr.rmSig === sigId && tr.rmAuth > d && !topo.signals[sigId].routes.some((r) => topo.routes[r].switches.length > 0)) {
         ok = true; // authorised (for this one signal) to pass it at danger on plain line
@@ -774,7 +785,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   const prof = profileOf(sim.topo);
   const sense = chainSense(sim.topo, tr.link, tr.dir);
   const head = linkChain(sim.topo, tr.link, tr.off);
-  const aG = gradeAccelAt(prof, head, sense);
+  const aG = gradeAccelAt(prof, head, sense, tr.len);
   const h0 = heightAt(prof, head);
   const rise = (d: number) => sense ? heightAt(prof, head + sense * d) - h0 : 0;
   // wet rail (adhesion.ts); in low-adhesion mode ATO brakes earlier and softer on the exposed section
@@ -865,16 +876,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   tr.tgtD = tgtD;
   tr.tgtReason = tgtReason;
 
-  // ATP supervision
-  if (!tr.eb) {
-    const atp = tr.mode !== 'RM';
-    if (atp && tr.level === 'CBTC' && !tr.comm && tr.v > 0.1) triggerEB(sim, tr, '车地通信中断，MA失效', 'comm');
-    else if (atp && tr.level === 'CBTC' && sim.zoneState[sim.topo.links[tr.link].zone] === 'ZCFAIL' && tr.v > 0.1) triggerEB(sim, tr, 'ZC故障，MA失效', 'zc');
-    else if (tr.v > tr.vEbi + 0.15) {
-      triggerEB(sim, tr, atp ? (scan.maDist < 30 ? `MA终点防护(${scan.maReason})` : '超速防护') : 'RM超速', atp ? (scan.maDist < 30 ? 'atp' : 'overspeed') : 'rm');
-      if (tr.manual) { tr.drv.overspeed++; sim.metrics.safety.overspeed++; }
-    }
-  }
+  superviseATP(sim, tr, scan);
 
   // `a` is the effort of the motors and brakes; the train accelerates at a + aG.
   // The driver's notch is an effort; ATO asks for an acceleration and works
@@ -951,16 +953,12 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   // Distinguish the new restrictive braking target from the authority already
   // issued. Do not replace an issued EOA with an unreachable one under a train.
   const prevEoa = tr.lastMa - tr.lastDs;
-  if (!rm && tr.v > .01 && !tr.maCut && Number.isFinite(prevEoa) && scan.maDist < prevEoa - 0.5 && !canAcceptRestriction(v0, scan.maDist)) {
-    tr.maCut = true;
-    if (!tr.eb) triggerEB(sim, tr, `移动授权回撤(${scan.maReason})`, 'atp');
-    sim.log('B', '信号', `列车 ${tr.svc}-${tr.tripNo} 移动授权被回撤（${scan.maReason}），紧急制动`, { key: `macut-${tr.id}`, code: scan.maCode, train: tr.id });
-  }
+  protectAuthorityReduction(sim, tr, scan, prevEoa, v0);
   // Accept the restrictive replacement in this braking step as soon as the
   // train reaches standstill, rather than retaining a released route for
   // one more step until the next call's standstill check.
   if (tr.maCut && tr.v <= .01) tr.maCut = false;
-  const issued = !rm && tr.maCut && tr.eb ? Math.max(0, prevEoa) : scan.maDist;
+  const issued = retainedAuthority(sim, tr, scan, prevEoa, v0);
   if (!rm && tr.maCut && tr.eb) tr.maDist = issued;
   tr.lastDs = ds;
   tr.lastMa = tr.manual && rm ? Infinity : issued;
@@ -1001,7 +999,38 @@ function trackApproach(tr: Train) {
   else if (d.braking && tr.notch >= 0 && tr.v > 0.3) { d.releases++; d.braking = false; }
 }
 
-/** a route the MA relied on was released: recompute the train's authority now */
+/** The same ATP checks apply during motion and an event-time MA refresh. */
+function superviseATP(sim: Sim, tr: Train, scan: ScanResult) {
+  if (!tr.eb) {
+    const atp = tr.mode !== 'RM';
+    if (atp && tr.level === 'CBTC' && !tr.comm && tr.v > 0.1) triggerEB(sim, tr, '车地通信中断，MA失效', 'comm');
+    else if (atp && tr.level === 'CBTC' && sim.zoneState[sim.topo.links[tr.link].zone] === 'ZCFAIL' && tr.v > 0.1) triggerEB(sim, tr, 'ZC故障，MA失效', 'zc');
+    else if (tr.v > tr.vEbi + 0.15) {
+      triggerEB(sim, tr, atp ? (scan.maDist < 30 ? `MA终点防护(${scan.maReason})` : '超速防护') : 'RM超速', atp ? (scan.maDist < 30 ? 'atp' : 'overspeed') : 'rm');
+      if (tr.manual) { tr.drv.overspeed++; sim.metrics.safety.overspeed++; }
+    }
+  }
+}
+
+/** Keep the already issued EOA while braking for an unreachable replacement. */
+function protectAuthorityReduction(sim: Sim, tr: Train, scan: ScanResult, previous: number, speed: number) {
+  if (tr.mode !== 'RM' && tr.v > .01 && !tr.maCut && Number.isFinite(previous) && scan.maDist < previous - 0.5
+    && scan.maDist < restrictionDistanceAt(sim.topo, tr, speed, 'emergency')) {
+    tr.maCut = true;
+    if (!tr.eb) triggerEB(sim, tr, `移动授权回撤(${scan.maReason})`, 'atp');
+    sim.log('B', '信号', `列车 ${tr.svc}-${tr.tripNo} 移动授权被回撤（${scan.maReason}），紧急制动`, { key: `macut-${tr.id}`, code: scan.maCode, train: tr.id });
+  }
+}
+
+/** An unreachable target needs only the braking prefix of the old EOA.
+ * Retaining a stoppable far signal would contradict the interlocking's same
+ * guaranteed-emergency-brake boundary for safely releasing that route. */
+function retainedAuthority(sim: Sim, tr: Train, scan: ScanResult, previous: number, speed: number): number {
+  if (tr.mode === 'RM' || !tr.maCut || !tr.eb || !Number.isFinite(previous)) return scan.maDist;
+  return Math.min(Math.max(0, previous), Math.max(scan.maDist, restrictionDistanceAt(sim.topo, tr, speed, 'emergency')));
+}
+
+/** a route the MA relied on was released: recompute and supervise it now */
 export function withdrawAuthority(sim: Sim, tr: Train) {
   const s = scanAhead(sim, tr, goalBerth(tr));
   tr.maFar = s.maDist;
@@ -1014,8 +1043,15 @@ export function withdrawAuthority(sim: Sim, tr: Train) {
   // limit of the previous position/mode until the next motion calculation.
   tr.vPermit = tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist,0,PERF.bPermit)));
   tr.vEbi = (tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist,0,PERF.bEbGuaranteed)))) + PERF.atpTolerance;
-  if (s.maDist < tr.maDist) {
-    tr.maDist = s.maDist;
+  superviseATP(sim, tr, s);
+  protectAuthorityReduction(sim, tr, s, tr.lastMa - tr.lastDs, tr.v);
+  const retained = tr.mode !== 'RM' && tr.maCut && tr.eb && Number.isFinite(tr.lastMa);
+  if (s.maDist < tr.maDist || retained) {
+    // maDist/lastMa retain their pre-movement coordinate; lastDs is still
+    // available to the ordinary safety checks and the next braking step.
+    tr.maDist = retained
+      ? Math.min(tr.lastMa, retainedAuthority(sim, tr, s, tr.lastMa - tr.lastDs, tr.v) + tr.lastDs)
+      : s.maDist;
     tr.maReason = s.maReason;
     tr.maCode = s.maCode;
     tr.maTrain = s.maTrain;
