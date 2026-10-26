@@ -11,7 +11,7 @@ import type { Sim } from './engine';
 import { cancelTrip, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import type { Dir, Topology } from './topology';
 import { nextLink, travelDirection, ahead } from './topology';
-import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, type CmdResult } from './interlocking';
+import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, signalPassed, type CmdResult } from './interlocking';
 import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission } from './movement';
 import { takeVehicle, putVehicle, peekVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
@@ -23,13 +23,13 @@ import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } 
 import { dmiNote } from './dmi';
 import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRange } from './calibration';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
-import { newHalt, type ArsWait, type HaltCode } from './halt';
+import { newHalt, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
 import { standsAt } from './operatingDay';
 import { standbyTakeover, predictedLateness } from './standby';
 import { recordTransition } from './invariants';
 import { TURNBACK } from './fsm';
 import { canStopBeforeSignal } from './protection';
-import { arbitrateResources, resourceAllocation, routeResourceBlocker, adoptSpawnResources, resourceRouteReserved, resourceWaitDetail, sourceReadyAt } from './resourceArbitration';
+import { arbitrateResources, resourceAllocation, routeResourceBlocker, adoptSpawnResources, resourceRouteReserved, resourceWaitDetail, sourceReadyAt, routeNeedsResourceProtection, resourceAdmissionBlocked } from './resourceArbitration';
 
 /** Every actual turnback stage is observed at the event, including atomic platform turns. */
 function setTurnbackStage(sim: Sim, tr: Train, next: Train['tbStage']) {
@@ -211,21 +211,44 @@ export function routeUser(sim: Sim, rid: number): number {
   return -1;
 }
 
+/** Actual body identity, independent of a route's old paper applicant. */
+export function sectionOccupant(sim: Sim, section: number, except = -1): number {
+  for (const link of sim.topo.sections[section].links) {
+    const body = sim.linkBodies.get(link)?.find(b => b.train !== except);
+    if (body) return body.train;
+  }
+  return -1;
+}
+
+export function routeOccupant(sim: Sim, rid: number, except = -1): { train: number; section: number } | undefined {
+  const active = sim.routes.get(rid);
+  for (const [index, section] of sim.topo.routes[rid].sections.entries()) {
+    if (active?.released[index]) continue;
+    const train = sectionOccupant(sim, section, except);
+    if (train >= 0) return { train, section };
+  }
+}
+
 /** what stops a route from being set: the train holding a conflicting section / switch */
 export function routeBlocker(sim: Sim, rid: number, self: number): { train: number; detail: string } {
   const { topo } = sim;
   const r = topo.routes[rid];
+  const lockedBy = (route: number, detail: string) => {
+    const occupied = routeOccupant(sim, route, self);
+    if (occupied) return { train: occupied.train,
+      detail: `${detail}，区段 ${topo.sections[occupied.section].name} 实占` };
+    const train = routeUser(sim, route);
+    if (train !== self) return { train, detail };
+  };
   for (const s of r.sections) {
     const st = sim.sec[s];
     if (st.lockRoute >= 0 && st.lockRoute !== rid) {
-      const u = routeUser(sim, st.lockRoute);
-      if (u !== self) return { train: u, detail: `区段 ${topo.sections[s].name} 被进路 ${topo.routes[st.lockRoute].name} 锁闭` };
+      const blocked = lockedBy(st.lockRoute, `区段 ${topo.sections[s].name} 被进路 ${topo.routes[st.lockRoute].name} 锁闭`);
+      if (blocked) return blocked;
     }
     if (st.trainOcc) {
-      for (const lid of topo.sections[s].links) {
-        const seg = sim.linkBodies.get(lid)?.find((x) => x.train !== self);
-        if (seg) return { train: seg.train, detail: `区段 ${topo.sections[s].name} 占用` };
-      }
+      const train = sectionOccupant(sim, s, self);
+      if (train >= 0) return { train, detail: `区段 ${topo.sections[s].name} 占用` };
     }
   }
   for (const { sw, pos } of r.switches) {
@@ -233,8 +256,8 @@ export function routeBlocker(sim: Sim, rid: number, self: number): { train: numb
     if (st.lockCount > 0 && st.pos !== pos) {
       for (const [rid2] of sim.routes) {
         if (rid2 !== rid && topo.routes[rid2].switches.some((x) => x.sw === sw)) {
-          const u = routeUser(sim, rid2);
-          if (u !== self) return { train: u, detail: `道岔 ${topo.switches[sw].name} 被进路 ${topo.routes[rid2].name} 锁闭` };
+          const blocked = lockedBy(rid2, `道岔 ${topo.switches[sw].name} 被进路 ${topo.routes[rid2].name} 锁闭`);
+          if (blocked) return blocked;
         }
       }
     }
@@ -267,8 +290,8 @@ export function routeFaultCode(sim: Sim, rid: number): HaltCode | null {
   return null;
 }
 
-function setArsWait(sim: Sim, tr: Train, code: HaltCode, train: number, signal: number, detail = '') {
-  const w: ArsWait = { code, train: train === tr.id ? -1 : train, signal, t: sim.t, detail };
+function setArsWait(sim: Sim, tr: Train, code: HaltCode, train: number, signal: number, detail = '', alternatives?: WaitAlternative[]) {
+  const w: ArsWait = { code, train: train === tr.id ? -1 : train, signal, entrySignal: tr.nextSignal, t: sim.t, detail, alternatives };
   tr.arsWait = w;
 }
 
@@ -285,6 +308,12 @@ export function cancelArsRoute(sim: Sim, tr: Train, signal: number): CmdResult &
   const refuse = (blocker: number, detail: string) => {
     return { ok: false, blocker, msg: detail };
   };
+  const occupied = routeOccupant(sim, ar.route);
+  if (occupied) {
+    const occupant = sim.trains.get(occupied.train);
+    return refuse(occupied.train,
+      `${sim.topo.signals[signal].name} 的进路由列车 ${occupant ? trainLabel(occupant) : occupied.train} 实占${sim.topo.sections[occupied.section].name}，不能取消`);
+  }
   if (other !== undefined) {
     const t = sim.trains.get(other)!;
     return refuse(other, `${sim.topo.signals[signal].name} 的进路保留给列车 ${trainLabel(t)}`);
@@ -594,6 +623,8 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
     })
     ||occupants.some(other=>other.failed||other.hold||other.phase==='run'&&other.v<.05&&!other.pendingDeparture);
   if(!blocked)return;
+  if (occupants.length >= rule.limit) return { train: occupants[0].id,
+    detail: `${sim.topo.stations[st.station].name}—${sim.topo.stations[adjacent].name} ${occupants.length}/${rule.limit}列` };
   // A converging platform cannot reserve the restricted interval before
   // the main-platform train it must follow has been allowed to depart.
   if (sim.topo.links[tr.link].track !== dir) {
@@ -601,8 +632,6 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
     if (route < 0 || !routeLeadsTo(sim, route, next.berth))
       return { train: -1, detail: '等待汇入正线的出站进路' };
   }
-  if (occupants.length >= rule.limit) return { train: occupants[0].id,
-    detail: `${sim.topo.stations[st.station].name}—${sim.topo.stations[adjacent].name} ${occupants.length}/${rule.limit}列` };
 }
 
 export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
@@ -1245,10 +1274,37 @@ interface Desire {
   dist: number; via: [number, number, number][];
 }
 
+/** Both adopted and newly set resource entrances have the same applicant lifecycle. */
+function bindAdmittedResourceRoute(sim: Sim, tr: Train, rid: number) {
+  const decision = resourceAllocation(sim).decisions.get(tr.id);
+  if (!decision?.admitted || !decision.option.phases[0]?.routes.includes(rid)
+    || !routeNeedsResourceProtection(sim, rid, decision.option)) return;
+  const ar = sim.routes.get(rid);
+  if (!ar || ar.manual || ar.guide || !ar.fleeting && ar.arsTrain !== tr.id) return;
+  const owner = routeUser(sim, rid);
+  if (owner >= 0 && owner !== tr.id) return;
+  const wasFleeting = ar.fleeting;
+  if (wasFleeting) { ar.fleeting = false; ar.defleeted = false; ar.arsTrain = tr.id; }
+  ar.resourceBound = true;
+  const route = sim.topo.routes[rid];
+  if (wasFleeting && route.steps.some(s => s.link === tr.link && s.dir === tr.dir))
+    signalPassed(sim, tr.id, route.start);
+}
+
 export function runARS(sim: Sim, prepared = false) {
   if (!prepared) arbitrateResources(sim);
   const allocation = resourceAllocation(sim);
   const { topo } = sim;
+  // A whole-movement grant belongs to one train. Consume an existing
+  // automatic entrance just like a newly set single-train route, so a
+  // following train cannot inherit its MA while this train changes ends.
+  for (const decision of allocation.decisions.values()) {
+    const tr = decision.request.train;
+    if (!decision.admitted || !tr) continue;
+    // Later phases reserve the whole movement logically; their opposite
+    // switch positions must not be physically locked before the turn.
+    for (const rid of new Set(decision.option.phases[0]?.routes ?? [])) bindAdmittedResourceRoute(sim, tr, rid);
+  }
   const desires: Desire[] = [];
   for (const tr of sim.trainList) {
     if (tr.failed || tr.phase === 'stabled' || tr.phase === 'coupling') continue;
@@ -1282,8 +1338,12 @@ export function runARS(sim: Sim, prepared = false) {
   for (const ar of [...sim.routes.values()]) {
     const applicant = sim.trains.get(ar.arsTrain ?? -1);
     const decision = applicant && allocation.decisions.get(applicant.id);
-    const denied = decision && !decision.admitted && decision.option.phases.some(p => p.routes.includes(ar.route));
-    if (applicant && !ar.entered && !ar.manual && (denied || routeResourceBlocker(sim, applicant, ar.route)))
+    const belongs = decision?.option.phases.some(p => p.routes.includes(ar.route));
+    const current = decision?.option.phases[0]?.routes.includes(ar.route);
+    const denied = decision && !decision.admitted && belongs
+      || ar.resourceBound && !current;
+    if (applicant && !ar.entered && !ar.manual
+      && (denied || resourceAdmissionBlocked(sim, applicant, ar.route) || routeResourceBlocker(sim, applicant, ar.route)))
       cancelArsRoute(sim, applicant, topo.routes[ar.route].start);
   }
   // A route requested ahead of an intermediate stop may outlive that
@@ -1302,6 +1362,7 @@ export function runARS(sim: Sim, prepared = false) {
     desiredSecs.add(sec);
     const lr = sim.sec[sec].lockRoute, ar = sim.routes.get(lr);
     if (!ar || !ar.fleeting || ar.manual || claim.option.phases.some(p => p.routes.includes(lr))) continue;
+    if (!routeNeedsResourceProtection(sim, lr, claim.option)) continue;
     const start = topo.routes[lr].start;
     if (!sim.sig[start].ars) continue;
     if (approachLocked(sim, start) || topo.routes[lr].sections.some(s => sim.sec[s].trainOcc)) { ar.fleeting = false; ar.defleeted = true; }
@@ -1313,6 +1374,12 @@ export function runARS(sim: Sim, prepared = false) {
     const first = firstAt.get(d.signal)!;
     if (first.train !== d.train) {
       setArsWait(sim, d.train, 'ROUTE_WAIT', first.train.id, d.signal, `${topo.signals[d.signal].name} 先为前行列车排列进路`);
+      continue;
+    }
+    if (resourceAdmissionBlocked(sim, d.train, d.route)) {
+      const decision = allocation.decisions.get(d.train.id);
+      setArsWait(sim, d.train, decision?.code ?? 'ROUTE_WAIT', decision?.blocker ?? -1, d.signal,
+        decision?.detail || `${topo.signals[d.signal].name} 等待本车当前整段动作准入${decision?.admitted ? '（本进路属于后续阶段）' : ''}`, decision?.alternatives);
       continue;
     }
     if (first.train === d.train && sim.sig[d.signal].route === d.route) bindRouteApproach(sim, d.route, d.train.id);
@@ -1387,7 +1454,10 @@ export function runARS(sim: Sim, prepared = false) {
       const b = routeBlocker(sim, d.route, d.train.id);
       const fault = b.train < 0 ? routeFaultCode(sim, d.route) : null;
       setArsWait(sim, d.train, fault ?? 'ROUTE_CONFLICT', b.train, d.signal, b.detail || res.msg);
-    } else d.train.arsWait = null;
+    } else {
+      bindAdmittedResourceRoute(sim, d.train, d.route);
+      d.train.arsWait = null;
+    }
   }
   // restore automatic (fleeting) routes on idle signals
   for (let i = 0; i < sim.sig.length; i++) {
@@ -1399,6 +1469,12 @@ export function runARS(sim: Sim, prepared = false) {
     if (topo.routes[fr].switches.some((x) => desiredSw.has(x.sw) && desiredSw.get(x.sw) !== x.pos)) continue;
     trySetRoute(sim, fr, { fleeting: true });
   }
+}
+
+/** The existing physical-stage ARS window, also used by resource admission. */
+export function arsReadyAt(tr: Train): number {
+  return tr.phase === 'dwell' ? tr.dwellUntil - 25
+    : tr.phase === 'reversing' ? tr.dwellUntil - 30 : -Infinity;
 }
 
 export function trainDesire(sim: Sim, tr: Train): Desire | null {
@@ -1414,7 +1490,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
     const remain = Math.max(0, tr.dwellUntil - sim.t);
     if (tr.hold || sim.plat[topo.berths[(tr.tasks[0] as StopTask).berth].platform].hold) return null;
     eta = remain + dist / 6;
-    ready = remain <= 25;
+    ready = sim.t >= arsReadyAt(tr);
   } else if (tr.phase === 'reversing') {
     goalTask = tr.tasks[1];
     const tail = tailPoint(sim, tr);
@@ -1424,7 +1500,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
     dist = ahead.dist;
     const remain = Math.max(0, tr.dwellUntil - sim.t);
     eta = remain + dist / 6;
-    ready = remain <= 30;
+    ready = sim.t >= arsReadyAt(tr);
   } else if (tr.phase !== 'run') return null;
   else if (goalTask && tr.stopDist < tr.nextSignalDist && goalTask.k !== 'depot') {
     // will stop before the next signal: nothing to do yet
@@ -1467,7 +1543,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
     if (decision && !decision.admitted && decision.option.phases.some(p => p.routes.includes(rid))) {
       const active = sim.routes.get(sg.route);
       if (active && !active.entered && !active.manual) cancelArsRoute(sim, tr, sig);
-      setArsWait(sim, tr, decision.code ?? 'ROUTE_CONFLICT', Math.max(-1, decision.blocker), sig, decision.detail);
+      setArsWait(sim, tr, decision.code ?? 'ROUTE_CONFLICT', Math.max(-1, decision.blocker), sig, decision.detail, decision.alternatives);
       return { train: tr, signal: sig, route: rid, prio: plannedTime(goalTask, sim.t), eta, ready: false, dist, via };
     }
     const resourceBlocker = routeResourceBlocker(sim, tr, rid);

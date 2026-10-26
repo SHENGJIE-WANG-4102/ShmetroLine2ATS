@@ -13,6 +13,7 @@ import { indexBodies } from './movement';
 import { initVehicles } from './yard';
 import { invalidateResourceAllocation } from './resourceArbitration';
 import { assertScope, currentScope, type LineScope } from '../data/scope';
+import { copyWaitAlternatives } from './halt';
 
 export interface Checkpoint {
   scope?: LineScope;
@@ -134,8 +135,8 @@ function cloneTrain(tr: Train): Train {
     drv: { ...tr.drv, stops: tr.drv.stops.slice() },
     dmiLog: tr.dmiLog.slice(),
     dmiPrev: tr.dmiPrev && { ...tr.dmiPrev },
-    halt: { ...tr.halt },
-    arsWait: tr.arsWait && { ...tr.arsWait },
+    halt: { ...tr.halt, alternatives: copyWaitAlternatives(tr.halt.alternatives) },
+    arsWait: tr.arsWait && { ...tr.arsWait, alternatives: copyWaitAlternatives(tr.arsWait.alternatives) },
   };
 }
 

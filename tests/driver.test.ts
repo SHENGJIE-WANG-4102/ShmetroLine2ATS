@@ -252,6 +252,10 @@ describe('driver controls and physical enable',()=>{
   }
   expect(moved).toBe(true);expect(t.phase).toBe('dwell');expect(Math.abs(t.off-b.offset)).toBeLessThanOrEqual(1);
   expect(t.drv.stops.at(-1)?.note).toBe('过标退行');expect(t.eb,t.ebReason).toBe(false);
+  // Departing with the reverser still in reverse must not reach the next station on the spot.
+  const next=t.tasks[1];t.tasks.shift();t.phase='run';t.notch=0;
+  for(let i=0;i<20;i++){s.t+=.1;updateTrainMotion(s,t,.1);indexBodies(s);updateTrainTasks(s,t,.1);}
+  expect(t.phase).toBe('run');expect(t.tasks[0]).toBe(next);expect(t.stopDist).not.toBe(0);
  });
  it('8m overrun calls dispatch and only grants driving permission, with no teleport',()=>{
   const {s,t,b}=fixture();t.phase='run';t.off=b.offset-20;computeBody(s,t);t.off=b.offset+8;computeBody(s,t);indexBodies(s);

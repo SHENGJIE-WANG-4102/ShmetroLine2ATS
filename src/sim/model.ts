@@ -476,6 +476,8 @@ export interface ActiveRoute {
   owner: number;
   /** Train for which ARS requested this route, before it passes the start signal (-1 none). */
   arsTrain?: number;
+  /** An existing automatic route bound to one whole-resource admission. */
+  resourceBound?: boolean;
   cancelAt: number; // delayed cancellation time (0 = none)
   /** train that could no longer stop before the signal when the route was cancelled: keeps its authority (-1 none) */
   committed: number;

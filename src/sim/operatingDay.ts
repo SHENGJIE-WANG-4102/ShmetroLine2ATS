@@ -10,6 +10,7 @@ import { DAY_STATE } from './state';
 import { yardCount, dayNumber } from './yard';
 import { dateLabel, dayTypeOf, isoDate, parseIso } from './calendar';
 import type { Block, Possession, SimConfig, StopTask, Task, Train, Trip } from './model';
+import { copyWaitAlternatives } from './halt';
 
 export const DAY_S = 86400;
 /** a time of the old day on the new day's clock; unset markers (0, -1, ∞) stay */
@@ -135,11 +136,18 @@ function appendDuty(sim: Sim, from: Sim, tr: Train): { trips: Map<number, number
   const own = new Set(tr.tasks.flatMap(t => t.k === 'stop' && t.trip >= 0 ? [t.trip] : []));
   const at = old.trips.indexOf(tr.tripId);
   const keep = old.trips.filter((id, i) => own.has(id) || (at >= 0 && i >= at && !from.plan.trips[id].cancelled));
-  const block = sim.plan.blocks.length, trips = new Map<number, number>();
+  // Allocate the complete map first: both ends of a retained link may be later
+  // in the duty. Links outside this carried remainder end at its boundary.
+  const block = sim.plan.blocks.length;
+  const trips = new Map(keep.map((id, index) => [id, sim.plan.trips.length + index]));
   for (const id of keep) {
-    const t: Trip = from.plan.trips[id], nid = sim.plan.trips.length;
-    trips.set(id, nid);
-    sim.plan.trips.push({ ...t, id: nid, block, stops: t.stops.map(s => ({ ...s, arr: back(s.arr), dep: back(s.dep) })) });
+    const t = from.plan.trips[id] as Trip & { prev?: number; next?: number };
+    const nid = trips.get(id)!;
+    const carried: typeof t = { ...t, id: nid, block,
+      prev: t.prev === undefined ? undefined : trips.get(t.prev),
+      next: t.next === undefined ? undefined : trips.get(t.next),
+      stops: t.stops.map(s => ({ ...s, arr: back(s.arr), dep: back(s.dep) })) };
+    sim.plan.trips.push(carried);
   }
   const b: Block = { ...old, id: block, trips: keep.map(id => trips.get(id)!), train: tr.id,
     start: old.start.kind === 'depot' ? { ...old.start, time: back(old.start.time) } : old.start,
@@ -164,8 +172,8 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     doorExchange: tr.doorExchange && { ...tr.doorExchange },
     doorMotion: tr.doorMotion && { ...tr.doorMotion, trainAt: back(tr.doorMotion.trainAt), psdAt: back(tr.doorMotion.psdAt) },
     lastTraceT: back(tr.lastTraceT), stopUntil: back(tr.stopUntil), waitSince: back(tr.waitSince),
-    halt: { ...tr.halt, since: back(tr.halt.since), plannedUntil: back(tr.halt.plannedUntil), unplannedSince: back(tr.halt.unplannedSince) },
-    arsWait: tr.arsWait && { ...tr.arsWait, t: back(tr.arsWait.t) },
+    halt: { ...tr.halt, alternatives: copyWaitAlternatives(tr.halt.alternatives), since: back(tr.halt.since), plannedUntil: back(tr.halt.plannedUntil), unplannedSince: back(tr.halt.unplannedSince) },
+    arsWait: tr.arsWait && { ...tr.arsWait, alternatives: copyWaitAlternatives(tr.arsWait.alternatives), t: back(tr.arsWait.t) },
     drv: { ...tr.drv, since: back(tr.drv.since), stops: [] },
     vfault: tr.vfault && { ...tr.vfault, until: back(tr.vfault.until) },
     tasks: tr.tasks.map(task),

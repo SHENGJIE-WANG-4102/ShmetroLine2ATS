@@ -10,13 +10,27 @@ import { profileOf, heightAt, gradeAccelAt, brakingSpeedH, type Profile } from '
 export const PERF = SIMULATION.physics.performance;
 const TRACTION = SIMULATION.physics.traction;
 
-export function tractionAccel(v: number): number {
+// The startup-selected traction curve is immutable; acceleration remains a live key.
+let tractionCached = false, tractionV = 0, tractionAMax = 0, tractionValue = 0;
+
+function uncachedTractionAccel(v: number): number {
   const last = TRACTION[TRACTION.length - 1];
   if (v >= last[0]) return PERF.aMax * last[1] * last[0] / Math.max(v, last[0]);
   let i = 1;
   while (TRACTION[i][0] < v) i++;
   const [v0, f0] = TRACTION[i - 1], [v1, f1] = TRACTION[i];
   return PERF.aMax * (f0 + (f1 - f0) * (v - v0) / (v1 - v0));
+}
+
+export function tractionAccel(v: number): number {
+  const aMax = PERF.aMax;
+  if (tractionCached && Object.is(v, tractionV) && Object.is(aMax, tractionAMax)) return tractionValue;
+  const value = uncachedTractionAccel(v);
+  tractionV = v;
+  tractionAMax = aMax;
+  tractionValue = value;
+  tractionCached = true;
+  return value;
 }
 
 /** Automatic effort only: the manual master controller retains full traction. */
