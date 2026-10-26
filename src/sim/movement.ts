@@ -667,7 +667,11 @@ export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -s
 }
 
 function manualReverse(sim: Sim, tr: Train, dt: number) {
-  const err = stopError(sim, tr), permit = reversePermission(sim, tr);
+  // Only the berth on the travelled path: stopError's fallback reads
+  // tr.stopDist, which this function writes, and a stale 0 would then mark the
+  // next station as reached while the reverser is still in reverse.
+  const goal = goalBerth(tr), err = goal >= 0 ? berthError(sim, tr, goal) : NaN;
+  const permit = reversePermission(sim, tr);
   if (!permit.ok && tr.retreat && !tr.overrun && tr.tasks[0]?.k === 'stop')
     atoOverrun(sim, tr, tr.tasks[0], Number.isFinite(err) ? err : -tr.retreat.distance, permit.detail);
   const limit = OPERATIONS.reverseKmh / 3.6;
