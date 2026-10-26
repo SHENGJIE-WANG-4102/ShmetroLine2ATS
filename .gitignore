@@ -28,3 +28,6 @@ __pycache__/
 reference/line14/field/
 # 14号线外部调研资料包，用户未同意入库
 reference/line14/research/
+
+# 用户现场原始素材（大文件，不公开）
+reference/line2/PIS10-26/
