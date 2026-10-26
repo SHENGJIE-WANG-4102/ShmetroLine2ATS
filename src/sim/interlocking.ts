@@ -66,6 +66,13 @@ export function trySetRoute(sim: Sim, rid: number, opts: { manual?: boolean; fle
   if (sg.route >= 0) {
     if (sg.route === rid) {
       const ar = sim.routes.get(rid)!;
+      if (opts.guide && !ar.guide) {
+        const committed = committedTrain(sim, r.start);
+        if (committed >= 0) {
+          const tr = sim.trains.get(committed)!;
+          return { ok: false, msg: `${sname} 列车 ${tr.svc}-${tr.tripNo}（${tr.vehicle}）已无法在信号机前安全停车，不能将既有正常进路改为引导进路` };
+        }
+      }
       if (approaching) bindRouteApproach(sim, rid, approaching.id);
       if (opts.fleeting) ar.fleeting = true;
       if (opts.guide && !ar.guide) {

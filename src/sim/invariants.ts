@@ -395,7 +395,7 @@ export function checkLiveness(sim: Sim) {
   for (const tr of sim.trainList) {
     const h = tr.halt;
     if (h.code === 'NONE') continue;
-    const { root, code, cycle } = rootCause(sim, tr);
+    const { root, code, cycle, alternatives } = rootCause(sim, tr);
     if (cycle) {
       const key = cycle.slice().sort((a, b) => a - b).join(',');
       live.add(key);
@@ -403,7 +403,8 @@ export function checkLiveness(sim: Sim) {
       g.cycles.set(key, first);
       if (sim.t - first >= DEADLOCK_LIMIT) {
         const names = cycle.map((id) => { const t = sim.trains.get(id); return t ? `${t.svc}-${t.tripNo}` : `#${id}`; });
-        violate(sim, 'DEADLOCK', cycle, `${names.join(' → ')} → ${names[0]}（${Math.round(sim.t - first)} s）`, key);
+        const detail = alternatives ? `全部可选动作阻挡闭环：${names.join('、')}` : `${names.join(' → ')} → ${names[0]}`;
+        violate(sim, 'DEADLOCK', cycle, `${detail}（${Math.round(sim.t - first)} s）`, key);
       }
       continue;
     }

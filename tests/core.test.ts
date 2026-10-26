@@ -10,7 +10,7 @@ import { trySetRoute, cancelRoute, committedTrain, bindRouteApproach, updateInte
 import { setMode, grantRM, updateOnboard, applyEB, ebCauseCleared, answerEbRelease, authoriseEBRelease } from '../src/sim/onboard';
 import { parseTime } from '../src/sim/calendar';
 import { computeBody, indexBodies, rescueRouteReady, scanAhead } from '../src/sim/movement';
-import { distanceToBerth, updateTrainTasks, rescueApproach, trainDesire, runARS, spawnDue, setTripFromTasks, intervalDepartureHold, cancelArsRoute } from '../src/sim/ats';
+import { distanceToBerth, updateTrainTasks, rescueApproach, trainDesire, runARS, spawnDue, setTripFromTasks, intervalDepartureHold, cancelArsRoute, arsReadyAt } from '../src/sim/ats';
 import { dispatcherTick } from '../src/sim/dispatcher';
 import { faultsTick } from '../src/sim/faults';
 import { updateHalts, rootCause } from '../src/sim/halt';
@@ -18,9 +18,10 @@ import { platformBerth, tripTasks, addTurnback, blockTasks, depotTasks, turnback
 import { predictedLateness, RELIEF_DELAY } from '../src/sim/standby';
 import { OPERATIONS } from '../src/data/current';
 import { arbitrateResources } from '../src/sim/resourceArbitration';
-import { MIN_DWELL, DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET } from '../src/sim/calibration';
+import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET } from '../src/sim/calibration';
 import { doorMotionTick } from '../src/sim/psd';
 import { makeSim } from './helpers';
+import { reversedBerthPoint, safeWaitingPoint } from '../src/sim/topology';
 
 const make = () => new Sim({ dayType: 'weekday', dateLabel: 'core', startTime: 14400, seed: 7, noPossessions: true });
 const advance = (sim: Sim, seconds: number) => { const end = sim.t + seconds; while (sim.t < end - 1e-6) sim.step(); };
@@ -302,7 +303,7 @@ describe('dispatcher boundary', () => {
 });
 
 describe('movement and radio regressions', () => {
-  it('holds a front turn outside the full path while an already set route contains another train', () => {
+  it('admits a front turn to its safe platform and holds its ordinary departure behind the same exit occupant', () => {
     const sim = make(); advance(sim,2); const [tr,other] = sim.trainList;
     for (const train of [...sim.trainList]) if (train !== tr && train !== other) sim.removeTrain(train);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
@@ -337,14 +338,40 @@ describe('movement and radio regressions', () => {
     Object.assign(tr,{link:approach.id,off:6.4,hist:[{link:approach.id,dir:-1}],nextSignal:home.id,nextSignalDist:6.4});
     computeBody(sim,tr);indexBodies(sim);computeOccupancy(sim);
     const allocation=arbitrateResources(sim),decision=allocation.decisions.get(tr.id);
-    expect(decision).toMatchObject({admitted:false,blocker:other.id});
-    expect(trainDesire(sim,tr)?.ready).toBe(false);
+    // User C: the arrival ends at this whole cab-change platform. The
+    // existing ordinary-exit occupant must block the later departure only.
+    expect(decision).toMatchObject({admitted:true,blocker:-1});
+    expect(decision!.option.phases).toHaveLength(1);
+    expect(decision!.option.phases[0].goal).toBe(tb.arrBerth);
+    expect(decision!.request.origin).toBeUndefined();
+    expect(trainDesire(sim,tr)?.ready).toBe(true);
     runARS(sim,true);
     const first = sim.routeTable.next.get(tb.arrBerth)![home.id];
-    expect(sim.sig[home.id].route).not.toBe(first);
-    sim.removeTrain(other);indexBodies(sim);computeOccupancy(sim);
-    let arrival = 0, departure = 0;
+    expect(sim.sig[home.id].route).toBe(first);
+    let arrival = 0, departure = 0, exitBlocked = false;
     const end = sim.t+600;
+    while (sim.t < end && !exitBlocked) {
+      sim.step();
+      const current = sim.trains.get(tr.id)!;
+      if (!arrival && current.phase==='dwell' && current.dir===-1 && current.lastStation===6) {
+        arrival=sim.t;
+        tr.tasks=tr.tasks.map(task => task.k==='stop' && task.berth===tb.depBerth ? {...task,dep:arrival+120} : task);
+      }
+      if (!arrival || current.phase!=='dwell' || current.dir!==1 || sim.t<arsReadyAt(current)) continue;
+      const exit=arbitrateResources(sim).decisions.get(tr.id)!;
+      expect(exit).toMatchObject({admitted:false,blocker:other.id});
+      const next=current.tasks[1];expect(next.k).toBe('stop');if(next.k!=='stop')throw new Error('expected ordinary exit');
+      expect(current.body.every(part=>sim.topo.links[part.link].platform===sim.topo.berths[tb.arrBerth].platform)).toBe(true);
+      expect(safeWaitingPoint(sim.topo,{link:current.link,off:current.off,dir:current.dir,incoming:current.hist},current.len,
+        {afterTurn:true,destination:next.berth,path:exit.option.phases.flatMap(phase=>phase.path)})).toBe(true);
+      expect(trainDesire(sim,current)?.ready).toBe(false);
+      runARS(sim,true);
+      expect(current.arsWait?.train).toBe(other.id);
+      expect(current.v).toBe(0);
+      exitBlocked=true;
+    }
+    expect(exitBlocked).toBe(true);
+    sim.removeTrain(other);indexBodies(sim);computeOccupancy(sim);
     while (sim.t < end && !departure) {
       sim.step();
       const current = sim.trains.get(tr.id)!;
@@ -1308,7 +1335,7 @@ describe('standby trains (D45)', () => {
 });
 
 describe('shared depot admission',()=>{
-  it.each(['BZL','CSD'])('keeps an early departure inside %s until its origin slot is ready',key=>{
+  it.each(['BZL','CSD'])('starts from %s only at source time and waits on its safe platform for the ordinary exit window',key=>{
     const sim=make();const depot=sim.topo.depots.find(d=>d.key===key)!;
     // D72's first CSD movement may use its dedicated UP exit or be an
     // empty positioning trip. Select the shared lead's scheduled origin,
@@ -1321,21 +1348,64 @@ describe('shared depot admission',()=>{
     })!;
     expect(block).toBeDefined();
     expect(block.start.kind).toBe('depot');if(block.start.kind!=='depot')return;
-    sim.plan.blocks=[block];sim.t=block.start.time;
+    sim.plan.blocks=[block];sim.t=block.start.time-1;
     const tasks=blockTasks(sim.topo,sim.plan,block),first=tasks[0];expect(first.k).toBe('stop');if(first.k!=='stop')return;
     const index=tasks.findIndex(t=>t.k==='stop'&&t.station===first.station&&t.dep!==null&&(t.arr===null||t.arr===t.dep));
     const origin=tasks[index];if(origin.k!=='stop'||origin.dep===null)throw new Error('origin');
-    const trip=sim.plan.trips[block.trips[0]],path=depot.transferPaths[depot.portals.exit[trip.dir].path];
-    const distance=distanceToBerth(sim,path.exitSignal,first.berth);
-    const preparation=tasks.slice(0,index).reduce((n,t)=>n+(t.k==='reverse'?t.minTime:t.k==='stop'?MIN_DWELL:0),0);
-    const ready=origin.dep-((15+distance)/15+30+preparation)-40;
     const initial=sim.trainList.length;
     const stock=sim.depotStock[depot.id];
-    expect(sim.t).toBeLessThan(ready);arbitrateResources(sim);spawnDue(sim);
+    expect(arbitrateResources(sim).decisions.has(-(block.id+1))).toBe(false);spawnDue(sim);
     expect(block.train).toBeUndefined();expect(sim.trainList).toHaveLength(initial);expect(sim.depotStock[depot.id]).toBe(stock);
-    sim.t=ready+1;arbitrateResources(sim);spawnDue(sim);
+    sim.t=block.start.time;
+    const admission=arbitrateResources(sim).decisions.get(-(block.id+1))!;
+    expect(admission).toMatchObject({admitted:true,blocker:-1});
+    expect(admission.option.phases).toHaveLength(1);
+    expect(admission.option.phases[0].goal).toBe(first.berth);
+    expect(first.trip).toBe(block.trips[0]);
+    expect(origin.trip).toBe(block.trips[0]);
+    expect(admission.request.origin).toMatchObject({trip:block.trips[0],berth:origin.berth,dep:origin.dep});
+    expect(sim.topo.berths[first.berth].platform).toBeGreaterThanOrEqual(0);
+    expect(sim.topo.berths[origin.berth].platform).toBe(sim.topo.berths[first.berth].platform);
+    expect(admission.option.choices).toEqual([{index:0,berth:first.berth}]);
+    expect(admission.request.readyAt).toBe(sim.t);
+    spawnDue(sim);
     expect(block.train).toBeDefined();expect(sim.depotStock[depot.id]).toBe(stock-1);
-    expect(sim.trains.get(block.train!)!.body.every(body=>sim.topo.links[body.link].track==='DEP')).toBe(true);
+    expect(sim.trainList).toHaveLength(initial+1);
+    const train=sim.trains.get(block.train!)!;
+    expect(train.body.every(body=>sim.topo.links[body.link].track==='DEP')).toBe(true);
+
+    // Derive the completed cab-change pose from that actual arrival path;
+    // do not invent an unrelated platform or shorten the consist.
+    const phase=admission.option.phases[0];
+    const incoming=phase.path.map(step=>({link:step.link,dir:(step.to>step.from?1:-1) as 1|-1}));
+    const point=reversedBerthPoint(sim.topo,first.berth,train.len,incoming)!;
+    expect(point).toBeDefined();
+    expect(point.link).toBe(sim.topo.berths[first.berth].link);
+    train.tasks=structuredClone(tasks.slice(index));
+    const departure=train.tasks[0];if(departure.k!=='stop')throw new Error('expected origin stop');
+    departure.berth=sim.topo.berths.find(b=>b.platform===sim.topo.berths[first.berth].platform&&b.dir===point.dir)!.id;
+    Object.assign(train,{...point,hist:[{link:point.link,dir:point.dir}],phase:'dwell',v:0,a:0,
+      stopBerth:departure.berth,stopArrived:true,dwellUntil:origin.dep,doorsOpen:false,doorsAwait:false,maSigs:[]});
+    computeBody(sim,train);indexBodies(sim);computeOccupancy(sim);
+    expect(train.body.every(body=>sim.topo.links[body.link].platform===sim.topo.berths[first.berth].platform)).toBe(true);
+    const next=train.tasks[1];if(next.k!=='stop')throw new Error('expected ordinary next stop');
+    const scan=scanAhead(sim,train,next.berth);train.nextSignal=scan.nextSignal;train.nextSignalDist=scan.nextSignalDist;
+    const ready=arsReadyAt(train);expect(sim.t).toBeLessThan(ready);
+    sim.t=ready-.1;
+    const waiting=arbitrateResources(sim),outgoing=waiting.decisions.get(train.id)!;
+    expect(outgoing).toMatchObject({admitted:false,code:'REGULATION'});
+    expect(outgoing.request.safeHere).toBe(true);
+    expect(outgoing.request.readyAt).toBe(ready);
+    expect([...waiting.claims.values()].some(claim=>claim.request.id===train.id)).toBe(false);
+    expect(safeWaitingPoint(sim.topo,{...point,incoming:train.hist},train.len,
+      {afterTurn:true,destination:next.berth,path:outgoing.option.phases.flatMap(p=>p.path)})).toBe(true);
+    const exitRoute=sim.routeTable.next.get(next.berth)![train.nextSignal];
+    runARS(sim,true);
+    expect(sim.sig[train.nextSignal].route).not.toBe(exitRoute);
+    expect(train.v).toBe(0);
+    sim.t=ready;
+    expect(arbitrateResources(sim).decisions.get(train.id)?.admitted).toBe(true);
+    expect(sim.depotStock[depot.id]).toBe(stock-1);expect(sim.trainList).toHaveLength(initial+1);
   });
 });
 
@@ -1710,4 +1780,104 @@ it('the applicant relinquishes an unused reservation when a physical front train
   runARS(sim);
   expect(sim.sig[signal.id].route).toBe(next);expect(sim.routes.get(next)?.arsTrain).toBe(front.id);
   expect(sim.integrity.violations).toHaveLength(0);
+});
+
+describe('whole-movement halt reason scope', () => {
+  const stoppedAtEntry = () => {
+    const sim = make(); advance(sim, 2);
+    const tr = sim.trainList[0];
+    const route = sim.topo.routes.find(r => r.start !== r.end && r.end >= 0 && sim.topo.signals[r.end].routes.length)!;
+    expect(route).toBeDefined();
+    Object.assign(tr, { phase: 'run', v: 0, eb: false, pendingMode: null, stopUntil: 0,
+      hold: false, manual: false, doorsOpen: false, doorSide: '', doorLockedAt: 0,
+      reverser: 1, retreat: null, maDist: 0, maCode: 'ROUTE_WAIT', maTrain: -1,
+      maReason: '信号/进路未开放', nextSignal: route.start, stopDist: Infinity });
+    sim.sig[route.start].ars = true;
+    return { sim, tr, entrance: route.start, downstream: route.end };
+  };
+
+  it('retains a fresh downstream device cause within the current complete-movement entrance', () => {
+    const { sim, tr, entrance, downstream } = stoppedAtEntry();
+    for (const manual of [false, true]) {
+      tr.manual = manual;
+      tr.arsWait = { code: 'AXLE_PRESET', train: -1, signal: downstream,
+        entrySignal: entrance, t: sim.t - 2.5, detail: '下游计轴预复位待压道' };
+      updateHalts(sim);
+      expect(tr.halt).toMatchObject({ code: 'AXLE_PRESET', train: -1, detail: '下游计轴预复位待压道' });
+      expect(tr.arsWait.signal).toBe(downstream);
+      expect(tr.arsWait.entrySignal).toBe(entrance);
+    }
+  });
+
+  it.each([0, 2.5])('retains the existing no-next-signal ARS explanation while it is %s seconds old', age => {
+    const { sim, tr, entrance, downstream } = stoppedAtEntry();
+    tr.nextSignal = -1;
+    for (const manual of [false, true]) {
+      tr.manual = manual;
+      tr.arsWait = { code: 'AXLE_PRESET', train: -1, signal: downstream,
+        entrySignal: entrance, t: sim.t - age, detail: '前方无信号时仍保留计轴预复位原因' };
+      updateHalts(sim);
+      expect(tr.halt).toMatchObject({ code: 'AXLE_PRESET', train: -1,
+        detail: '前方无信号时仍保留计轴预复位原因' });
+    }
+  });
+
+  it.each([-0.1, 2.6])('rejects a no-next-signal ARS explanation outside the freshness window (%s seconds old)', age => {
+    const { sim, tr, entrance } = stoppedAtEntry();
+    tr.nextSignal = -1;
+    for (const manual of [false, true]) {
+      tr.manual = manual;
+      tr.arsWait = { code: 'AXLE_PRESET', train: -1, signal: entrance, t: sim.t - age, detail: '无效时刻的设备原因' };
+      updateHalts(sim);
+      expect(tr.halt.code).toBe('ROUTE_WAIT');
+    }
+  });
+
+  it.each(['ROUTE_WAIT', 'ROUTE_MISMATCH'] as const)('merges %s into the same ARS cause during manual driving without a traction hold', code => {
+    const { sim, tr, entrance } = stoppedAtEntry();
+    tr.manual = true; tr.maCode = code;
+    tr.arsWait = { code: 'REGULATION', train: sim.trainList[1].id, signal: entrance,
+      t: sim.t, detail: '按图先发列车先进入始发站台' };
+    updateHalts(sim);
+    expect(tr.halt).toMatchObject({ code: 'REGULATION', train: sim.trainList[1].id,
+      detail: '按图先发列车先进入始发站台' });
+  });
+
+  it('keeps a real manual traction hold ahead of an otherwise applicable ARS reason', () => {
+    const { sim, tr, entrance } = stoppedAtEntry();
+    tr.manual = true; tr.doorsOpen = true;
+    tr.arsWait = { code: 'AXLE_PRESET', train: -1, signal: entrance, t: sim.t, detail: '计轴预复位' };
+    updateHalts(sim);
+    expect(tr.halt).toMatchObject({ code: 'MANUAL', train: -1, detail: '等待车门关闭' });
+  });
+
+  it.each(['expired', 'future', 'other-entrance', 'unscoped-downstream'] as const)('rejects %s ARS explanations in both driving modes', reason => {
+    const { sim, tr, entrance, downstream } = stoppedAtEntry();
+    for (const manual of [false, true]) {
+      tr.manual = manual;
+      tr.arsWait = { code: 'AXLE_PRESET', train: -1, signal: entrance, t: sim.t, detail: '无关设备' };
+      if (reason === 'expired') tr.arsWait.t = sim.t - 2.6;
+      if (reason === 'future') tr.arsWait.t = sim.t + .1;
+      if (reason === 'other-entrance') tr.arsWait.entrySignal = downstream;
+      if (reason === 'unscoped-downstream') tr.arsWait.signal = downstream;
+      updateHalts(sim);
+      expect(tr.halt.code).toBe('ROUTE_WAIT');
+    }
+  });
+
+  it('uses the same entrance and freshness guard when dwell has actually finished', () => {
+    const { sim, tr, entrance, downstream } = stoppedAtEntry();
+    const berth = sim.topo.berths.find(b => b.platform >= 0)!;
+    tr.tasks = [{ k: 'stop', berth: berth.id, station: berth.station, trip: -1,
+      arr: sim.t - 60, dep: sim.t - 1, doors: false, revenue: false }];
+    Object.assign(tr, { phase: 'dwell', dwellUntil: sim.t - 1, atoDriver: false, manual: false,
+      doorsAwait: false, mode: 'DTO', intervalWait: null });
+    tr.arsWait = { code: 'AXLE_PRESET', train: -1, signal: downstream,
+      entrySignal: entrance, t: sim.t, detail: '下游计轴预复位待压道' };
+    updateHalts(sim);
+    expect(tr.halt.code).toBe('AXLE_PRESET');
+    tr.arsWait.entrySignal = downstream;
+    updateHalts(sim);
+    expect(tr.halt.code).toBe('ROUTE_WAIT');
+  });
 });
