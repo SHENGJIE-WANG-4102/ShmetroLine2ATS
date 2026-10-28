@@ -913,9 +913,12 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   // with the same jerk-aware anticipation used for other restrictive limits.
   // The ATP permission and intervention curves below remain unchanged.
   const authorityFirst = scan.maDist < scan.stopDist - 1;
+  // The rescue obstacle already includes the coupling clearance. Applying the
+  // ordinary signal-stop margin again prevents the couplers reaching it.
+  const authorityMargin = scan.maCode === 'RESCUE' ? 0 : 1;
   vT = Math.min(vT, authorityFirst
-    ? atoLimitSpeed(scan.maDist - 1, 0, tr.v, tr.a, bPlan)
-    : brakingSpeed(scan.maDist - 1, 0, bPlan));
+    ? atoLimitSpeed(scan.maDist - authorityMargin, 0, tr.v, tr.a, bPlan)
+    : brakingSpeed(scan.maDist - authorityMargin, 0, bPlan));
   if (scan.stopDist !== Infinity) {
     // Only the ATO station-stop shape changes. Wet-rail precautions, authority
     // and ATP curves retain their independently supervised braking rates.

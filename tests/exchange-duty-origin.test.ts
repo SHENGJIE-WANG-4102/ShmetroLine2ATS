@@ -52,6 +52,9 @@ describe('online duty exchange joins the actual service call',()=>{
   block.start={kind:'depot',depot:2,time:sim.t-300};
   timely.from=28;timely.stops=timely.stops.filter(s=>s.st>=28);
   rear.tasks=blockTasks(sim.topo,sim.plan,block);
+  expect(rear.tasks[0]).toMatchObject({k:'stop',note:'出段固定作业',depotWork:{kind:'out',depot:2}});
+  // The train has completed that fixed work and is still at its cab-change stop.
+  rear.tasks.shift();
   const prefix=rear.tasks[0]as StopTask;
   expect(prefix).toMatchObject({station:28,trip:timely.id,revenue:false,note:'出段换端'});
   const berth=sim.topo.berths[prefix.berth];

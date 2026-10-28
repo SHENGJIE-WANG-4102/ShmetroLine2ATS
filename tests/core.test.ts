@@ -1059,7 +1059,8 @@ describe('withdrawal approach continuity', () => {
     // return after the turnback at 1 ends with that 回段换端 stop
     const entry=sim.topo.depots[0].portals.entry.DN;
     expect(entry).toMatchObject({station:4,reverse:true});
-    expect(stops.map(t=>t.station)).toEqual([3,1,entry.station]);
+    expect(stops.map(t=>t.station)).toEqual([3,1,entry.station,entry.station]);
+    expect(stops.at(-1)).toMatchObject({note:'入段固定作业',depotWork:{kind:'in',depot:0}});
     expect(tr.tasks.find(t=>t.k==='reverse')).toMatchObject({station:1});
     expect(tr.tasks.filter(t=>t.k==='reverse').at(-1)).toMatchObject({station:entry.station});
     const vehicle=tr.vehicle; const cleared=sim.passengersCleared;
@@ -1117,8 +1118,9 @@ describe('withdrawal approach continuity', () => {
     const entry=sim.topo.depots[0].portals.entry.DN;
     expect(entry).toMatchObject({station:4,reverse:true});
     expect(tr.tasks.some(t=>t.k==='stop'&&t.station===0)).toBe(false);
-    expect(tr.tasks.map(t=>t.k)).toEqual(['stop','reverse','depot']);
+    expect(tr.tasks.map(t=>t.k)).toEqual(['stop','reverse','stop','depot']);
     expect(tr.tasks[0]).toMatchObject({k:'stop',station:entry.station,note:'回段换端'});
+    expect(tr.tasks[2]).toMatchObject({k:'stop',note:'入段固定作业',depotWork:{kind:'in',depot:0}});
     expect(tr.tasks.at(-1)).toMatchObject({k:'depot',depot:0});
     expect(sim.integrity.violations).toHaveLength(0);
   });
@@ -1157,8 +1159,9 @@ describe('depot selection after clear-out', () => {
     expect(lyd.junctionChain).toBeGreaterThan(sim.topo.stations[19].chain);
     expect(lyd.junctionChain).toBeLessThan(sim.trainChain(tr));
     expect(lyd.portals.entry.UP).toMatchObject({station:19,reverse:true});
-    expect(tr.tasks.map(t=>t.k)).toEqual(['stop','reverse','depot']);
-    expect(tr.tasks[1]).toMatchObject({k:'reverse',station:19});
+    expect(tr.tasks.map(t=>t.k)).toEqual(['stop','stop','reverse','depot']);
+    expect(tr.tasks[1]).toMatchObject({k:'stop',station:19,note:'入段固定作业',depotWork:{kind:'in',depot:lyd.id}});
+    expect(tr.tasks[2]).toMatchObject({k:'reverse',station:19});
   });
 });
 

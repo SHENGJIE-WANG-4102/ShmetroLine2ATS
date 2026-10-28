@@ -4032,3 +4032,12 @@ C合同变化是可见动作边界的已批准变化：front-turn可先单phase�
 - 14 号线的两处车辆段都在终点站，行为不变。
 
 改动的公共文件：`src/sim/vehicle.ts`、`src/sim/model.ts`（注释）、`src/ui/side.ts`（说明文字）；新测试 `tests/vehicle-withdraw.test.ts`。
+
+
+## D151 救援连挂与固定出入段作业测试（2026-10-28）
+
+救援车接近故障车时，`scanAhead` 的 RESCUE 障碍已经留有 0.3 m 连挂净距；D145 对更近授权终点加的普通停车 1 m 余量又作用在连挂目标上，使车在距故障车约 1.06 m 处停住，无法达到原有连挂条件。`src/sim/movement.ts` 对实际 RESCUE 目标只使用既有连挂净距，不再重复施加普通信号停车余量；其他授权和 ATP 安全界限不变。
+
+D145 的固定作业是额外的实际任务：淞虹路入段换端后在转换线作业，龙阳路清客后、换端前在站台作业。3 个退出/段场测试现核对这些作业的站点、类型与段场，同时继续检查原清客、换端和回段要求。2 个车次调整测试先明确验证出段固定作业，再将现场推进到实际未完成的出段换端，以验证换车保留实体车自身未完成的路径；不改变运营规则。
+
+验证：定向 `core.test.ts` 13 项通过（含 9 项原红）；`exchange-duty-origin.test.ts` 4 项通过（含 2 项原红）；`authority-braking.test.ts`、`depot-work.test.ts`、`test-line.test.ts` 31 项通过；`tsc --noEmit` 通过。随机压测由合并任务统一负责，本项未跑。公共代码：`src/sim/movement.ts`；测试变更：`tests/core.test.ts`、`tests/exchange-duty-origin.test.ts`。无新假设。
