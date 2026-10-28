@@ -1,3 +1,4 @@
+import { formatTrainNumber } from './trainNumber';
 /** Hover tooltip for schematic objects. */
 import { h, clear } from './dom';
 import type { Store } from './store';
@@ -59,7 +60,7 @@ export class Tooltip {
     if (group && key === this.groupKey) {
       for (const button of this.el.querySelectorAll<HTMLButtonElement>('button[data-train]')) {
         const t = snap.trains.find(t=>t.id===Number(button.dataset.train));
-        if (t) button.textContent = `${t.svc}-${t.trip}　${fmtDelay(t.delay)}`;
+        if (t) button.textContent = `${formatTrainNumber(t.svc, t.trip, true)}　${fmtDelay(t.delay)}`;
       }
       return;
     }
@@ -72,13 +73,13 @@ export class Tooltip {
       if (group.pinned) this.el.append(h('button', { class: 'btn', onclick: () => this.store.showTrainGroup(null, true) }, '关闭'));
       else this.el.append(this.row('提示', '点击汇总窗口后可选择列车'));
       for (const t of trains) this.el.append(h('button', { class: 'btn group-train', 'data-train':String(t.id),
-        onclick: () => this.store.select({ kind: 'train', id: t.id }) }, `${t.svc}-${t.trip}　${fmtDelay(t.delay)}`));
+        onclick: () => this.store.select({ kind: 'train', id: t.id }) }, `${formatTrainNumber(t.svc, t.trip, true)}　${fmtDelay(t.delay)}`));
       this.el.style.maxHeight = `${Math.max(100, this.bounds.h - 80)}px`;
       this.el.style.overflowY = 'auto';
     } else if (hov?.kind === 'train') {
       const t = snap.trains.find((x) => x.id === hov.id);
       if (!t) { this.el.style.display = 'none'; return; }
-      this.el.append(h('div', { class: 'tt' }, `${t.svc}-${t.trip}  ${t.vehicle}`),
+      this.el.append(h('div', { class: 'tt' }, `${formatTrainNumber(t.svc, t.trip, true)}  ${t.vehicle}`),
         this.row('目的地', t.dest || '—'), this.row('速度', `${(t.v * 3.6).toFixed(0)} km/h`), this.row('模式/级别', `${t.mode} / ${t.level}${t.comm ? '' : ' 通信中断'}`),
         this.row('晚点', t.inService ? fmtDelay(t.delay) : '非载客'), this.row('满载率', `${Math.round((t.load / LINE_INFO.capacity) * 100)}%`), this.row('任务', t.task),
         ...(t.maReason ? [this.row('移动授权', `${t.maReason} ${Math.round(t.maDist)}m`)] : []),

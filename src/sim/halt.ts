@@ -11,10 +11,12 @@
  * following the wait-for edges to the train that is really blocking — is an
  * exempt code (planned dwell / layover, hold, fault, possession ...).
  */
+import { computerCrew, utoBusy, utoVehicleWait } from './uto';
 import type { Sim } from './engine';
 import type { Train, StopTask } from './model';
-import { atoStartReady, simulatedAmDoorWork } from './ats';
-import { manualTractionHold } from './movement';
+import { atoStartReady, depotBerth, simulatedAmDoorWork } from './ats';
+import { goalBerth, manualTractionHold, reversePermission } from './movement';
+import { swPos } from './interlocking';
 import { STATIONS } from '../data/current';
 
 export type HaltCode =
@@ -159,6 +161,9 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
     if (!sim.autoRadio && sim.t >= sim.config.startTime) return r('DISPATCHER', -1, tr.ebReason);
     return r('EB', -1, tr.ebReason);
   };
+  const vehicleWait=utoVehicleWait(sim,tr);
+  if(vehicleWait)return r('MODE_CHANGE',-1,vehicleWait);
+  if(utoBusy(tr))return r('MODE_CHANGE',-1,tr.uto!.detail,tr.uto!.until);
   if (tr.phase === 'stabled') return r('STABLED');
   if (tr.failed) return r('FAILED');
   if (tr.phase === 'coupling') return r('COUPLING');
@@ -199,6 +204,12 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (tr.stopUntil > sim.t) return r('INCIDENT', -1, tr.stopReason, tr.stopUntil);
   if (tr.hold) return r('HOLD');
   if (tr.manual) {
+    // Consent resolves the overrun call, not a real obstruction. Keep its
+    // wait-for edge visible instead of manufacturing another planned incident.
+    if (tr.retreat?.authorised && !tr.overrun) {
+      const permit = reversePermission(sim, tr);
+      if (!permit.ok) return r(permit.code, permit.train, permit.detail);
+    }
     const hold = manualTractionHold(sim, tr);
     if (hold) return r('MANUAL', -1, hold);
     if (tr.maDist <= 1 && tr.maCode !== 'NONE') return { ...authorityHalt(sim, tr), plannedUntil: 0 };
@@ -232,10 +243,60 @@ function selectedRootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; 
   return { root: cur, code: cur.halt.code, cycle: null };
 }
 
-/** Read the stored halt evidence only. An OR movement is closed only when
- * every option still requires a member of a closed dependency set. Peeling
- * off completing options avoids treating a selected edge as the only exit. */
-export function rootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; cycle: number[] | null; alternatives?: boolean } {
+const TRAFFIC_WAIT = new Set<HaltCode>(['TRAIN_AHEAD', 'ROUTE_WAIT', 'BERTH_WAIT', 'ROUTE_CONFLICT', 'INTERVAL_LIMIT']);
+
+/** Live independent conditions must not disappear behind last second's wait
+ * edges. This reads protection state only; classify would re-enter ATS. */
+function externalWait(sim: Sim, tr: Train): boolean {
+  if (!TRAFFIC_WAIT.has(tr.halt.code) || tr.failed || tr.hold || tr.eb || tr.manual && !computerCrew(tr) || tr.pendingMode
+    || tr.vfault || tr.stopUntil > sim.t || !tr.comm || !Number.isFinite(tr.v) || tr.v > .05
+    || utoBusy(tr) || utoVehicleWait(sim, tr)) return true;
+  const links = new Set(tr.body.map(b => b.link));
+  const task = tr.tasks[0];
+  if (task?.k === 'stop') {
+    if (!sim.topo.berths[task.berth]) return true;
+    links.add(sim.topo.berths[task.berth].link);
+  }
+  const signals = new Set([tr.nextSignal, tr.arsWait?.signal, tr.arsWait?.entrySignal]);
+  for (const id of signals) {
+    const signal = id === undefined ? undefined : sim.topo.signals[id];
+    if (!signal) continue;
+    const sg = sim.sig[signal.id], active = sg.route;
+    if (sg.failed || active < 0 && !sg.ars) return true;
+    // Inspect the actual arranged route, or the existing task-path lookup.
+    // A failed unused alternative is not evidence about this dependency.
+    const choices = tr.halt.alternatives?.filter(a => a.entrySignal === undefined || a.entrySignal === signal.id)
+      .flatMap(a => a.choices.map(c => c.berth)) ?? [];
+    const routes = active >= 0 ? [active] : [...new Set((choices.length ? choices
+      : [task?.k === 'depot' ? depotBerth(sim.topo, task) : goalBerth(tr)])
+      .map(berth => sim.routeTable.next.get(berth)?.[signal.id] ?? -1))];
+    for (const rid of routes) {
+      const route = sim.topo.routes[rid];
+      if (!route) return true;
+      for (const step of route.steps) links.add(step.link);
+      if (route.switches.some(x => {
+        const state = sim.sw[x.sw], detected = swPos(sim, x.sw);
+        return state.failed || state.blocked || detected === null
+          || (state.singleLock || state.fieldLock || active >= 0) && detected !== x.pos;
+      })) return true;
+    }
+  }
+  for (const id of links) {
+    const link = sim.topo.links[id];
+    if (!link) return true;
+    const sec = sim.sec[link.section], ps = sim.plat[link.platform];
+    if (sim.zoneState[link.zone] === 'ZCFAIL' || sec.blocked || sec.disturbed || sec.preset || sec.directionEsp
+      || sec.poss >= 0 || sec.envTsr < 0 || ps && (ps.hold || ps.esp || ps.psdFault && ps.psd !== 'bypass'
+        || ps.psd === 'closeFail' || ps.psdLinkFault)) return true;
+  }
+  return false;
+}
+
+/** By default read stored halt evidence; inspectExternal also checks live
+ * protection state without re-entering classify. An OR movement is closed
+ * only when every option still requires a member of a closed dependency set.
+ * Peeling completing options avoids treating a selected edge as the only exit. */
+export function rootCause(sim: Sim, tr: Train, inspectExternal = false): { root: Train; code: HaltCode; cycle: number[] | null; alternatives?: boolean; external?: boolean } {
   const selected = selectedRootCause(sim, tr);
   if (!selected.cycle) return selected;
   type Blocker = WaitAlternative['blockers'][number];
@@ -256,7 +317,7 @@ export function rootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; c
       if (next && !nodes.has(next.id)) pending.push(next);
     }
   }
-  if (!hasAlternatives) return selected;
+  if (!hasAlternatives && !inspectExternal) return selected;
   const closed = new Set(nodes.keys());
   // Remember the actual exit that removed each node. Its dependencies have
   // already left the closed set, so following this witness cannot loop.
@@ -299,7 +360,12 @@ export function rootCause(sim: Sim, tr: Train): { root: Train; code: HaltCode; c
     const cycle = components.filter((component, i) => component.every(id => edges(id)
       .every(next => membership.get(next) === i))).flat().sort((a, b) => a - b);
     const root = nodes.get(cycle[0])!.train;
-    return { root, code: root.halt.code, cycle, alternatives: true };
+    // The closed set can coexist with an independent AND condition or a
+    // fault-rooted alternative. Inspect all reached evidence, not one root.
+    const external = inspectExternal ? [...nodes.values()].some(node => externalWait(sim, node.train)
+      || node.options.some(option => !option.length || option.some(b => b.train < 0 || !nodes.has(b.train)
+        || !TRAFFIC_WAIT.has(b.code)))) : undefined;
+    return { root, code: root.halt.code, cycle, alternatives: true, ...(inspectExternal ? { external } : {}) };
   }
   let current = tr;
   for (;;) {

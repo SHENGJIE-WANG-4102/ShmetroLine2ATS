@@ -4,7 +4,7 @@
  * recording's duration.
  */
 import { SOUND_BANK, clipDuration, type SoundClip, type SoundKind } from '../data/audio/soundbank';
-import { DOOR_REFERENCE_TIMING, DOOR_TAKES } from '../data/audio/doorbank';
+import { DOOR_REFERENCE_TIMING, DOOR_SELECTION, DOOR_TAKES } from '../data/audio/doorbank';
 import { DOOR_CLOSE_S } from '../sim/calibration';
 import { RecordedSoundPlayer, VVVF_MAX_RATE, isUndergroundStation, type StationTrain, type StationSoundCommand } from './stationaudio';
 
@@ -21,14 +21,21 @@ export function doorCycleSplit(cycle = DOOR_REFERENCE_TIMING.openingS + DOOR_CLO
   return { opening, warning, motion, confirmation: Math.max(0, closing - warning - motion) };
 }
 const keyOf = (tr: StationTrain) => `${tr.id}|${tr.trip}`;
-export interface DoorEvent { kind: 'open' | 'close'; key: string; at: number }
+export interface DoorEvent { kind: 'open' | 'close'; key: string; at: number; take?: string }
+const takeOf = (c: SoundClip) => c.id.slice(c.kind.length + 1);
+// FNV-1a: the same trip at the same station always picks the same take, so a replay sounds alike.
+const pick = <T>(items: readonly T[], seed: string) => {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  return items[(h >>> 0) % items.length];
+};
 export class DoorSoundPlanner {
   private context = '';
   private time = NaN;
   private previous = new Map<string, StationTrain>();
   private pending = new Map<string, { at: number; clip: SoundClip; key: string; completeClip: boolean }>();
   private active = new Map<string, { train: string; closing: boolean; completeClip: boolean; until: number }>();
-  constructor(private bank: readonly SoundClip[] = SOUND_BANK) {}
+  constructor(private bank: readonly SoundClip[] = SOUND_BANK, private selection: 'primary' | 'random' = DOOR_SELECTION) {}
   reset(): StationSoundCommand[] {
     const commands: StationSoundCommand[] = [...this.active.keys()].map(key => ({ kind: 'stop', key }));
     this.active.clear(); this.pending.clear(); this.previous.clear(); this.context = ''; this.time = NaN;
@@ -73,10 +80,15 @@ export class DoorSoundPlanner {
       const opening = tr.doors && !tr.doorClosing && (!prev.doors || prev.doorClosing);
       if (!closing && !opening) continue;
       const kind = closing ? 'close' : 'open';
-      events.push({ kind, key, at: f.t });
-      const primary = DOOR_TAKES.find(t => t.primary)!.id;
+      // Warning and mechanism of one event come from the same take. A line
+      // without door recordings has no takes: nothing matches, the caller falls back.
+      const kinds: SoundKind[] = closing ? ['door-warn-close', 'door-motion-close'] : ['door-warn-open', 'door-motion-open'];
+      const takes = [...new Set(this.bank.filter(c => kinds.includes(c.kind) && c.confidence !== 'low').map(takeOf))];
+      const take = this.selection === 'random' ? takes.length ? pick(takes, `${tr.trip}|${tr.nextStation}|${kind}`) : undefined
+        : DOOR_TAKES.find(t => t.primary)?.id;
+      events.push({ kind, key, at: f.t, take });
       const find = (soundKind: SoundKind) => this.bank.find(c => c.kind === soundKind && c.confidence !== 'low' &&
-        (f.perspective === 'platform' ? c.source.startsWith('platform-') : c.id === `${soundKind}-${primary}`));
+        (f.perspective === 'platform' ? c.source.startsWith('platform-') : take !== undefined && c.id === `${soundKind}-${take}`));
       const warning = f.perspective === 'onboard' ? find(closing ? 'door-warn-close' : 'door-warn-open') : undefined;
       const mechanism = find(f.perspective === 'onboard' ? closing ? 'door-motion-close' : 'door-motion-open' : closing ? 'close-motion' : 'open');
       if (warning) play(`door|${key}|warn|${f.t}`, warning, 0, tr, closing, closing);
@@ -110,12 +122,11 @@ export class DoorAudio extends RecordedSoundPlayer {
     this.apply(commands);
     if (f.perspective !== 'onboard') return;
     for (const event of events) {
-      const primary = DOOR_TAKES.find(t => t.primary)!.id;
       // An opening lock clunk is motion, not a separate warning. Synthesise
       // once only if the whole opening has no ready recording. For closing,
       // a missing warning falls back once even if the mechanism is ready.
       const kinds = event.kind === 'close' ? ['door-warn-close'] : ['door-warn-open', 'door-motion-open'];
-      if (!this.bank.some(c => kinds.includes(c.kind) && c.id.endsWith(`-${primary}`) && this.hasClip(c.id))) this.fallback(event.kind === 'close', f.rate);
+      if (!this.bank.some(c => event.take !== undefined && kinds.includes(c.kind) && c.id === `${c.kind}-${event.take}` && this.hasClip(c.id))) this.fallback(event.kind === 'close', f.rate);
     }
   }
 }

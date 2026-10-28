@@ -93,6 +93,7 @@ export function carryWorld(sim: Sim, from: Sim): Possession[] {
   sim.pendingCalls = from.pendingCalls.flatMap(c => { const spec = target(c.spec); return spec ? [{ at: back(c.at), spec }] : []; });
   sim.nextCallId = from.nextCallId;
   sim.env = { ...from.env, windUntil: back(from.env.windUntil), rainUntil: back(from.env.rainUntil), dryAt: back(from.env.dryAt), slick: from.env.slick.map(s => ({ ...s })) };
+  sim.vehicles = new Map([...from.vehicles].map(([no,r])=>[no,{...r,uto:r.uto&&{...r.uto,until:r.uto.until-DAY_S}}]));
   sim.vehicleResets = from.vehicleResets.map(r => ({ ...r, at: back(r.at) }));
   sim.dispatcher = { next: new Map([...from.dispatcher.next].filter(([,t]) => t > from.t).map(([k, t]) => [k, back(t)])) };
   sim.integrity.prevV = new Map([...from.integrity.prevV].filter(([id]) => from.trains.has(id)));
@@ -161,6 +162,9 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     : { ...k, trip: trip(k.trip), arr: k.arr === null ? null : back(k.arr), dep: k.dep === null ? null : back(k.dep) };
   return {
     ...tr,
+    uto: tr.uto && {...tr.uto,until:tr.uto.until-DAY_S,returnAt:tr.uto.returnAt===undefined?undefined:tr.uto.returnAt-DAY_S,closeAt:tr.uto.closeAt===undefined?undefined:tr.uto.closeAt-DAY_S},
+    utoDoorWarningAt: tr.utoDoorWarningAt===undefined?undefined:tr.utoDoorWarningAt-DAY_S,
+    dmiAcknowledged: tr.dmiAcknowledged?.map(key=>{const i=key.indexOf('|');return `${Number(key.slice(0,i))-DAY_S}${key.slice(i)}`;}),
     block: duty?.block ?? -1, tripId: trip(tr.tripId),
     ebSince: back(tr.ebSince), ebCallAt: back(tr.ebCallAt), modeSince: back(tr.modeSince), tbCallAt: back(tr.tbCallAt),
     pendingModeAt: back(tr.pendingModeAt), phaseSince: back(tr.phaseSince), dwellUntil: back(tr.dwellUntil),

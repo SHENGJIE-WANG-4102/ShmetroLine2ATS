@@ -1,0 +1,63 @@
+/* Portrait platform hardware, laid out after the Xiepu Road photograph (2026-10-22). */
+.pis-column { --pc-blue: #1c4f9e; --pc-panel: #2160b4; --pc-edge: #6e9be0; --pc-cyan: #3fd8ff; --pc-green: #5fd34a;
+  container-type: inline-size; width: min(100%, 670px); margin-inline: auto; display: flex; flex-direction: column; gap: 1cqw; aspect-ratio: 9 / 16; box-sizing: border-box; overflow: hidden;
+  padding: 1.2cqw; border: 5px solid #14191d; background: var(--pc-blue); color: #fff; font-family: var(--font-cn); }
+.pis-column small { display: block; font-weight: 400; line-height: 1.2; }
+.pc-seg { font: 400 1em 'DSEG7 Classic', monospace; color: var(--pc-cyan); white-space: nowrap; letter-spacing: .02em; }
+.pc-box, .pc-arrival, .pc-schedule { border: .35cqw solid var(--pc-edge); border-radius: 1cqw; background: linear-gradient(#2468bf, var(--pc-panel) 60%, #1d55a6); }
+
+.pc-head { display: grid; grid-template-columns: 22% 1fr 22%; gap: 1cqw; }
+.pc-box { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1.2cqw; min-width: 0; }
+.pc-line { flex-direction: row; gap: 1cqw; }
+.pc-line > b { background: var(--column-line); border: .4cqw solid #fff; padding: 0 .8cqw; font: 700 5cqw/1.15 Arial, sans-serif; }
+.pc-line > span { font-size: 3.6cqw; line-height: 1.1; }
+.pc-line small { font-size: 2.2cqw; }
+.pc-station { font-size: 5cqw; line-height: 1.15; }
+.pc-station small { font: 2.6cqw/1.3 'Courier New', monospace; letter-spacing: .15em; }
+.pc-clock .pc-seg { font-size: 4.2cqw; }
+.pc-clock small { font-size: 2.1cqw; margin-top: .6cqw; white-space: nowrap; }
+
+.pc-arrivals { display: grid; grid-template-columns: 64% 1fr; grid-template-rows: 1fr 1fr; gap: 1cqw; }
+.pc-arrival { padding: 1.4cqw 1.6cqw; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: space-between; text-align: center; }
+.pc-arrival-0 { grid-row: 1 / 3; padding: 2.5cqw 2.5cqw 1.8cqw; }
+.pc-rank { font-size: 3cqw; }
+.pc-arrival-0 .pc-rank { font-size: 5cqw; }
+.pc-countdown { display: block; font: 400 6cqw/1.2 'DSEG7 Classic', monospace; color: var(--pc-cyan); white-space: nowrap; margin: 1cqw 0; }
+.pc-arrival-0 .pc-countdown { font-size: 11cqw; margin: 2.5cqw 0; }
+.pc-countdown-long .pc-countdown { font-family: var(--font-cn); font-size: 3cqw; white-space: normal; }
+.pc-arrival-0.pc-countdown-long .pc-countdown { font-size: 4.4cqw; }
+.pc-destination { display: flex; justify-content: space-around; width: 100%; font-size: 2.9cqw; line-height: 1.25; text-align: left; }
+.pc-destination small { display: none; }
+.pc-arrival-0 .pc-destination { font-size: 6.2cqw; }
+.pc-arrival-0 .pc-destination small { display: block; font-size: 3cqw; }
+
+.pc-schedule { display: grid; grid-template-columns: auto 1fr 1fr; align-items: center; gap: 1.5cqw; padding: 1cqw 2cqw; }
+.pc-schedule .pc-destination { font-size: 3.1cqw; justify-content: flex-start; gap: 2cqw; white-space: nowrap; }
+.pc-schedule .pc-destination small { display: block; font-size: 2.3cqw; }
+.pc-schedule > div:not(.pc-destination) { display: flex; align-items: center; justify-content: flex-end; gap: 1.5cqw; font-size: 3cqw; text-align: center; }
+.pc-schedule small { font-size: 2cqw; }
+.pc-schedule b { font-size: 4cqw; }
+
+.pc-load-head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: .4cqw 2cqw 0; font-size: 2.9cqw; }
+.pc-load-head > span:last-child { text-align: right; }
+.pc-load-head i { display: inline-block; width: 2.4cqw; height: 2.4cqw; margin-right: 1cqw; border-radius: 50%; border: .5cqw solid #fff; background: var(--pc-green); vertical-align: -.3cqw; box-sizing: border-box; }
+.pc-cars { display: flex; gap: .5cqw; align-items: stretch; padding: .8cqw; margin: 0 .5cqw; background: #dfe7ef; border-radius: 3cqw / 50%; }
+.pc-car { flex: 1; min-width: 0; background: var(--car-load); color: #10301a; text-align: center; font: 700 2.6cqw/5.4cqw Arial, sans-serif; }
+.pc-cab { width: 4.5cqw; display: flex; align-items: center; justify-content: center; }
+.pc-cab i { width: 1.6cqw; height: 3cqw; background: #2b3540; border-radius: .4cqw; }
+
+.pc-route { position: relative; display: flex; align-items: center; padding: 0 3cqw; min-height: 32cqw; background: #2364c1; border-top: .3cqw solid var(--pc-edge); }
+.pc-route::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1.6cqw; transform: translateY(-50%); background: var(--pc-green); }
+.pc-chev { position: relative; z-index: 1; flex: .7; text-align: center; font: 700 2.4cqw/1 Arial, sans-serif; font-style: normal; color: #2b8f24; letter-spacing: -.1em; }
+.pc-stop { position: relative; z-index: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+.pc-stop > span { writing-mode: vertical-rl; text-orientation: upright; background: var(--pc-green); color: #10301a; font-weight: 700; font-size: 3cqw; letter-spacing: .1em; padding: 1.2cqw .7cqw; border-radius: .8cqw; max-height: 26cqw; overflow: hidden; }
+.pc-here > span { outline: .5cqw solid #fff; }
+.pc-transfers { display: flex; flex-direction: column; gap: .4cqw; min-height: 4.6cqw; justify-content: flex-end; }
+.pc-below { justify-content: flex-start; }
+.pc-transfers b { width: 4.2cqw; height: 4.2cqw; border: .4cqw solid #fff; border-radius: 50%; background: var(--pc-panel); color: #fff; font: 400 2.6cqw/4.2cqw Arial, sans-serif; text-align: center; box-sizing: content-box; }
+
+.pc-media { flex: 1; min-height: 20cqw; display: flex; flex-direction: column; justify-content: center; text-align: center; padding: 4cqw 3cqw; color: #d5e7f5; background: linear-gradient(160deg, #cfdbe8, #e9eff5); color: #39506a; }
+.pc-media > div { font-size: 5cqw; }
+.pc-media small { font-size: 2.4cqw; margin-top: 3cqw; }
+.pc-media > .pc-notice { margin-top: 2cqw; font-size: 2.2cqw; }
+.pc-notice:empty { display: none; }

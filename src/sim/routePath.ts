@@ -1,10 +1,7 @@
 import type { Topology } from './topology';
 
-export interface RouteTable {
-  /** per berth: best next route id for each signal (-1 = unreachable) */
-  next: Map<number, Int32Array>;
-  dist: Map<number, Float64Array>;
-}
+import type { RouteTable } from './routeTable';
+export type { RouteTable };
 
 export type TaskPathVisitor = (link: number, from: number, to: number) => void;
 

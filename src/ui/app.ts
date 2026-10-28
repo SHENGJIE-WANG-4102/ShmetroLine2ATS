@@ -28,7 +28,9 @@ import { holidayOf, isoDate, parseTime } from '../sim/calendar';
 export { parseTime };
 export const newOperatingSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
 import { INSTRUCTOR_EVENTS, SCENARIOS, instructorEventIds } from '../sim/scenario';
-import { LINE, WEATHER_RULES } from '../data/current';
+import { LINE, GROUP, WEATHER_RULES, unattended, visibleLineGroups } from '../data/current';
+import { formatDrivingMode } from './drivingMode';
+import { isPlayerDriving } from './utoControls';
 
 /** default UI scale: 100 % on a 4K canvas, larger on smaller windows so text stays readable (A+/A− go up to 200 %) */
 function defaultScale(): number {
@@ -570,7 +572,7 @@ export class App {
       }
       return;
     }
-    if (tr?.manual) {
+    if (tr && isPlayerDriving(tr)) {
       let n: number | null = null;
       const k = e.key.toLowerCase();
       if (['j', 'k', 'l'].includes(k) && !e.repeat) {
@@ -718,12 +720,21 @@ export class App {
   showDayDialog(required = false) {
     const d = new Date();
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+    // the line group is fixed at startup (current.ts): switching reloads with ?line=, like the header menu
+    const groups = visibleLineGroups(import.meta.env.DEV);
+    const lineSel = h('select', { onchange: () => {
+      const url = new URL(location.href);
+      url.searchParams.set('line', lineSel.value);
+      location.assign(url.href);
+    } }, ...groups.map(g => h('option', { value: g.id }, g.name))) as HTMLSelectElement;
+    lineSel.value = GROUP.id;
     const dateIn = datePick(d, () => showHol());
     const hol = h('input', { type: 'checkbox' }) as HTMLInputElement;
     const st = h('select', {}, ...[['04:30', '首班车前 04:30'], ['06:30', '早高峰前 06:30'], ['07:40', '早高峰 07:40'], ['12:00', '平峰 12:00'], ['17:40', '晚高峰 17:40'], ['21:30', '末班前 21:30'], ['23:50', '收车 23:50']].map(([v, t]) => h('option', { value: v }, t))) as HTMLSelectElement;
     st.value = '07:40';
     const auto = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    const drive = h('select', {}, h('option', { value: 'DTO' }, 'DTO（正常）'), h('option', { value: 'ATO' }, 'ATO（DTO兼容模式，司机驾驶）')) as HTMLSelectElement;
+    const drive = h('select', {}, h('option', { value: 'DTO' }, `${formatDrivingMode('DTO')}（正常）`),
+      ...(!unattended('doorClose') ? [h('option', { value: 'ATO' }, 'ATO（DTO兼容模式，司机驾驶）')] : [])) as HTMLSelectElement;
     const random=h('select',{},...['关','轻','中','重'].map((label,level)=>h('option',{value:level},label)));
     const savedLevel=Number(loadPref('randomFaults',0));
     random.value=String([0,1,2,3].includes(savedLevel)?savedLevel:0);
@@ -765,6 +776,7 @@ export class App {
     back.append(h('div', { class: 'modal day-setup' },
       h('div', { class: 'modal-h' }, '运营日设置'),
       h('div', { class: 'modal-b' },
+        groups.length > 1 ? h('div', { class: 'form', style: 'margin-bottom:14px' }, h('label', {}, '线路'), lineSel) : null,
         h('div', { class: 'form' }, h('label', {}, '运营日期'), dateIn.el, h('label', {}, '节假日'), hol),
         holHint,
         h('div', { class: 'form', style: 'margin-top:14px' }, h('label', {}, '开始时刻'), st),
@@ -773,7 +785,8 @@ export class App {
         h('div',{class:'form',style:'margin-top:14px'},h('label',{},'随机故障'),random),
         h('div',{class:'sect-title'},'教员事件'),eventPicker,
         h('div',{class:'hint'},'勾选的事件可能在当天随机发生，也可能不发生。事件时刻不预告。'),
-        h('div', { class: 'hint', style: 'margin-top:14px' }, '工作日采用早晚高峰大小交路运行图，双休日/节假日采用对应运行图，均含出入段与过夜安排。开始时刻之前的运营以最高速度推演。ATO运营（DTO兼容模式）沿用同一运行图，终点站折返时司机换端、发车需司机按钮。训练场景请在右侧“教员”页选择。'),
+        h('div', { class: 'hint', style: 'margin-top:14px' }, '工作日采用早晚高峰大小交路运行图，双休日/节假日采用对应运行图，均含出入段与过夜安排。开始时刻之前的运营以最高速度推演。',
+          unattended('doorClose') ? '常态FAM全自动，随车人员接管需先关门并完成操作序列。' : 'ATO运营（DTO兼容模式）沿用同一运行图，终点站折返时司机换端、发车需司机按钮。', '训练场景请在右侧“教员”页选择。'),
       ),
       h('div', { class: 'modal-f' }, required ? null : h('button', { class: 'btn', onclick: close }, '取消'), h('button', { class: 'btn primary', onclick: go }, '开始')),
     ));

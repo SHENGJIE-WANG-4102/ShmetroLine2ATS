@@ -5,13 +5,22 @@
  */
 import type { Sim } from './engine';
 import type { DmiData, DmiMsg, Level, Mode, Train, StopTask } from './model';
-import { STATIONS, fleetEntry } from '../data/current';
+import { LINE, STATIONS, fleetEntry } from '../data/current';
 import { stopError } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
 import { serviceEnd } from './timetable';
 import { signalAheadFrom, platformSide, dwellDepartureAt } from './ats';
+import { trainLevel } from './energy';
 
 const LOG_MAX = 40;
+
+/** The instantaneous driving target, rather than the speed of a distant constraint. */
+export function dmiTargetSpeed(tr: Train): number {
+  return Math.max(0, tr.manual && tr.mode === 'CM' ? tr.vRecommended ?? tr.vTarget : tr.vTarget);
+}
+export function dmiSpeedWarning(tr: Train): boolean {
+  return !tr.eb && (LINE.ui.dmiSpeedWarning === 'target' ? tr.v > dmiTargetSpeed(tr) : tr.v > tr.vPermit + 0.3);
+}
 
 /** highest mode the on-board equipment could offer right now (the "AM-C" field) */
 export function availableMode(sim: Sim, tr: Train): { mode: Mode; level: Level } {
@@ -65,7 +74,7 @@ export function dmiTick(sim: Sim) {
     }
     const cur = {
       avail: `${av.mode}-${av.level}`, comm: tr.comm, mode: `${tr.mode}-${tr.level}`, eb: tr.eb, hold: tr.hold,
-      stop: tr.stopUntil > sim.t, failed: tr.failed, over: tr.v > tr.vPermit + 0.3 && !tr.eb,
+      stop: tr.stopUntil > sim.t, failed: tr.failed, over: dmiSpeedWarning(tr),
     };
     const p = tr.dmiPrev;
     tr.dmiPrev = cur;
@@ -78,7 +87,7 @@ export function dmiTick(sim: Sim) {
     if (p.mode !== cur.mode) dmiNote(sim, tr, `${modeWord(tr.mode)} ${tr.level}模式`, tr.mode === 'RM' ? 'warn' : 'info');
     if (!p.eb && cur.eb) dmiNote(sim, tr, `紧急制动 ${tr.ebReason}`, 'alarm');
     if (p.eb && !cur.eb) dmiNote(sim, tr, '紧急制动缓解');
-    if (!p.over && cur.over) dmiNote(sim, tr, '超速报警', 'warn');
+    if (!p.over && cur.over) dmiNote(sim, tr, LINE.ui.dmiSpeedWarning === 'target' ? '速度警告' : '超速报警', 'warn');
     if (!p.hold && cur.hold) dmiNote(sim, tr, '扣车', 'warn');
     if (p.hold && !cur.hold) dmiNote(sim, tr, '扣车取消');
     if (!p.stop && cur.stop) dmiNote(sim, tr, `区间停车 ${tr.stopReason}`, 'warn');
@@ -132,6 +141,11 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
   const doorFault = tr.vfault?.kind === 'door' && tr.vfault.stage !== 'armed';
   return {
     train: id,
+    runningLevel: trainLevel(sim, tr),
+    targetSpeed: dmiTargetSpeed(tr),
+    targetDistance: Number.isFinite(tr.tgtD) ? Math.max(0, tr.tgtD) : -1,
+    speedWarning: dmiSpeedWarning(tr),
+    acknowledged: tr.dmiAcknowledged ?? [],
     trainNo: dmiTrainNo(tr.vehicle),
     vehicleType: fleetEntry(tr.vehicle)?.type ?? '',
     dest: names.dest,

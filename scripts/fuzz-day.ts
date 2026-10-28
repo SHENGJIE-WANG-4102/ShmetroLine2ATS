@@ -16,7 +16,8 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { availableParallelism } from "node:os";
 import { Sim } from "../src/sim/engine";
-import type { Command, Train, SimConfig } from "../src/sim/model";
+import { unattended, OPERATIONS, WEATHER_RULES, supportsSignalSystem } from "../src/data/current";
+import type { Command, Train, SimConfig, FaultKind } from "../src/sim/model";
 import {
   stationsAhead,
   turnbackOptions,
@@ -59,7 +60,7 @@ interface Action {
   msg?: string;
   cleanup?: boolean;
 }
-const KINDS = [
+const BASE_KINDS = [
   "weather",
   "rain",
   "adhesion",
@@ -100,8 +101,36 @@ const KINDS = [
   "fault",
   "ack",
 ] as const;
-type Kind = (typeof KINDS)[number];
+const UTO_KINDS = ["uto-sequence", "uto-fault", "uto-reset"] as const;
+type Kind = (typeof BASE_KINDS)[number] | (typeof UTO_KINDS)[number];
+const LEGACY_FAULTS: FaultKind[] = ["signal", "switch", "axle", "psd", "trainComm", "trainDto", "traction", "door", "brake", "trainFail"];
+/** Select actual line capabilities before sampling; keep the legacy world's order and draws. */
+export function fuzzCapabilities() {
+  const uto = unattended("doorClose");
+  const kinds: Kind[] = [...BASE_KINDS];
+  const notApplicable: string[] = [];
+  const remove = (...excluded: Kind[]) => { for (const kind of excluded) { const i = kinds.indexOf(kind); if (i >= 0) kinds.splice(i, 1); } };
+  if (!OVERLAY_PRESETS.length) { remove("overlay"); notApplicable.push("overlay: 本线路没有加开模板，仍抽样 addTrain"); }
+  if (!supportsSignalSystem("TBTC")) { remove("trainLevel", "zoneLevel"); notApplicable.push("TBTC trainLevel/zoneLevel: 无后备能力；仍注入通信/区域故障"); }
+  if (uto) { remove("lineAto", "trainDto"); kinds.push(...UTO_KINDS); notApplicable.push("lineAto/trainDto: 使用本线 UTO 接管、车载故障和远程复位"); }
+  const wind = WEATHER_RULES.wind.map(rule => rule.level);
+  if (!wind.length) notApplicable.push("大风等级: 未定义风限制；天气命令仍注入降雨并跨第二天");
+  const faults = uto ? [...new Set([...OPERATIONS.randomFaults.kinds.map(rule => rule.kind), ...OPERATIONS.randomFaults.majorKinds])]
+    .filter((kind): kind is FaultKind => ["signal", "switch", "axle", "psd", "psdLink", "trainComm", "trainUto", "traction", "door", "brake", "trainFail", "zcFail", "surge", "pecu", "trackPerson"].includes(kind)) : LEGACY_FAULTS;
+  return { uto, kinds, wind, faults, notApplicable };
+}
+interface UtoCoverage {
+  stages: string[]; modes: string[]; faults: number; faultAtpm: boolean; takeovers: number; restores: number; famRestored: number; resets: number; rejectedSteps: number;
+}
+interface DayCoverage { weather: boolean; randomCommands: number; uto?: UtoCoverage }
+
 export function runFuzz(o: FuzzOptions) {
+  const capabilities = fuzzCapabilities();
+  const coverage: Record<number, DayCoverage> = {};
+  const dayCoverage = (day: number) => coverage[day] ??= {weather: false, randomCommands: 0,
+    ...(capabilities.uto ? {uto: {stages: [], modes: [], faults: 0, faultAtpm: false, takeovers: 0, restores: 0, famRestored: 0, resets: 0, rejectedSteps: 0}} : {})};
+  const observedFaults = new Set<number>(), restoring = new Set<number>();
+  let utoServiceStart = Infinity;
   let state = o.seed >>> 0;
   const random = () => {
     state = (state + 0x6d2b79f5) >>> 0;
@@ -117,6 +146,7 @@ export function runFuzz(o: FuzzOptions) {
     started = Date.now(),
     hash = modelHash();
   mkdirSync(o.out, { recursive: true });
+  console.log(JSON.stringify({event: "fuzz-progress", tag, phase: "constructing-world", day: 1, t: 14400, clock: clockLabel(14400), wallSeconds: 0}));
   let sim = new Sim({
     dayType: o.dayType,
     date: o.date,
@@ -133,12 +163,35 @@ export function runFuzz(o: FuzzOptions) {
     bag: Kind[] = [];
   const actions: Action[] = [],
     queue: { at: number; cmd: Command; remaining: number }[] = [];
+  let progressDay = 0, progressBand = -1, progressAt = started, progressClock = 14400;
   const check = () => {
     const v = sim.integrity.violations[0];
     if (v) throw Error(v.kind);
     const second = Math.floor(sim.t);
     if (second === lastSecond) return;
     lastSecond = second;
+    const band = Math.floor(sim.t / (6 * 3600));
+    if (progressDay !== day || progressBand !== band) {
+      const now = Date.now();
+      console.log(JSON.stringify({event: "fuzz-progress", tag, phase: "stepping", day, t: sim.t, clock: clockLabel(sim.t),
+        wallSeconds: (now - started) / 1000, stepWallSeconds: (now - progressAt) / 1000,
+        advancedSeconds: progressDay === day ? sim.t - progressClock : 0, trains: sim.trainList.length}));
+      progressDay = day; progressBand = band; progressAt = now; progressClock = sim.t;
+    }
+    const dc = dayCoverage(day);
+    if (dc.uto) {
+      for (const train of sim.trainList) {
+        if (train.uto) {
+          if (!dc.uto.stages.includes(train.uto.stage)) dc.uto.stages.push(train.uto.stage);
+          if (train.uto.stage === "manual" && !dc.uto.modes.includes(train.mode)) dc.uto.modes.push(train.mode);
+          if (train.uto.target === "DTO") restoring.add(train.id);
+          if (train.uto.stage === "manual" && train.mode === "CM" && train.dtoInhibit === "车载全自动功能故障") dc.uto.faultAtpm = true;
+        } else if (train.mode === "DTO" && restoring.delete(train.id)) dc.uto.famRestored++;
+      }
+      for (const fault of sim.faults) if (fault.kind === "trainUto" && fault.since >= 0 && !observedFaults.has(fault.id)) {
+        observedFaults.add(fault.id); dc.uto.faults++;
+      }
+    }
     const numeric = numericProblem(sim);
     if (numeric) throw Error(numeric);
     if (JSON.stringify(fleetNumbers(sim)) !== JSON.stringify(initialFleet))
@@ -151,6 +204,13 @@ export function runFuzz(o: FuzzOptions) {
       const r = sim.command(cmd);
       entry.ok = r.ok;
       entry.msg = r.msg;
+      const dc = dayCoverage(day);
+      if (r.ok && !cleanup && capabilities.kinds.includes(kind as Kind)) dc.randomCommands++;
+      if (dc.uto) {
+        if (r.ok && cmd.c === "manual") { if (cmd.mode === "AUTO") dc.uto.restores++; else dc.uto.takeovers++; }
+        if (r.ok && cmd.c === "utoReset") dc.uto.resets++;
+        if (!r.ok && cmd.c === "utoStep") dc.uto.rejectedSteps++;
+      }
       check();
       return r.ok;
     } catch (error) {
@@ -208,7 +268,7 @@ export function runFuzz(o: FuzzOptions) {
     if (kind === "weather") {
       command(kind, {
         c: "env",
-        wind: 1 + Math.floor(random() * 4),
+        wind: capabilities.wind.length ? pick(capabilities.wind)! : 0,
         rain: random() < 0.65,
         duration: between(900, 5400),
       });
@@ -241,8 +301,9 @@ export function runFuzz(o: FuzzOptions) {
       return;
     }
     if (kind === "overlay") {
-      const p = pick(OVERLAY_PRESETS)!,
-        from = sim.t + between(900, 1800),
+      const p = pick(OVERLAY_PRESETS);
+      if (!p) return void skip();
+      const from = sim.t + between(900, 1800),
         to = Math.min(24 * 3600, from + between(1800, 5400));
       if (from >= to) return void skip();
       command(kind, {
@@ -286,18 +347,8 @@ export function runFuzz(o: FuzzOptions) {
     }
     if (kind === "fault") {
       if (sim.faults.filter((f) => !f.repaired).length >= 6) return void skip();
-      const k = pick([
-        "signal",
-        "switch",
-        "axle",
-        "psd",
-        "trainComm",
-        "trainDto",
-        "traction",
-        "door",
-        "brake",
-        "trainFail",
-      ] as const)!;
+      const k = pick(capabilities.faults);
+      if (!k) return void skip();
       const target =
         k === "signal"
           ? pick(sim.topo.signals)?.id
@@ -305,8 +356,10 @@ export function runFuzz(o: FuzzOptions) {
             ? pick(sim.topo.switches)?.id
             : k === "axle"
               ? pick(sim.topo.sections)?.id
-              : k === "psd"
+              : k === "psd" || k === "psdLink" || k === "trackPerson"
                 ? platform?.id
+                : k === "surge" ? platform?.station
+                : k === "zcFail" ? pick(sim.topo.zones)?.id
                 : tr?.id;
       if (
         target === undefined ||
@@ -479,10 +532,30 @@ export function runFuzz(o: FuzzOptions) {
       } else skip();
       return;
     }
+    if (kind === "uto-sequence") {
+      const target = pick(cars.filter(t => t.v < .05 && !t.eb && t.comm && sim.zoneState[sim.topo.links[t.link].zone] === "CBTC" && !t.dtoInhibit && !t.uto));
+      if (!target) return void skip();
+      if (command(kind, {c: "manual", train: target.id, mode: "CM", computer: true})) {
+        if (command("uto-guard-probe", {c: "utoStep", train: target.id, action: "key"})) throw Error("UTO_STEP_ORDER_ACCEPTED");
+      }
+      return;
+    }
+    if (kind === "uto-fault") {
+      const target = pick(cars.filter(t => t.mode === "DTO" && !t.dtoInhibit && !t.uto));
+      if (!target) return void skip();
+      command(kind, {c: "fault", kind: "trainUto", target: target.id, duration: 0});
+      return;
+    }
+    if (kind === "uto-reset") {
+      const target = pick(sim.trainList.filter(t => t.dtoInhibit === "车载全自动功能故障" && t.uto?.stage === "manual" && t.v < .05 && !t.eb));
+      if (!target) return void skip();
+      command(kind, {c: "utoReset", train: target.id});
+      return;
+    }
     if (kind === "manual-AUTO") {
       const target = sim.trainList.find((t) => t.manual);
       if (target)
-        command(kind, { c: "manual", train: target.id, mode: "AUTO" });
+        command(kind, { c: "manual", train: target.id, mode: "AUTO", ...(unattended("doorClose") ? { computer: true } : {}) });
       else skip();
       return;
     }
@@ -500,8 +573,9 @@ export function runFuzz(o: FuzzOptions) {
           c: "manual",
           train: target.id,
           mode: kind === "manual-CM" ? "CM" : "RM",
+          ...(unattended("doorClose") ? { computer: true } : {}),
         },
-        { c: "manual", train: target.id, mode: "AUTO" },
+        { c: "manual", train: target.id, mode: "AUTO", ...(unattended("doorClose") ? { computer: true } : {}) },
         between(10, 30),
       );
       return;
@@ -557,6 +631,30 @@ export function runFuzz(o: FuzzOptions) {
     }
     skip();
   }
+  /** Exercise UTO-specific contracts through real opportunities, without editing world state.
+   * Random bag entries continue sampling these procedures independently. */
+  let lastUtoProbe = -1;
+  function utoCoverageTick() {
+    if (!capabilities.uto || Math.floor(sim.t) === lastUtoProbe) return;
+    lastUtoProbe = Math.floor(sim.t);
+    const dc = dayCoverage(day).uto!;
+    if (sim.t < utoServiceStart) return;
+    const stopped = sim.trainList.filter(t => ordinary(t) && t.v < .05 && !t.eb && t.comm && sim.zoneState[sim.topo.links[t.link].zone] === "CBTC" && !t.dtoInhibit && !t.uto);
+    if (!dc.takeovers && stopped.length) {
+      const target = stopped[0];
+      if (command("uto-coverage-takeover", {c: "manual", train: target.id, mode: "CM", computer: true}))
+        if (command("uto-coverage-guard", {c: "utoStep", train: target.id, action: "key"})) throw Error("UTO_STEP_ORDER_ACCEPTED");
+    }
+    if (!dc.faults && stopped.length > 1) command("uto-coverage-fault", {c: "fault", kind: "trainUto", target: stopped.at(-1)!.id, duration: 0});
+    if (!dc.resets) {
+      const target = sim.trainList.find(t => t.dtoInhibit === "车载全自动功能故障" && t.uto?.stage === "manual" && t.v < .05 && !t.eb);
+      if (target) command("uto-coverage-reset", {c: "utoReset", train: target.id});
+    }
+    if (!dc.famRestored) {
+      const target = sim.trainList.find(t => t.uto?.stage === "manual" && t.uto.computer && t.v < .05 && !t.eb && t.comm && !t.dtoInhibit && sim.zoneState[sim.topo.links[t.link].zone] === "CBTC");
+      if (target) command("uto-coverage-restore", {c: "manual", train: target.id, mode: "AUTO", computer: true});
+    }
+  }
   function daySchedule() {
     const times: number[] = [];
     for (let hour = 4; hour < 24; hour++) {
@@ -568,7 +666,7 @@ export function runFuzz(o: FuzzOptions) {
   }
   function nextKind(): Kind {
     if (!bag.length) {
-      bag = [...KINDS];
+      bag = [...capabilities.kinds];
       for (let i = bag.length - 1; i > 0; i--) {
         const j = Math.floor(random() * (i + 1));
         [bag[i], bag[j]] = [bag[j], bag[i]];
@@ -595,6 +693,8 @@ export function runFuzz(o: FuzzOptions) {
     }
     const full = {
       ...result,
+      coverage,
+      notApplicable: capabilities.notApplicable,
       tag,
       options: o,
       model: hash,
@@ -623,6 +723,7 @@ export function runFuzz(o: FuzzOptions) {
           headway: p.headway,
         });
       }
+      utoServiceStart = Math.min(...sim.plan.trips.filter(t => t.revenue && !t.cancelled).map(t => t.stops[0].dep));
       const schedule = daySchedule(),
         weatherAt = 7 * 3600 + between(0, 1200);
       let cursor = 0,
@@ -646,7 +747,7 @@ export function runFuzz(o: FuzzOptions) {
               { c: "lowAdhesion", on: false },
               duration,
             );
-          weather = true;
+          weather = true; dayCoverage(day).weather = true;
         }
         if (day === 1 && o.lateExtra && !late && sim.t >= 27.25 * 3600) {
           const depot = sim.topo.depots.find((d) => sim.depotStock[d.id] > 0)!;
@@ -704,6 +805,7 @@ export function runFuzz(o: FuzzOptions) {
           perform(nextKind());
           cursor++;
         }
+        utoCoverageTick();
         sim.step();
         check();
       }
@@ -715,7 +817,7 @@ export function runFuzz(o: FuzzOptions) {
           throw Error("NO_ACTIVE_TRAIN_CARRIED");
         for (const task of queue) task.at -= 86400;
         lastWithdraw -= 86400;
-        lastSecond = -1;
+        lastSecond = -1; lastUtoProbe = -1;
       }
     }
     day = 2;
@@ -726,6 +828,11 @@ export function runFuzz(o: FuzzOptions) {
       throw Error(`CARRIED_UNFINISHED ${JSON.stringify(pending)}`);
     const parked = overnightProblem(sim);
     if (parked) throw Error(parked);
+    if (capabilities.uto) for (const operatingDay of [1, 2]) {
+      const dc = dayCoverage(operatingDay), u = dc.uto!;
+      if (!dc.weather || o.density[1] > 0 && !dc.randomCommands || !u.takeovers || !u.faults || !u.faultAtpm || !u.resets || !u.restores || !u.famRestored || !u.rejectedSteps || ["report", "key", "famOff", "brake", "confirm", "manual", "restoreReport", "neutral", "famOn"].some(stage => !u.stages.includes(stage)))
+        throw Error(`UTO_COVERAGE_MISSING day=${operatingDay} ${JSON.stringify(dc)}`);
+    }
     if (modelHash() !== hash) throw Error("SOURCE_CHANGED");
     return summary({
       status: "pass",
@@ -859,7 +966,7 @@ export function fuzzCases(count: number, out: string): FuzzOptions[] {
     return {
       seed: 101 + i,
       level: 1 + (i % 3),
-      wind: 1 + (Math.floor(i / 3) % 4),
+      wind: WEATHER_RULES.wind.length ? WEATHER_RULES.wind[Math.floor(i / 3) % WEATHER_RULES.wind.length].level : 0,
       density: (
         [
           [3, 4],
@@ -869,7 +976,7 @@ export function fuzzCases(count: number, out: string): FuzzOptions[] {
       )[Math.floor(i / 4) % 3],
       dayType,
       date: dayType === "weekend" ? "2026-10-24" : "2026-10-19",
-      template: ["none", "ciie", "hongqiao"][Math.floor(i / 2) % 3],
+      template: ["none", ...OVERLAY_PRESETS.map(p => p.id)][Math.floor(i / 2) % (OVERLAY_PRESETS.length + 1)],
       out,
     };
   });
@@ -963,14 +1070,14 @@ if (
   } else {
     const seed = Number(args[0]),
       level = Number(opts.get("level") ?? 2),
-      wind = Number(opts.get("wind") ?? 2),
+      wind = Number(opts.get("wind") ?? (WEATHER_RULES.wind.some(rule => rule.level === 2) ? 2 : 0)),
       density = (opts.get("density") ?? "3:8").split(":").map(Number),
       dayType = opts.get("day-type") ?? "weekday",
       template = opts.get("template") ?? "none";
     if (
       !Number.isInteger(seed) ||
       ![1, 2, 3].includes(level) ||
-      ![0, 1, 2, 3, 4].includes(wind) ||
+      ![0, ...WEATHER_RULES.wind.map(rule => rule.level)].includes(wind) ||
       density.length !== 2 ||
       density.some((n) => !Number.isInteger(n) || n < 0) ||
       density[0] > density[1] ||

@@ -9,6 +9,7 @@ export interface ServiceData {
   openingUp?: { at: number; headway: number; template: string; label: string };
   denseUp?: number;
   openingDn?: { to: number; headway: number }[];
+  /** Reference departure wave starts, keyed by template; also supports nonpeak grids. */
   peaks: Record<string, { DN?: number; UP?: number; upEnd?: number }>;
   overrides: (Period & { dir: TrackDir })[];
   openingSupplements: { from: number; to: number; headway: number; terminal: string }[];
@@ -23,6 +24,16 @@ export interface TimetableData {
     exitDirections: { depot: string; direction: TrackDir; penalty: number }[];
     movements: { depot: string; kind: 'in' | 'out'; from: number; to: number; penalty: number }[];
   } };
+  diagnostics?: {
+    firstLastLabels?: [string, string, string];
+    gaode?: { directory: string; checks: [string, TrackDir][]; windows: [number, number][]; reference: { stations: string[]; from: number; to: number } };
+  };
+  /** Common timing reference inside the core; absence retains terminal references. */
+  reference?: Partial<Record<TrackDir, string>>;
+  /** Depot positioning follows stopping timings without taking passengers. */
+  positioningRevenue?: boolean;
+  /** Keep every scheduled passenger origin and destination through circulation. */
+  preserveRevenueRoutes?: boolean;
   templates: Record<string, Template>;
   dayPeriods: Record<DayType, Period[]>;
   shownPeriods: Record<DayType, Period[]>;

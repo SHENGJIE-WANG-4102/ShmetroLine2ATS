@@ -1,5 +1,6 @@
 /** Operating-day calendar helpers shared by the UI and the worker. */
 import type { DayType } from './model';
+import { SIMULATION } from '../data/current';
 
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -8,7 +9,7 @@ export const nationalDay = (d: Date) => d.getMonth() === 9 && d.getDate() <= 7;
 
 export function dayTypeOf(d: Date, holiday: boolean): DayType {
   const wd = d.getDay();
-  return holiday || nationalDay(d) || wd === 0 || wd === 6 ? 'weekend' : 'weekday';
+  return holiday || (holidayOf(isoDate(d))?.day ?? 0) >= 1 || wd === 0 || wd === 6 ? 'weekend' : 'weekday';
 }
 
 export function isoDate(d: Date): string {
@@ -48,6 +49,13 @@ export interface HolidayDay {
 /** the holiday programme of an ISO date, null on an ordinary day */
 export function holidayOf(date: string | undefined): HolidayDay | null {
   if (!date) return null;
+  const calendar = SIMULATION.holiday.calendar;
+  if (calendar) {
+    const period = calendar.find(p => date >= p.from && date <= p.to);
+    if (!period) return null;
+    const elapsed = Math.round((Date.parse(date + 'T00:00:00Z') - Date.parse(period.from + 'T00:00:00Z')) / 86400000);
+    return { name: period.name, day: period.dayOffset + elapsed, days: period.days };
+  }
   const d = parseIso(date);
   if (d.getMonth() === 9 && d.getDate() <= 7) return { name: '国庆', day: d.getDate(), days: 7 };
   if (d.getMonth() === 8 && d.getDate() === 30) return { name: '国庆', day: 0, days: 7 };

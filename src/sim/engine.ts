@@ -4,6 +4,7 @@ import { arbitrateResources, type ResourceTransit } from './resourceArbitration'
  * time step. Runs inside a Web Worker (src/sim/worker.ts) or headless in
  * tests.
  */
+import { requestUtoControl, utoStep, startUtoReset, utoFleetTick, utoRetreatEffort, utoAttendantEffort, utoStatus, crewLabel } from './uto';
 import { energyTick, newEnergy, type EnergyState } from './energy';
 import { gradePermille } from './gradient';
 import { buildTopology, linkChain, type Topology } from './topology';
@@ -46,7 +47,7 @@ import { updateOnboard, setManual, cmdTrainLevel, cmdTrainDto, cmdLineAto, autho
 import { psdTick, psdOpen, setBypass, doorMotionTick } from './psd';
 import { updateHalts, HALT } from './halt';
 import { newIntegrity, checkSafety, checkLiveness, type IntegrityState } from './invariants';
-import { LINE_INFO, STATIONS, supportsSignalSystem } from '../data/current';
+import { LINE_INFO, STATIONS, supportsSignalSystem, unattended } from '../data/current';
 import { assertScope, currentScope } from '../data/scope';
 import { validateCommand } from './commands';
 import { preparePlan } from './planning';
@@ -191,7 +192,7 @@ export class Sim {
    *  player or by a degraded-mode driver): speed changes fast, radio calls come
    *  often and a missed one stops a train; Infinity otherwise */
   speedCap(): number {
-    for (const tr of this.trains.values()) if ((tr.mode === 'CM' || tr.mode === 'RM') && tr.phase !== 'stabled') return MANUAL_SPEED_CAP;
+    for (const tr of this.trains.values()) if (!tr.uto?.computer && (tr.mode === 'CM' || tr.mode === 'RM') && tr.phase !== 'stabled') return MANUAL_SPEED_CAP;
     return Infinity;
   }
 
@@ -226,7 +227,7 @@ export class Sim {
     // and a holiday its own planned ones (holiday.ts)
     this.holiday = config.scenario ? null : holidayOf(config.date);
     const fixedRuns = config.scenario ? SCENARIOS.find((x) => x.id === config.scenario)?.fixedRuns : holidayFixedRuns(this.holiday);
-    this.atoLine = config.driveMode === 'ATO';
+    this.atoLine = config.driveMode === 'ATO' && !unattended('doorClose');
     this.planCtx = { topo: this.topo, rt: this.rt, dayType: config.dayType, ...(fixedRuns ? { fixedRuns } : {}),
       ...(config.depotStock ? { initialStock: config.depotStock.slice() } : {}) };
     this.plan = generatePlan(this.planCtx);
@@ -274,6 +275,7 @@ export class Sim {
     this.log('I','客流',`当日客流目标 ${this.ridershipTarget.toLocaleString('zh-CN')} 人次`);
     if (config.randomFaults) setRandomFaults(this, config.randomFaults);
     initConnections(this);
+    utoFleetTick(this);
     arbitrateResources(this);
     spawnDue(this);
     if (from) this.startState = capture(this);
@@ -311,6 +313,7 @@ export class Sim {
   }
 
   log(level: AlarmLevel, cat: string, text: string, opts: { key?: string; manual?: boolean; code?: string; train?: number; snapshot?: import('./invariants').DiagSnapshot } = {}) {
+    if(crewLabel()!=='司机')text=text.replaceAll('司机',crewLabel());
     if (opts.key && this.alarms.has(opts.key)) return;
     const ev: SimEvent = { id: this.nextEventId++, t: this.t, level, cat, text, manual: opts.manual };
     if (opts.code) ev.code = opts.code;
@@ -370,6 +373,8 @@ export class Sim {
     doorMotionTick(this);
     indexBodies(this);
     for (const tr of this.trainList) {
+      utoAttendantEffort(tr);
+      utoRetreatEffort(this,tr);
       updateTrainMotion(this, tr, dt);
       const display = tr.departureDisplay;
       if (display) {
@@ -428,6 +433,7 @@ export class Sim {
 
   private secondTick(dt: number) {
     refreshAuthority(this);
+    utoFleetTick(this);
     arbitrateResources(this);
     spawnDue(this);
     updateOnboard(this);
@@ -493,7 +499,7 @@ export class Sim {
     if (r.ok) faultProcedure(this, cmd);
     const text = describeCommand(this, cmd);
     this.log(r.ok ? 'I' : 'C', '调度', `${by ? `【${by}】` : ''}${text}：${r.msg}`, { manual: !by });
-    return r;
+    return crewLabel()==='司机'?r:{...r,msg:r.msg.replaceAll('司机',crewLabel())};
   }
 
   private execCommand(cmd: Command): CmdResult {
@@ -582,6 +588,14 @@ export class Sim {
       case 'authRM': return this.withTrain(cmd.train, (tr) => cmdAuthRM(this, tr, cmd.signal));
       case 'ebRelease': return this.withTrain(cmd.train, (tr) => authoriseEBRelease(this, tr, '调度'));
       case 'trainLevel': return this.withTrain(cmd.train, (tr) => cmdTrainLevel(this, tr, cmd.level));
+      case 'utoStep': return this.withTrain(cmd.train,tr=>utoStep(this,tr,cmd.action));
+      case 'utoReset': return this.withTrain(cmd.train,tr=>startUtoReset(this,tr));
+      case 'dmiAck': return this.withTrain(cmd.train,tr=> {
+        if(!tr.dmiLog.some(m=>m.m===cmd.message&&m.t===cmd.at))return {ok:false,msg:'告警不存在'};
+        const key=`${cmd.at}|${cmd.message}`;
+        if(!(tr.dmiAcknowledged??=[]).includes(key))tr.dmiAcknowledged.push(key);
+        return {ok:true,msg:'已确认车载告警'};
+      });
       case 'trainDto': return this.withTrain(cmd.train, (tr) => cmdTrainDto(this, tr, cmd.on));
       case 'atoButton': return this.withTrain(cmd.train, tr => atoButton(this, tr, cmd.button, cmd.down));
       case 'reverser': return this.withTrain(cmd.train, tr => {
@@ -657,7 +671,7 @@ export class Sim {
       case 'switchBlock':
         this.sw[cmd.sw].blocked = cmd.on;
         return { ok: true, msg: `道岔 ${topo.switches[cmd.sw].name} ${cmd.on ? '封锁（不能办理经过该道岔的进路）' : '解封'}` };
-      case 'manual': return this.withTrain(cmd.train, (tr) => setManual(this, tr, cmd.mode));
+      case 'manual': return this.withTrain(cmd.train, (tr) => unattended('doorClose') ? requestUtoControl(this,tr,cmd.mode,cmd.computer??false) : setManual(this, tr, cmd.mode));
       case 'radio': return answerCall(this, cmd.call, cmd.option);
       case 'radioAuto':
         this.autoRadio = cmd.on;
@@ -767,7 +781,7 @@ export class Sim {
       for (const b of tr.body) body.push(b.link, b.from, b.to);
       const t0 = tr.tasks[0];
       return {
-        id: tr.id, dto: tr.dtoInhibit, vehicle: tr.vehicle, svc: tr.svc, trip: tr.tripNo, tripId: tr.tripId, vehicleNote: vehicleNote(tr), dest: tr.destText, link: tr.link, off: tr.off, dir: tr.dir,
+        id: tr.id, uto: tr.uto && {...tr.uto}, unattendedStatus: utoStatus(this,tr), dto: tr.dtoInhibit, vehicle: tr.vehicle, svc: tr.svc, trip: tr.tripNo, tripId: tr.tripId, vehicleNote: vehicleNote(tr), dest: tr.destText, link: tr.link, off: tr.off, dir: tr.dir,
         body, v: tr.v, level: tr.level, comm: tr.comm, mode: tr.mode, eb: tr.eb, phase: tr.phase, delay: tr.delay,
         tbStage: tr.tbStage, depotStage: tr.depotStage,
         load: tr.load, hold: tr.hold, failed: tr.failed, doors: tr.doorsOpen, doorClosing: tr.doorMotion?.kind === 'closing', doorSide: tr.doorSide, doorsAwait: tr.doorsAwait,
@@ -786,7 +800,7 @@ export class Sim {
         nextStopSkipped: t0?.k === 'stop' && t0.revenue && t0.dep !== null &&
           (tr.skipStations.has(t0.station) || this.plat[this.topo.berths[t0.berth].platform].skip),
         halt: tr.halt.code === 'NONE' ? null : {
-          code: tr.halt.code, label: HALT[tr.halt.code].label, detail: tr.halt.detail, since: tr.halt.since,
+          code: tr.halt.code, label: HALT[tr.halt.code].label, detail: tr.halt.detail.replaceAll('司机',crewLabel()), since: tr.halt.since,
           blocker: tr.halt.train >= 0 ? (() => { const o = this.trains.get(tr.halt.train); return o ? `${o.svc}-${o.tripNo}` : ''; })() : '',
         },
         stopErr: stopError(this, tr), drv: tr.manual || tr.drv.stops.length ? tr.drv : null, len: tr.len,
@@ -874,6 +888,9 @@ export function describeCommand(sim: Sim, cmd: Command): string {
     case 'authRM': return `授权RM ${tn(cmd.train)}${cmd.signal !== undefined ? ` 越过 ${topo.signals[cmd.signal].name}` : ''}`;
     case 'ebRelease': return `授权缓解紧急制动 ${tn(cmd.train)}`;
     case 'trainLevel': return `列车控制级别 ${tn(cmd.train)} → ${cmd.level === 'AUTO' ? '自动' : cmd.level}`;
+    case 'utoStep': return `随车人员操作 ${cmd.action} ${tn(cmd.train)}`;
+    case 'utoReset': return `远程复位全自动功能 ${tn(cmd.train)}`;
+    case 'dmiAck': return `确认车载告警 ${tn(cmd.train)} ${cmd.message}`;
     case 'trainDto': return `${cmd.on ? '恢复DTO' : '降级ATO'} ${tn(cmd.train)}`;
     case 'atoButton': return `${tn(cmd.train)} ATO启动${cmd.button.toUpperCase()}${cmd.down ? '按下' : '释放'}`;
     case 'reverser': return `${tn(cmd.train)} 换向器${cmd.position}`;

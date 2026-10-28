@@ -2,7 +2,7 @@
 import type { Sim } from './engine';
 import type { Block, SimConfig, VehicleRecord, YardState } from './model';
 import type { Topology } from './topology';
-import { FLEET, LINE_INFO, OPERATIONS } from '../data/current';
+import { FLEET, LINE_INFO, OPERATIONS, unattended } from '../data/current';
 import { depotMoves, yardNeed } from './timetable';
 
 export type FleetState = Pick<Sim, 'topo' | 'plan' | 'yards' | 'vehicles' | 'depotStock' | 'config' | 't'> & Pick<Sim, 'log'>;
@@ -59,7 +59,7 @@ export function chooseVehicle(vehicles: ReadonlyMap<string, VehicleRecord>, cand
 
 /** Only track heads can leave; all departures (including relief/extras) come here. */
 export function peekVehicle(sim: Pick<FleetState, 'topo' | 'vehicles' | 'yards' | 'config'>, depot: number, block?: Block): string | null {
-  return chooseVehicle(sim.vehicles, sim.yards[depot].tracks.flatMap(t => t.length ? [t[0]] : []), sim.topo, block, dayNumber(sim.config));
+  return chooseVehicle(sim.vehicles, sim.yards[depot].tracks.flatMap(t => t.length && (!unattended('wakeSleep') || sim.vehicles.get(t[0])?.uto?.stage === 'ready') ? [t[0]] : []), sim.topo, block, dayNumber(sim.config));
 }
 export function takeVehicle(sim: FleetState, depot: number, block?: Block): string | null {
   const no = peekVehicle(sim, depot, block);

@@ -8,6 +8,8 @@ export interface SimulationExtras {
   physics: { performance: { aMax: number; atoAccelMax: number; atoSpeedHysteresis: number; atoNeutralS: number; atoBrakeRampFraction: number; jerk: number; bService: number; bPlan: number; bEbGuaranteed: number; bPermit: number; bEb: number; vMax: number; vRM: number; vCouple: number; atoMargin: number; atoFastMargin: number; atpTolerance: number; resist: number }; traction: [number, number][]; levelBands: Record<number, { band: number; lower: number }> };
   energy: { mass: number; passengerMass: number; tractionEfficiency: number; regenEfficiency: number; sectionLength: number; levelLate: number };
   calibration: {
+    /** Optional explicit station dwell budget; default retains the demand model. */
+    dwellModel?: 'demand' | 'station';
     ridershipTarget: Record<Day, number>;
     peakSection: { day: Day; from: string; to: string; hours: number[][] } | null;
     profiles: Record<Day, [number, number][]>;
@@ -22,6 +24,8 @@ export interface SimulationExtras {
     river: { from: string; to: string; depth: number; grade: number } | null;
   };
   holiday: {
+    /** Explicit published dates; absence preserves the legacy calendar. */
+    calendar?: { from: string; to: string; name: string; days: number; dayOffset: number }[];
     returnRuns: FixedRun[];
     closure: { station: string; eve: number; day: number; notice: string; activeNotice: string } | null;
     surges: { station: string; from: HolidayClock; to: HolidayClock; magnitude: number; eveMagnitude?: number; when: 'always' | 'holiday' | 'return' }[];

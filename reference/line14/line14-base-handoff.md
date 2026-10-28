@@ -103,9 +103,9 @@ AGENTS.md 的硬规矩照常适用。另外：
    - core 4 条：S0102 救援两条、热备 D45 两条。
    - 可能碰 `onboard.ts`、`psd.ts`、`ats.ts`、`timetable.ts` 的加开。
    - 另外基线还有 4 条已知失败（calibration 2 条、timetable D73 2 条），放在第二部分处理。
-2. **压测根因第二轮：出入段和资源统一仲裁**（F2/F3/F4，`docs/handoff-fuzz-roots.md`）。
-   - 改 `ats.ts` 里的 `trainDesire`、`reversalGuard`、`depotEntryBlocker`、`resolveDepot`，以及出段准入 `spawnDue`。
-   - **14号线的出入段、折返、存车逻辑，尽量等这一轮落地再动。**
+2. **压测根因第二轮：出入段和资源统一仲裁**（F2/F3/F4，`docs/handoff-fuzz-roots.md`）。**已落地**：D142 第一版，`origin/claude/d142-arbitration` 的 `602a480`，2026-10-24 已合进 14号线分支。
+   - 新增 `src/sim/resourceArbitration.ts`，旧的让行规则从 `ats.ts` 删掉。规则表见 `docs/design-decisions.md` D142。
+   - 随机批、死锁种子、25 文件批次、性能对比还在补跑。补修会追加在同一分支上，接口预计不变。
 3. **第二部分：车底运用**。
    - 新模块 `src/sim/dutyPlan.ts`，不接进 `Sim`，不改 `timetable.ts`、`ats.ts`。
    - 但其中「停站基础交换时间随客流缩放」要改 `calibration.ts` 的停站模型。14号线如果复用这个停站公式，会跟着变。
@@ -119,7 +119,7 @@ AGENTS.md 的硬规矩照常适用。另外：
 | UTO 入口 | `LineData` 加必填字段 `unattended: { doorClose, turnback, wakeSleep, depotMoves }`，2号线和测试线全部显式填 false。`current.ts` 加 `unattended(task)` 判据，只认这一个；`automation` 只当显示标签。UTO 流程写成独立函数，在少数几个调用点按判据分流。 |
 | 不停车的站 | `StationData.opened?: boolean`，默认 true，表示「建成未开通」。在 timetable 生成停站的地方集中判断一次，PIS、客流、线路图都读这个结果；通过速度用现有的 `OPERATIONS.platformPassKmh`。 |
 | 首末班字段 | 暂时不改名。West 是站表第一站那一端，East 是最后一站那一端；`lastBig*`、`lastLate*` 填全程末班。改成按终点的通用表，等第二部分落地后单独做一次公共重构，2号线哈希不变。 |
-| 出入段和存车 | 列车状态机（唤醒、休眠、自动出库）现在就可以做。`ats.ts` 里出入段的进路和资源仲裁，等 F2/F3/F4 落地。正线过夜先写成 `OPERATIONS.overnightStabling` 数据，交给现有的 `overnightPlaces`、`overnightHolds`。 |
+| 出入段和存车 | 列车状态机（唤醒、休眠、自动出库）走 14号线自己的 `uto` 模块。出入段的进路和资源仲裁用 D142，已落地。14号线只靠配线数据接入，不加代码分支。仲裁的资源都从拓扑推出来，有三类：<br>• tail/siding 泊位；<br>• `transferPaths` 里 `flow='shared'` 的线；<br>• 当前任务要在该站台换端的站台。<br>折返位和存车位填在 stations 的 `turnbackBerths`/`storageBerths` 里；能整列停稳、又不压咽喉的独立尾轨，就是安全等候点。仲裁不读 `automation`，也不读 `unattended`。UTO 的唤醒、休眠、自动出库暂时不进仲裁；要进，得在 `resourceArbitration` 里加动作阶段，这是核心改动，交 2号线对话审。正线过夜写成 `OPERATIONS.overnightStabling` 数据，交给 `overnightPlaces`、`overnightHolds`。 |
 | DMI、PIS 样式 | 样式键按样式命名，不按线路命名；用一张表对应到各自的渲染模块。`src/sim/dmi.ts` 的模型新增量写成通用字段，2号线取值不变。 |
 | 无后备时的降级 | `signalling.onLoss: 'fallback' \| 'restrictedManual' \| 'wait'`：2号线填 fallback（TBTC），测试线填 wait，14号线填 restrictedManual。restrictedManual 复用 RM 模式和 `PERF.vRM`。「随车人员限速驾驶」是【假设】，由 14号线对话向用户确认。 |
 | 脚本和测试 | `gaode-compare` 加 `--line`，默认仍是 2号线、输出不变；`line-data.test` 扩到所有登记的线路。 |

@@ -2,7 +2,7 @@
 // per station, and section by section along the three last trains (each one train end to end).
 //   usage: npx tsx scripts/firstlast.ts
 import { Sim } from '../src/sim/engine';
-import { FIRST_LAST } from '../src/data/current';
+import { FIRST_LAST, SIMULATION } from '../src/data/current';
 import { readFileSync } from 'node:fs';
 import type { Plan } from '../src/sim/model';
 
@@ -12,7 +12,10 @@ const p: Plan = baselineAt > 0 ? JSON.parse(readFileSync(process.argv[baselineAt
 const tm = (s: string) => { const [h, m] = s.split(':').map(Number); return h * 3600 + m * 60; };
 const hm = (t: number) => { const minute = Math.floor((t + .001) / 60); return `${String(Math.floor(minute / 60) % 24).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`; };
 const idx = (n: string) => { const i = topo.stations.findIndex((s) => s.name === n); if (i < 0) throw new Error(n); return i; };
-const E = topo.stations.length - 1, GLL = idx('广兰路');
+const E = topo.stations.length - 1;
+const shortDestination = SIMULATION.pis.destinations.find(d => d.last === 'lastG');
+const GLL = shortDestination ? topo.stations.findIndex(s => s.id === shortDestination.station) : -1;
+const labels = SIMULATION.timetable.diagnostics?.firstLastLabels ?? [`last→${topo.stations[E].name}`, `last→${topo.stations[0].name}`, 'last→小交路'];
 const rev = p.trips.filter((t) => !t.cancelled && t.revenue);
 const boardAt = (t: (typeof rev)[number], st: number) => t.stops.find((x) => x.st === st && x.stop && !x.noBoard);
 
@@ -35,7 +38,7 @@ const cell = (v: string, ours: number | null) => {
   const d = Math.round((ours - tm(v)) / 60);
   return `${v}/${hm(ours)} ${d >= 0 ? '+' : ''}${d}`;
 };
-console.log('station | first→airport | first→蟠祥路 | last→airport | last→蟠祥路 | last→广兰路   (official/ours Δmin)');
+console.log(`station | ${labels[0].replace('last', 'first')} | ${labels[1].replace('last', 'first')} | ${labels[0]} | ${labels[1]} | ${labels[2]}   (official/ours Δmin)`);
 for (const r of FIRST_LAST) {
   const st = idx(r.station);
   console.log([r.station, cell(r.firstE, pick(st, 'DN', toE, false, st === E)), cell(r.firstW, pick(st, 'UP', toW, false, st === 0)),
@@ -44,7 +47,7 @@ for (const r of FIRST_LAST) {
 
 // section times along the last trains: official (minute-truncated, ±1) vs planned
 const lastTrip = (dir: 'DN' | 'UP', to: number) => rev.filter((t) => t.dir === dir && t.to === to).sort((a, b) => a.stops[0].dep - b.stops[0].dep).at(-1)!;
-const cols = [['last→airport', 'lastE', lastTrip('DN', E)], ['last→蟠祥路', 'lastW', lastTrip('UP', 0)], ['last→广兰路', 'lastG', lastTrip('DN', GLL)]] as const;
+const cols = [[labels[0], 'lastE', lastTrip('DN', E)], [labels[1], 'lastW', lastTrip('UP', 0)], ...(GLL >= 0 ? [[labels[2], 'lastG', lastTrip('DN', GLL)] as const] : [])] as const;
 for (const [name, key, trip] of cols) {
   const rows = FIRST_LAST.filter((r) => r[key] && trip.stops.some((x) => x.st === idx(r.station)));
   const ord = trip.dir === 'DN' ? rows : [...rows].reverse();

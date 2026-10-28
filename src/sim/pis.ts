@@ -5,7 +5,7 @@
  */
 import type { Sim } from './engine';
 import type { PisData, PisRow, TrackDir } from './model';
-import { STATIONS, LINE_INFO, SIMULATION } from '../data/current';
+import { STATIONS, LINE_INFO, SIMULATION, stationOpened } from '../data/current';
 const RULES = SIMULATION.pis;
 import { FIRST_LAST } from '../data/current';
 import { PERF } from './dynamics';
@@ -77,6 +77,7 @@ export function timeToStop(v: number, d: number): number {
 export function computePis(sim: Sim, station: number): PisData {
   const { topo } = sim;
   const out: PisData = { station, DN: [], UP: [], notice: '' };
+  if (!stationOpened(station)) return { ...out, notice: '本站未开通，列车通过不停车', skip: { DN: true, UP: true } };
   const listed = new Set<number>();
   for (const tr of sim.trainList) {
     if (tr.failed && tr.phase !== 'dwell') continue;
@@ -106,7 +107,10 @@ export function computePis(sim: Sim, station: number): PisData {
       // a train starting here waits for its planned departure
       if (status === 'eta' && t.dep !== null && t.arr === null) eta = Math.max(eta, t.dep - 60);
       listed.add(t.trip);
-      out[track].push({ dest, ...(t.noBoard ? { noBoard: true } : {}), destSt: end, dwellRemaining: i === 0 && tr.phase === 'dwell' && t.dep !== null ? Math.max(0, tr.dwellUntil - sim.t) : undefined, eta: Math.max(0, eta - sim.t), status, trip: trip?.no ?? tr.tripNo, load: Math.min(1.3, tr.load / LINE_INFO.capacity) });
+      // 【假设】客流模型只有全列总量；逐节按等容量、均匀分布展示，不伪造节间差异。
+      const load = Math.min(1.3, tr.load / LINE_INFO.capacity);
+      out[track].push({ dest, ...(t.noBoard ? { noBoard: true } : {}), destSt: end, dwellRemaining: i === 0 && tr.phase === 'dwell' && t.dep !== null ? Math.max(0, tr.dwellUntil - sim.t) : undefined, eta: Math.max(0, eta - sim.t), status, trip: trip?.no ?? tr.tripNo, load,
+        ...(LINE_INFO.cars ? { carLoads: Array(LINE_INFO.cars).fill(load) } : {}) });
       break;
     }
   }
@@ -131,7 +135,8 @@ export function computePis(sim: Sim, station: number): PisData {
     const expected = first.dep + (vehicle ? Math.max(0, vehicle.delay) : 0);
     const end = serviceEnd(sim.plan, trip);
     out[trip.dir].push({ dest: STATIONS[end].name, destSt: end, eta: Math.max(0, expected - sim.t),
-      status: 'eta', trip: trip.no, load: vehicle ? Math.min(1.3, vehicle.load/LINE_INFO.capacity) : 0 });
+      status: 'eta', trip: trip.no, load: vehicle ? Math.min(1.3, vehicle.load/LINE_INFO.capacity) : 0,
+      ...(LINE_INFO.cars ? { carLoads: Array(LINE_INFO.cars).fill(vehicle ? Math.min(1.3, vehicle.load / LINE_INFO.capacity) : 0) } : {}) });
   }
   for (const k of ['DN', 'UP'] as const) out[k] = out[k].sort((a, b) => a.eta - b.eta).slice(0, 3);
   // per platform: passed by every train (跳停 / 封站), and the next and the last

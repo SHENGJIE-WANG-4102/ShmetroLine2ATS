@@ -15,6 +15,8 @@
 import { h, clear } from './dom';
 import type { PisData, PisRow, TrackDir } from '../sim/model';
 import { LINE, STATIONS, STATION_EN, DIRECTIONS } from '../data/current';
+import { renderColumnPis } from './pisColumn';
+import { renderBannerPis } from './pisBanner';
 import { advancePisCycle, formatPisCountdown, selectPisFirstLast, PIS_TIMING, type PisCycleState, type PisFirstLast } from '../sim/pis';
 import metroLogo from './assets/metro-logo.png';
 import { stationRange, downstreamTerminal } from '../sim/topology';
@@ -287,7 +289,7 @@ const boards = new WeakMap<HTMLElement, { key: string; list: Board[]; timer: num
  * Render (or update) the PIS boards for a station — both platforms, or only
  * `track` — into `el`.
  */
-export function renderPis(el: HTMLElement, pis: PisData | null, t: number, dateLabel = '', track?: TrackDir) {
+function renderLandscapePis(el: HTMLElement, pis: PisData | null, t: number, dateLabel = '', track?: TrackDir) {
   if (!pis) { const cur = boards.get(el); if (cur) clearInterval(cur.timer); boards.delete(el); clear(el); el.append(h('div', { class: 'hint' }, '等待数据…')); return; }
   const key = `${pis.station}:${track ?? '*'}`;
   let cur = boards.get(el);
@@ -314,4 +316,16 @@ export function renderPis(el: HTMLElement, pis: PisData | null, t: number, dateL
     }
     update(b);
   }
+}
+
+const PIS_STYLES = { landscape: renderLandscapePis, column: renderColumnPis, banner: renderBannerPis };
+const shown = new WeakMap<HTMLElement, keyof typeof PIS_STYLES>();
+
+/** Each station may carry its own hardware; switching hardware stops the previous board's timer first. */
+export function renderPis(el: HTMLElement, pis: PisData | null, t: number, dateLabel = '', track?: TrackDir) {
+  const style = pis ? STATIONS[pis.station]?.pisStyle ?? LINE.ui.pisStyle ?? 'landscape' : shown.get(el) ?? LINE.ui.pisStyle ?? 'landscape';
+  const prev = shown.get(el);
+  if (prev && prev !== style) PIS_STYLES[prev](el, null, 0);
+  shown.set(el, style);
+  PIS_STYLES[style](el, pis, t, dateLabel, track);
 }

@@ -3894,3 +3894,64 @@ C合同变化是可见动作边界的已批准变化：front-turn可先单phase�
 - 车是停着降级的，之后没再动过，车载定位就没丢。ZC 恢复、通信正常、下一站区域是 CBTC 时，原地升回 CBTC（`Train.locKept`）。车在 TBTC 下一动，`locKept` 就清掉，还是按原规则在重定位点升级。【假设】现实 ZC 接受定位未丢的车重新注册。
 
 改动的公共文件：`src/sim/ats.ts`（反向进路判断）、`src/sim/onboard.ts`（`locKept`、`atRelocalisationBeacon`）、`src/sim/model.ts`。测试见 `tests/tbtc-reverse-hold.test.ts`。两条线两种日型的 plan-hash 和 D145 干净源一致。
+## D??? 14号线共用接口与能力扩展（2026-10-24，编号送审时分配）
+
+用户决定：14号线数据独立，压测沿用两日/天气/随机调度的验证类型，场景和能力从本线数据生成；不照搬2号线逐站数据、运行图、故障池或测试预期。线路假设完整列在 `docs/design-decisions-line14.md` L14-01～L14-05，配线逐站6倍复核。以下仅列公共代码，14号线自身文件另在其文档列出。
+
+第一组（数据能力、开通状态、拓扑、固定客运请求与脚本）：`src/data/types.ts`、`current.ts`、`registry.ts`、`simulation.ts`、`simulationExtras.ts`、`ui.ts`；`src/data/lines/line2/index.ts`、`line2.ts`、`simulation.ts` 只补显式缺省值或原诊断常量，`src/data/lines/test/index.ts` 补显式能力；`src/sim/topology.ts`、新 `routeTable.ts`（原ATS构建器原样迁移、ATS兼容重导出，热备复用同一有向路径表）、`calendar.ts`、`calibration.ts`、`timetable.ts`；`scripts/firstlast.ts`、`gaode-compare.ts`；`tests/line-data.test.ts`、新 `tests/depot-stock-prefix.test.ts`。营业站派生一次，跳停/PIS/客流共用；未建模施工区段不作候选。双端中间线复用既有连接器，一个实车停位的两朝向不重复增加容量。大小交路、统一走行余量和站表停站只来自数据，不改单趟钟点。修复已配对到达重复接续而丢失原服务、未选定位候选误计占用、热备固定来源未纳入库存分配，详见L14-03。
+
+第二组（UTO状态与真实人工操作）：新 `src/sim/uto.ts`、`utoActions.ts`；`src/sim/model.ts`、`state.ts`、`operatingDay.ts`、`engine.ts`、`commands.ts`、`ats.ts`、`onboard.ts`、`movement.ts`、`faults.ts`、`halt.ts`、`radio.ts`、`scenario.ts`、`vehicle.ts`、`yard.ts`；`scripts/fuzz-day.ts`、`tests/fuzz-roots.test.ts`。按四个unattended能力分流，2号线/测试线关闭，不按线路ID或automation标签分支。ATO原保护、人工手柄、车门、退行继续共用。新增跨日时钟全部搬运，随机接管以物理车为单位。压测按本线实际能力选择操作/故障/天气，UTO另核查接管步骤、故障ATPM、复位、恢复FAM及拒绝乱序；N/A明确列出，完整性检查/收车时限不变。
+
+第三组（DMI/PIS及可视状态）：`src/sim/dmi.ts`、`pis.ts`；`src/ui/app.ts`、`cmdpanel.ts`、`dmi.ts`、`pisview.ts`、`side.ts`、`tooltip.ts`、`trackview.ts`、`yardview.ts`；新 `src/ui/dmiStatusGrid.ts`、`drivingMode.ts`、`pisColumn.ts`、`pisColumn.css`、`trainNumber.ts`、`utoControls.ts`。新样式通过渲染表分派，旧样式保持缺省；8节拥挤度均分总载客率为明确假设。告警确认、车门、接管/复位按钮均走sim.command，浏览器实际走完11条操作，最终恢复FAM。
+
+任务的唯一等待点：D142资源仲裁尚未实现；比较本工作树基点与最新 `claude/nifty-faraday-mdr3ug` 的src/scripts/tests没有差异，新增仅文档，未制造合并提交。严守不改 `trainDesire`、`reversalGuard`、`depotEntryBlocker`、`resolveDepot`、`spawnDue`。目前不是整线可玩版本，静态与动态验收结果以L14-06最终记录为准；失败不作已知豁免。
+
+公共改动各组共同基线结果（同一最终冻结源码）：
+
+| 组 | 2号线/测试线基线 | 额外验证 |
+|---|---|---|
+| 第一组：数据、配线、运行图、脚本 | 两日两线8个trips/blocks哈希全原值；2号线validate-plan两日/firstlast/gaode四份输出逐字节原值；test-line3项过 | 14两日0error，工作日蓝天可选热备仅1条明确warning；真实有向泊位路径/库存回归过 |
+| 第二组：UTO状态与操作 | 同上；随机种子2号线142031、测试线142032与改前的操作序列/等待链完全一致，同样失败，未豁免 | UTO21项；跨日/回放/共故障终点退出均过，压力结果详见L14-06 |
+| 第三组：DMI/PIS/ATS显示 | 同上；旧DMI/PIS/operating-day等公共回归62项过 | 新样式/手机/长站名/真实按钮与教员台验证，JS错误0 |
+
+修前热备路径缺陷和工作日蓝天可选未开行的最终处理见L14-03/L14-06；三处必需热备、库存/90秒间隔/泊位/完整性检查均保留。新routeTable模块只复用原ATS构建器，不新增第二套寻路。最终短测13文件112项通过，类型检查/构建通过。2号线及测试线随机压测仍未通过，其失败现场与改前逐项相同，不能表述为0完整性违例通过。
+
+### D142合并后的第二轮补充（2026-10-24）
+
+本轮基线为合并提交 `a2630b3`，包含 `602a480` 与第一轮 `f061a62`；上文“尚未实现/唯一等待点”是第一轮历史状态。本轮不自行拉取、合并或提交。第二组仅追加公共文件 `src/sim/uto.ts` 的两处连锁修复：人工到站后申请模式转换时，电脑随车人员先经原 `sim.command` 车门入口完成未办理的开门，再关门锁紧；RM退行在原控制目标内停稳后交还既有 `manualArrival`，避免再次请求反向移动造成假过标和全天停车。未自行清除过标、停车时限或退行许可，未修改共用到站容差。
+
+新增回归在 `tests/line14-uto.test.ts`：电脑恢复AUTO/CM/RM、玩家真实两次门命令及恢复步骤、冲标退行后的关门与恢复FAM，25项全过。第一组本轮没有新增公共改动；封浜尾轨有效长度只改14号线数据，见L14-07。`resourceArbitration.ts`、`routeTable.ts`、`engine.ts`、`state.ts`、`topology.ts` 均与合并基线逐文件SHA256相同，未重造资源判断、恢复旧让行规则或新增仲裁阶段。
+
+首个修后冻结轮181个src/scripts文件与当时工作树逐文件SHA256一致。类型检查、构建及13文件138项短测通过；2号线/测试线两日哈希、2号线validate-plan两日/firstlast/gaode与合并基线逐字节相同，14号线静态输出也相同。core/features按原测试跑过：四条断言红测“合并前已有，归D142”；另外两条冷预热超时在生成原有预热点后，按原时限单独重跑均通过，未改预期、超时或完整性检查。第二轮六种子最终结果和核心问题移交见L14-08及 `work/line14-d142-issues.md`，不把核心问题登记当作通过。
+
+该冻结轮140244暴露另一条旧公共命令缺陷，第二组再补 `src/sim/ats.ts` 的 `cmdTurnback` 两行和新 `tests/line14-turnback-command.test.ts`：人工折返只按下一任务dir选接续，误把UP原地回段定位30→30改为UP25→30的客运任务，目标在实际运行后方。仅增加现有 `ahead(back,station,nextTrip.to)`，不可接续时走原无后续服务回段分支；不另设empty禁接续规则、不拒绝合法折返，也不新改运营时刻。所碰旧序号方向比较改为同义的ahead。两项新测试实际行驶换端并回段、保留合法客运续接，UTO联合27/27；独立复审通过。AST排除该单一函数后，整个ats文件与合并基线逐字相同（仅规范化换行），见 `work/line14-d142-ats-boundary.json`；D142所有函数和五条规则仍未改。追加修复后的独立交付冻结源、全回归及六种子结果以L14-08为准。
+
+第二轮最终：14文件140项短测全过，core/features 127过/原4红；另增测dispatcher人工折返1红，在a2630b3独立预热/原样选测同样红，未深入归因，不能并作原四条或说已修。类型/构建、两种日型运行图静态输出及8个2号线/测试线哈希均守住。六种子3过/3失败：14周末140243/140244、2号线142031完整两日0违例；14工作日140241/140242及测试线142032仍受I01/I03/I04阻断，I02保留修前现场，共4条核心问题移交。2号线257条、测试线191条actions流式哈希与合并基线相同。完整比较/覆盖/限制在L14-08和work/line14-d142-delivery，不称全部验收通过。生产改动只在line14数据、uto.ts、ats.ts单一命令；相关3测试及两份决定记录列在L14-08，未改handoff或用户已定口径。
+
+### 第三轮：本线原声与界面侧可选时序（2026-10-25）
+
+本组本线数据新增 `src/data/lines/line14/onboardbank.ts`、`soundbank.ts` 并在 `index.ts` 接入，新增 `tests/line14-audio.test.ts`、`/public/sounds/line14/`忽略规则及两份现场资料；12原音成片中8下一站+3到站接入，1安全片只抽听/归档。武定站名按用户决定依上下站/画面推断、标low，不合成缺字；其余中置信，UP/缺站/错误终点门侧留空。只复用D71通用切点/归一化数值，不借其他线路声音；未改公共音频scripts或2号线渲染路径。门侧复用emptyAudio现有绑定函数，不另抄判据。
+
+同期第一组接口新增 `src/data/types.ts` 的可选 `next.measuredDelay`，第三组界面侧修改 `src/ui/onboardaudio.ts`、`dooraudio.ts` 及 `tests/stationaudio.test.ts`，由对应分工实施：显式标实测才逐片延迟，否则保留线路均值，2号线无标志所以原均值不变；门音空take使用既有兜底；尚未开播的pending按当前槽位重核，终点/门侧错配静默，原3秒窗内恢复可带偏移补播、超窗丢弃，已开播冻结不中断不变。这些不是本线音库擅自改公共播放器，也没有改行车/仲裁规则。统一送审需连同这3个公共源文件与公共测试列出。
+
+本轮只读实测/LP与相位分析没有产生可接受的停站/统一富余更改：任格官方锚点不得恶化的边界下，五实测停站被锁定，未搬动未测站补偿、未改单趟/首末班/网格相位。两处PIS仍晚167.7/159.2秒，完整冲突与不确定性在L14-09及同日现场资料，不称已校准成功。2号线与14号线两日trips/blocks八哈希不变，14 validate/firstlast结果不变；类型/构建、11文件189项（含全部line14、127项原声音回归、两日测试线）通过。未动src/sim、RouteTable、官方数据或公共scripts，未提交推送。
+
+#### 第四轮：数据锚定非高峰参考波次
+
+用户决定将14号线双休日日间7分钟网格按PIS实拍锚定，详见L14-10。公共`src/sim/timetable.ts`扩展既有service.peaks/peakStart/streamAt/nextSlot到显式非高峰模板；旧高峰保持90秒join，新非高峰以完整headway并入，波次数据只在本线`simulation.ts`。公共`src/data/simulation.ts`仅补接口注释，没有新增并行相位系统、线路名/日型分支。未改公共scripts、UI、工作日、物理模型、D142或RouteTable。
+
+大世界参考锚点DN07:02:09、UP07:00:35.9；实际首班并入下一格，间隔672.332/681.090秒。六PIS残差0/0/0、0/+11/+11秒。夜间经任务作者明确仅保留480→720规则，逐车自然承接新相位，不添加旧夜间锚点。两日型各120官方锚点逐格原样，双休日315车次/25列/出入段22/22均不变；每方向日间少1、夜间多1，不做排后取消。
+
+类型/构建、11文件191项通过，含未改预期的官方窗口车数与测试线两日/天气回归。2号线、测试线两日trips/blocks八哈希及14工作日两哈希不变；14双休日两哈希因本轮相位及自然周转变化，详见L14-10和work/line14-r4。新增两项本线测试守六PIS误差及早间并入/日间网格；未放宽检查。只改工作区，不提交推送。
+
+#### 第三轮第5条补审：门音部分take与待确认试听
+
+用户要求完整中英连续报站及5开/5关门试听，先听后接。本组新增本线`doorbank.ts`10个low候选，未接index/onboardbank；26条完整原窗只在work/line14-listen，现运行音库及物理预算原样，L14-09/现场音频资料更正原“无合格门音”的漏检结论。新增line14-audio测试保护5开/5关、缺窗不造锁闭点、同源关门不重复叠放及未接线状态。
+
+界面分工同期另改4个公共文件：`src/data/types.ts`允许take省略open/warn/close/lockedAt、可选DOOR_SELECTION；`src/data/audio/doorbank.ts`透传选择策略；`src/ui/dooraudio.ts`按车次/站/事件确定性随机选同一take的提示/动作；`tests/stationaudio.test.ts`补随机/缺窗回归。默认primary保留，2号线未设random。这4文件由界面分工实现，本组未覆盖；只在用户听完确认后给14号线启用random并接线。fallback仍只兜提示音，缺机械声不补假机械声。
+
+最终短测11文件193/193通过（95.77秒），类型/构建通过（6.84秒）；三线路两日型12个trips/blocks哈希均与0016d2b基线相同。未改旧音频数量预期，新增候选测试区分已接入12文件与离线试听。媒体/来源边界见work/line14-door-supplement的审计/静态结果。未动sim、运行图、官方数据、公共scripts，未提交推送。
+
+2026-10-26用户试听确认后，本线index/onboardbank/soundbank/doorbank接入16整段PA和10门音，另保留独立安全档案1。语音low不抬，门音按用户确认升medium/random。所有26条新媒体逐字节复制试听版，旧半截同名替换；新起点重算时序，三未测到站经000333核定47秒【假设】并显式不标实测。公共界面分工另改`src/ui/onboardaudio.ts`及stationaudio测试：长next/其他speech压住arrival时先排队、结束后整条从头播放，仍run/停车前，解决曹杨完整片约5.5秒潜在交叠，不剪句或重叠。以上公共文件由界面分工实现，本组只改本线接线与测试/记录；旧primary、2号线默认及物理预算保留。
+
+接线后最终11文件199/199通过（87.49秒），类型/构建通过（6.37秒），三线路两日型12哈希与0016d2b不变；日志独立在work/line14-door-supplement/connected-validation，不以先前193项试听阶段绿代替当前源验证。新增真实曹杨完整长片串行、实际随机取多个take、同key确定和缺段take不误合成等回归；数量/语言预期按用户确认更新，严格匹配和缺文件反例保留。

@@ -119,7 +119,8 @@ export function vehicleTick(sim: Sim) {
     const f = sim.faults.find((x) => x.id === r.fault);
     if (!tr || !f || f.repaired) continue;
     // healthy again: no reason left to come off at the terminus
-    const keep = tr.withdrawAtEnd && (tr.vfault || tr.vCap < Infinity || tr.doorsCut > 0);
+    const failedRemoteReset = tr.uto?.stage === 'manual' && tr.uto.resetSuccess === false;
+    const keep = tr.withdrawAtEnd && (tr.vfault || tr.vCap < Infinity || tr.doorsCut > 0 || failedRemoteReset);
     sim.log('C', '列车', `列车 ${trainLabel(tr)} 牵引系统复位成功，牵引单元恢复${tr.withdrawAtEnd && !keep ? '，取消终点站下线' : ''}`, { train: tr.id });
     if (!keep) tr.withdrawAtEnd = false;
     f.repairAt = sim.t;

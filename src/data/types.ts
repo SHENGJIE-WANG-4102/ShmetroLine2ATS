@@ -1,5 +1,5 @@
 import type { SimulationData } from './simulation';
-import type { LineUiData } from './ui';
+import type { LineUiData, PisStyle } from './ui';
 
 /** Shared schemas. Values and per-line evidence live under data/lines/. */
 export interface SourceRef {
@@ -9,7 +9,10 @@ export interface SourceRef {
     used: string;
 }
 export interface StationData {
+    opened?: boolean;
     pisLayout?: 'classic' | 'wide';
+    /** this station's PIS hardware when it differs from the line's `ui.pisStyle` */
+    pisStyle?: PisStyle;
     id: string;
     name: string;
     dmiName?: string;
@@ -31,6 +34,7 @@ export interface LeadDef {
     flow?: 'in' | 'out';
 }
 export interface SidingDef {
+    purpose?: 'interline';
     id: string;
     name: string;
     station: number;
@@ -48,6 +52,7 @@ export interface SidingDef {
 }
 export type SidingLane = 'mid' | 'midUP' | 'midDN' | 'outUP' | 'outDN';
 export interface PairStubDef {
+    link?: { main: 'UP' | 'DN'; at: number };
     id: string;
     name: string;
     length: number;
@@ -109,6 +114,7 @@ export interface CoreLineData {
   STATIONS: StationData[];
   STATION_EN: Record<string, string>;
   LINE_INFO: {
+    cars?: number;
     name: string;
     shortName: string;
     color: number;
@@ -172,6 +178,16 @@ export interface CoreLineData {
     tail: number;
 };
   OPERATIONS: {
+    /** Per approach, independent of weather; zero preserves the existing adhesion model. */
+    atoRandomOverrunProbability: number;
+    uto?: {
+      crewLabel: string; doorWarningS: number; turnbackS: number;
+      wakeLeadS: number; powerS: number; pantographS: number; selfTestS: number;
+      clearS: number; washEvery: number; washS: number;
+      takeoverStepS: number[]; randomTakeoversPerDay: number; randomTakeoverFromS: number; randomTakeoverSpacingS: number; manualDurationS: number;
+      resetS: number; resetSuccess: number;
+    };
+
     maintenance: {
         dailyLimit: number;
         monthlyPeriod: number;
@@ -226,6 +242,8 @@ export interface CoreLineData {
         origin?: string;
         track?: string;
         nightAfter?: number;
+        /** Store by a separate empty move after serving the requested terminal. */
+        preserveService?: boolean;
     }[];
     hotStandby: {
         station: string;
@@ -233,6 +251,10 @@ export interface CoreLineData {
         berth: number;
         depot?: string;
         incoming?: "UP" | "DN";
+        /** Other real yard sources, in preference order, when the default source cannot supply this standby. */
+        alternatives?: { depot: string; incoming: "UP" | "DN" }[];
+          /** May remain unassigned, with a reported reason, when no safe slot/source exists. */
+          optional?: boolean;
     }[];
     platformPassKmh: number;
     platformStopKmh: number;
@@ -429,6 +451,8 @@ export interface OnboardAnnouncement {
         clipId: string;
         phraseAt: number;
         delayS: number | null;
+        /** delayS was measured for this clip and replaces the line's ONBOARD_NEXT_DELAY_S */
+        measuredDelay?: boolean;
         confidence: SoundClip['confidence'];
     };
     arrived?: {
@@ -487,26 +511,29 @@ export interface DoorbankData {
     readonly warningToMotionS: number;
     readonly motionToLockedS: number;
 };
+  /** A part a take never recorded is omitted, not given an invented window; its clip is simply absent from DOOR_BANK. */
   DOOR_TAKES: readonly ({
     readonly id: string;
     readonly station: string;
     readonly primary: true;
-    readonly open: readonly [number, number];
-    readonly warn: readonly [number, number];
-    readonly close: readonly [number, number];
-    readonly lockedAt: number;
+    readonly open?: readonly [number, number];
+    readonly warn?: readonly [number, number];
+    readonly close?: readonly [number, number];
+    readonly lockedAt?: number;
     readonly confidence: string;
 } | {
     readonly id: string;
     readonly station: string;
     readonly primary: false;
-    readonly open: readonly [number, number];
-    readonly warn: readonly [number, number];
-    readonly close: readonly [number, number];
-    readonly lockedAt: number;
+    readonly open?: readonly [number, number];
+    readonly warn?: readonly [number, number];
+    readonly close?: readonly [number, number];
+    readonly lockedAt?: number;
     readonly confidence: string;
 })[];
   DOOR_BANK: readonly SoundClip[];
+  /** 'random': every eligible take plays, picked per trip, station and event; default plays the primary take only. */
+  DOOR_SELECTION?: 'primary' | 'random';
 }
 export interface VvvfClip {
     file: string;
@@ -711,7 +738,8 @@ export interface LineData {
   /** Stable public selector; local station/depot/trip ids are scoped by it. */
   id: string;
   branding: { title: string; shortName: string; color: string; badgeUrl: string; logoText: string };
-  signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[] };
+  unattended: { doorClose: boolean; turnback: boolean; wakeSleep: boolean; depotMoves: boolean };
+  signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[]; onLoss: 'fallback' | 'restrictedManual' | 'wait' };
   automation: 'DTO' | 'UTO' | 'ATO';
   core: CoreLineData;
   firstLast: FirstLastData;

@@ -4,7 +4,7 @@
 import type { Sim } from './engine';
 import { injectTraction, injectDoor, injectBrake, clearVehicleFault } from './vehicle';
 import type { Fault, FaultKind, Command } from './model';
-import { STATIONS, supportsSignalSystem } from '../data/current';
+import { STATIONS, supportsSignalSystem, unattended } from '../data/current';
 import { cancelRoute, committedTrain } from './interlocking';
 import { withdrawAuthority } from './movement';
 import { failTrain, recoverTrain, trainLabel, rescueBlockedByConsist } from './ats';
@@ -61,6 +61,7 @@ export function updateFaultLifecycle(sim: Sim) {
 
 export const FAULT_LABELS: Record<FaultKind, string> = {
   trainComm: '列车车地通信中断',
+  trainUto: '车载全自动功能故障',
   trainDto: '车载DTO功能故障',
   zcFail: '区域控制器(ZC)故障',
   axle: '计轴区段故障占用',
@@ -81,6 +82,8 @@ export const FAULT_LABELS: Record<FaultKind, string> = {
 export const SURGE_MAX = 20;
 
 export function injectFault(sim: Sim, kind: FaultKind, target: number, duration: number, param?: number, recoverable?: boolean): { ok: boolean; msg: string } {
+  if(kind==='trainUto'&&(!unattended('doorClose')||!sim.trains.has(target)))return {ok:false,msg:'列车无全自动接管能力'};
+  if(kind==='trainDto'&&unattended('doorClose'))return {ok:false,msg:'全自动线路请使用车载全自动功能故障'};
   const { topo } = sim;
   const repairAt = duration > 0 ? sim.t + duration : Infinity;
   const f: Fault = { id: sim.nextFaultId++, kind, target, since: sim.t, repairAt, repaired: false, text: '', param, recoverable, stage: 'effect', stageAt: sim.t };
@@ -103,6 +106,14 @@ export function injectFault(sim: Sim, kind: FaultKind, target: number, duration:
       tr.comm = false;
       f.text = `列车 ${trainLabel(tr)}（${tr.vehicle}）车地通信中断`;
       sim.log('A', '信号', `${f.text}，ZC失去列车位置，以区段占用防护`, { key: `comm-${tr.id}` });
+      break;
+    }
+    case 'trainUto': {
+      const tr=sim.trains.get(target);
+      if(!tr||!unattended('doorClose'))return {ok:false,msg:'列车无全自动接管能力'};
+      tr.dtoInhibit=FAULT_LABELS.trainUto;
+      f.text=`列车 ${trainLabel(tr)}（${tr.vehicle}）车载全自动功能故障`;
+      sim.log('B','列车',`${f.text}：停稳后随车人员接管 ATPM`,{key:`uto-${tr.id}`,train:tr.id});
       break;
     }
     case 'trainDto': {
@@ -285,6 +296,12 @@ export function faultsTick(sim: Sim) {
           sim.log('C', '信号', `列车 ${trainLabel(tr)} 车地通信恢复，将升级至CBTC`);
         }
         sim.clearAlarm(`comm-${f.target}`);
+        break;
+      }
+      case 'trainUto': {
+        const tr=sim.trains.get(f.target);
+        if(tr&&tr.dtoInhibit===FAULT_LABELS.trainUto)tr.dtoInhibit='';
+        sim.clearAlarm(`uto-${f.target}`);
         break;
       }
       case 'trainDto': {

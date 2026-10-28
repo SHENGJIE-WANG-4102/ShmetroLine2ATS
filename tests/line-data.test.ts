@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LINE_2 } from '../src/data/lines/line2';
-import { getGroup, getLine, scopedId, visibleLineGroups } from '../src/data/registry';
+import { LINE_GROUPS, getGroup, getLine, scopedId, visibleLineGroups } from '../src/data/registry';
 import { resolveGroupId } from '../src/data/startup';
 
 const read = (file: string) => new TextDecoder().decode(readFileSync(file));
@@ -25,9 +25,10 @@ describe('line data boundary', () => {
   });
 
   it('keeps station literals inside line data in every production dependency', () => {
-    const codes = new Set([...LINE_2.core.STATIONS.map(s => s.id), ...LINE_2.core.LAYOUT.depots.map(d => d.id)]);
-    const names = [...LINE_2.core.STATIONS.flatMap(s => [s.name, s.formerName, s.dmiName].filter((n): n is string => !!n)),
-      ...LINE_2.core.LAYOUT.depots.flatMap(d => [d.name, d.short])];
+    const lines = LINE_GROUPS.flatMap(g => g.lines);
+    const codes = new Set(lines.flatMap(line => [...line.core.STATIONS.map(s => s.id), ...line.core.LAYOUT.depots.map(d => d.id)]));
+    const names = lines.flatMap(line => [...line.core.STATIONS.flatMap(s => [s.name, s.formerName, s.dmiName].filter((n): n is string => !!n)),
+      ...line.core.LAYOUT.depots.flatMap(d => [d.name, d.short])]);
     const queue = ['src/main.ts', 'src/sim/worker.ts'], seen = new Set<string>(), violations: string[] = [];
     // Walk the actual application graph: unrelated, unconnected prototypes are not application code.
     while (queue.length) {

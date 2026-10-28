@@ -1,3 +1,5 @@
+import { unattended } from '../data/current';
+import { utoBusy, utoVehicleWait, utoDoorWarningReady, beginUtoReturn, requestUtoControl, crewLabel, computerCrew } from './uto';
 import { PERF } from './dynamics';
 import { doorCloseHold, departureHold, DOOR_CUT_DWELL } from './vehicle';
 /**
@@ -10,25 +12,25 @@ import { cancelTrip, type Block, type DepotTask, type StopTask, type Task, type 
 import type { Dir, Topology } from './topology';
 import { nextLink, travelDirection, ahead } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, signalPassed, type CmdResult } from './interlocking';
-import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission } from './movement';
+import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission, retreatRouteBlocker } from './movement';
 import { takeVehicle, putVehicle, peekVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell, simulatedAmDriver, driverTurnbackKind } from './onboard';
 import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
-import { blockTasks, tripTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, appendBlockEndTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces } from './timetable';
+import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/current';
 import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
 import { dmiNote } from './dmi';
 import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRange } from './calibration';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
-import { newHalt, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
+import { newHalt, rootCause, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
 import { standsAt } from './operatingDay';
 import { standbyTakeover, predictedLateness } from './standby';
 import { recordTransition } from './invariants';
 import { TURNBACK } from './fsm';
 import { canStopBeforeSignal } from './protection';
 import { arbitrateResources, resourceAllocation, routeResourceBlocker, adoptSpawnResources, resourceRouteReserved, resourceWaitDetail, sourceReadyAt, routeNeedsResourceProtection, resourceAdmissionBlocked } from './resourceArbitration';
-import { walkRouteToBerth, type RouteTable, type TaskPathVisitor } from './routePath';
+import { walkRouteToBerth, type TaskPathVisitor } from './routePath';
 export type { RouteTable, TaskPathVisitor } from './routePath';
 
 /** Every actual turnback stage is observed at the event, including atomic platform turns. */
@@ -39,38 +41,7 @@ function setTurnbackStage(sim: Sim, tr: Train, next: Train['tbStage']) {
 
 // ---------------------------------------------------------------- route table
 
-export function buildRouteTable(topo: Topology): RouteTable {
-  const next = new Map<number, Int32Array>();
-  const dist = new Map<number, Float64Array>();
-  const nS = topo.signals.length;
-  const cost = (rid: number) => {
-    const r = topo.routes[rid];
-    return r.length + (r.wrongDir ? 6000 : 0) + (r.diverging ? 250 : 0);
-  };
-  for (const b of topo.berths) {
-    const d = new Float64Array(nS).fill(Infinity);
-    const nx = new Int32Array(nS).fill(-1);
-    for (const r of topo.routes) {
-      if (r.berths.includes(b.id)) {
-        const c = cost(r.id) * 0.5;
-        if (c < d[r.start]) { d[r.start] = c; nx[r.start] = r.id; }
-      }
-    }
-    // Bellman-Ford style relaxation (graph is small)
-    for (let iter = 0; iter < 60; iter++) {
-      let changed = false;
-      for (const r of topo.routes) {
-        if (r.end < 0 || d[r.end] === Infinity) continue;
-        const c = cost(r.id) + d[r.end];
-        if (c < d[r.start] - 1e-6) { d[r.start] = c; nx[r.start] = r.id; changed = true; }
-      }
-      if (!changed) break;
-    }
-    next.set(b.id, nx);
-    dist.set(b.id, d);
-  }
-  return { next, dist };
-}
+export { buildRouteTable } from './routeTable';
 
 /** Physical distance, separate from the weighted route-choice cost. */
 export function distanceToBerth(sim: Sim, sig: number, goal: number, visit?: TaskPathVisitor): number {
@@ -641,7 +612,14 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
       const p=sim.topo.berths[stop.berth].platform;
       return p===platform||sim.topo.platforms[p]?.pool===platform;
     })
-    ||occupants.some(other=>other.failed||other.hold||other.phase==='run'&&other.v<.05&&!other.pendingDeparture);
+    ||occupants.some(other=>{
+      if(other.failed||other.hold)return true;
+      if(other.phase!=='run'||other.v>=.05||other.pendingDeparture)return false;
+      const cause=rootCause(sim,other,true);
+      // A pure closed traffic dependency is not an independent obstruction
+      // which may activate capacity against itself. Unknown/acyclic stays.
+      return !cause.cycle||cause.external!==false;
+    });
   if(!blocked)return;
   if (occupants.length >= rule.limit) return { train: occupants[0].id,
     detail: `${sim.topo.stations[st.station].name}—${sim.topo.stations[adjacent].name} ${occupants.length}/${rule.limit}列` };
@@ -658,7 +636,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
   const { topo } = sim;
   const task = tr.tasks[0];
   if (tr.tbStage === 'manual' && tr.level === 'CBTC') { setTurnbackStage(sim, tr, 'depart'); tr.tbExitSig = -1; }
-  if (tr.failed) return;
+  if (tr.failed || utoVehicleWait(sim,tr) || utoBusy(tr) && !(tr.uto?.stage==='doors'&&tr.doorsAwait)) return;
   if (tr.depotStage === 'out' && topo.links[tr.link].track !== 'DEP') tr.depotStage = 'none';
   if (tr.depotStage === 'none' && task?.k === 'depot' && topo.links[tr.link].track === 'DEP') tr.depotStage = 'in';
   if (tr.tbStage === 'none' && task?.k === 'reverse') setTurnbackStage(sim, tr, 'arrive');
@@ -683,7 +661,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     }
     const cur = task.k === 'reverse' || (task.k === 'stable' && task.berth < 0) ? resolveChoice(sim, tr, task) : task;
     const goal = taskGoal(sim, cur);
-    if (tr.manual) {
+    if (tr.manual || tr.uto?.retreat) {
       if (goal >= 0 && tr.v < 0.05) manualArrival(sim, tr, cur);
     } else if (goal >= 0 && tr.v < 0.05) {
       const err = cur.k === 'stop' ? stopError(sim, tr) : 0;
@@ -719,6 +697,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     if (ps.esp) { tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + 1); return; }
     // handed back to automatic driving before the driver opened: open now
     if (tr.doorsAwait && !tr.manual && sim.t >= (tr.autoOpenAt ?? 0)) startDoorCycle(sim, tr, st, p, tr.mode === 'RM');
+    if(utoBusy(tr))return;
     if (!tr.manual && tr.doorsOpen) tr.doorSide = '';
     // doors open (closeDoors clears doorsOpen once closing starts): late arrivals keep boarding
     const closing = tr.doorMotion?.kind === 'closing';
@@ -738,6 +717,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     if (tr.intervalWait) return;
     if (closing) return;
     if (tr.doorsOpen && !tr.manual && sim.t >= closeAt) {
+      if(!utoDoorWarningReady(sim,tr))return;
       // a car door that does not close (vehicle.ts)
       if (st.doors && doorCloseHold(sim, tr)) return;
       // A simulated AM driver operates the same guarded door control as a
@@ -831,6 +811,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
       return;
     }
     tr.retreat = undefined;
+    tr.randomOverrunM=undefined;tr.randomOverrunBerth=undefined;tr.utoDoorWarningAt=undefined;
     tr.departureDisplay = undefined;
     const duty = sim.plan.blocks[tr.block];
     if (duty?.start.kind === 'stable' && duty.start.berth === task.berth && duty.trips[0] === task.trip
@@ -900,6 +881,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     tr.tripNo = '存车';
     tr.destText = '';
     tr.tasks.shift();
+    beginUtoReturn(sim,tr.vehicle);
     sim.log('I', '车辆', `列车 ${tr.svc}（${tr.vehicle}）${task.reason}于 ${sim.topo.berths[task.berth].name}`);
     finishBlock(sim, tr);
   }
@@ -1068,7 +1050,10 @@ export function atoStartReady(sim: Sim, tr: Train): { ready: boolean; code: Halt
   if (nx?.k === 'reverse' && nx.berths.every(b => berthBusy(sim, b, tr.id)))
     return no('BERTH_WAIT', '折返泊位均被占用/预约', berthHolder(sim, nx.berths[0], tr.id));
   if (departureHold(sim, tr, false)) return no('FAILED', '等待列车门故障处置或制动缓解');
-  if (tr.maDist < 15) {
+  // Closing a terminal service into this same berth has no traction movement.
+  // The door/dwell guards above still apply; a different berth or depot does.
+  const stableHere = st.dep === null && nx?.k === 'stable' && nx.berth === st.berth;
+  if (!stableHere && tr.maDist < 15) {
     const w = tr.arsWait && sim.t - tr.arsWait.t <= 2.5 ? tr.arsWait : undefined;
     return no(w?.code ?? (tr.maCode === 'NONE' ? 'ROUTE_WAIT' : tr.maCode),
       w?.detail || tr.maReason || '等待有效发车授权', w?.train ?? tr.maTrain);
@@ -1110,7 +1095,7 @@ export function setDepartureReadyAt(tr: Train, at: number) {
  * station staff work the PSD from the PSL 【假设】.
  */
 export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean; msg: string } {
-  if (!tr.manual && !tr.atoDriver && !simulatedAmDriver(tr)) return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
+  if (!tr.manual && !tr.atoDriver && !simulatedAmDriver(tr) && tr.uto?.stage!=='doors') return { ok: false, msg: '列车未处于人工驾驶，车门由信号系统控制' };
   if (tr.v > 0.05) return { ok: false, msg: '列车未停稳，不能操作车门' };
   if (tr.doorMotion?.kind === 'closing') return { ok: false, msg: '车门正在关闭并等待锁闭确认' };
   const word = (x: 'L' | 'R') => (x === 'L' ? '左侧' : '右侧');
@@ -1164,6 +1149,7 @@ const OVERRUN_BACK_MAX = 15;
 
 /** An ATO train stopped beyond its mark; wait for the existing dispatch procedure. */
 export function atoOverrun(sim: Sim, tr: Train, task: StopTask, err: number, refusal?: string) {
+  if (tr.retreat) tr.retreat.reported = true;
   tr.overrun = -err;
   tr.stopUntil = sim.t + 86400;
   tr.stopReason = refusal ? `退行受阻：${refusal}` : '过标停车';
@@ -1174,7 +1160,7 @@ export function atoOverrun(sim: Sim, tr: Train, task: StopTask, err: number, ref
   const far = -err > OVERRUN_BACK_MAX;
   const end = task.dep === null;
   openCall(sim, {
-    kind: 'overrun', from: `列车 ${trainLabel(tr)} 司机`, train: tr.id,
+    kind: 'overrun', from: `列车 ${trainLabel(tr)} ${crewLabel()}`, train: tr.id,
     text: `${st}进站滑行过标 ${m} m，车门与站台门未对齐，${refusal ? `退行受阻（${refusal}），` : ''}请求${far || refusal ? '指示' : '退行对标'}`,
     options: [
       { key: 'back', label: '同意退行对标' },
@@ -1200,8 +1186,25 @@ export function answerOverrun(sim: Sim, tr: Train | undefined, option: string): 
     tr.tasks.shift();
     return { ok: true, msg: '越站运行，前方站广播' };
   }
+  // Already taken over (key in, OCC told): the attendant only backs up, no second takeover sequence.
+  if (unattended('doorClose') && tr.manual && tr.uto?.stage === 'manual') {
+    if (tr.uto.computer && !(tr.mode === 'RM' || setMode(sim, tr, 'RM', tr.level, `${crewLabel()}转 RM 退行对标`))) {
+      tr.overrun = d; tr.stopUntil = sim.t + 86400; tr.stopReason = 'RM 模式不可用';
+      return { ok: false, msg: 'RM 模式不可用' };
+    }
+    tr.retreat = { distance: d, authorised: true, reported: true };
+    if (tr.uto.computer) tr.uto.retreat = true;
+    return { ok: true, msg: `同意退行对标，${crewLabel()}操作换向器退行` };
+  }
+  if (unattended('doorClose')) {
+    const result=requestUtoControl(sim,tr,'RM',tr.uto?.computer??!tr.manual);
+    if(!result.ok){tr.overrun=d;tr.stopUntil=sim.t+86400;tr.stopReason=result.msg;return result;}
+    tr.retreat={distance:d,authorised:true,reported:true};
+    tr.uto!.retreat=true;
+    return {ok:true,msg:'同意退行对标，随车人员办理 RM 接管后退行'};
+  }
   if (tr.manual) {
-    tr.retreat = { distance: d, authorised: true };
+    tr.retreat = { distance: d, authorised: true, reported: true };
     return { ok: true, msg: '同意退行对标，司机操作换向器退行' };
   }
   // backing up under the dispatcher's permission takes its time
@@ -1216,7 +1219,7 @@ export function answerOverrun(sim: Sim, tr: Train | undefined, option: string): 
 function manualArrival(sim: Sim, tr: Train, task: Task) {
   const err = stopError(sim, tr);
   if (Number.isNaN(err)) {
-    if (tr.retreat && !tr.overrun && task.k === 'stop')
+    if (tr.retreat && !tr.retreat.reported && !tr.overrun && task.k === 'stop')
       atoOverrun(sim, tr, task, -tr.retreat.distance, reversePermission(sim, tr).detail);
     return;
   }
@@ -1253,7 +1256,7 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
     if (-err > 5) atoOverrun(sim, tr, task, err);
     else dmiNote(sim, tr, '过标停车，司机退行对标', 'warn');
   }
-  if (!tr.overrun) {
+  if (!tr.overrun && !tr.retreat.reported) {
     const permit = reversePermission(sim, tr);
     if (!permit.ok) atoOverrun(sim, tr, task, err, permit.detail);
   }
@@ -1263,7 +1266,8 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
 function enterDepot(sim: Sim, tr: Train, depot: number) {
   const dp = sim.topo.depots[depot];
   putVehicle(sim, depot, tr.vehicle);
-  if (tr.coupledVehicle) putVehicle(sim, depot, tr.coupledVehicle);
+  beginUtoReturn(sim,tr.vehicle);
+  if (tr.coupledVehicle) {putVehicle(sim, depot, tr.coupledVehicle);beginUtoReturn(sim,tr.coupledVehicle);}
   sim.log('I', '车辆', `列车 ${tr.svc}（${tr.vehicle}）入${dp.name}`);
   finishBlock(sim, tr);
   sim.removeTrain(tr);
@@ -1300,6 +1304,7 @@ interface Desire {
 
 /** Both adopted and newly set resource entrances have the same applicant lifecycle. */
 function bindAdmittedResourceRoute(sim: Sim, tr: Train, rid: number) {
+  if (retreatRouteBlocker(sim, rid, tr.id)) return;
   const decision = resourceAllocation(sim).decisions.get(tr.id);
   if (!decision?.admitted || !decision.option.phases[0]?.routes.includes(rid)
     || !routeNeedsResourceProtection(sim, rid, decision.option)) return;
@@ -1624,7 +1629,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
     const r = topo.routes[rid];
     // a hot standby keeps to its turnback track until it is called out (D70),
     // a train stabled overnight to its stabling place (D72)
-    if (!decision && sourceReadyAt(goalTask) > sim.t) {
+    if (!decision && sourceReadyAt(sim, goalTask) > sim.t) {
       setArsWait(sim, tr, 'REGULATION', -1, sig, goalTask.k === 'stop' && goalTask.standby ? '热备待命' : '存车待发');
       return { train: tr, signal: sig, route: rid, prio, eta, ready: false, dist, via };
     }
@@ -1670,7 +1675,8 @@ function nearestBerthAhead(sim: Sim, f: Train): number {
 export function driverRM(sim: Sim) {
   const { topo } = sim;
   for (const tr of sim.trainList) {
-    if (tr.phase !== 'run' || tr.v > 0.05 || tr.failed || tr.pendingMode || tr.manual || tr.eb) continue;
+    if (tr.phase !== 'run' || tr.v > 0.05 || tr.failed || tr.pendingMode
+      || tr.manual && !(computerCrew(tr) && tr.mode === 'CM') || tr.eb) continue;
     if (tr.maDist > 35) continue;
     if (tr.nextSignal >= 0 && tr.nextSignalDist < 40 && sim.sig[tr.nextSignal].aspect === 'GUIDE') {
       const rid = sim.sig[tr.nextSignal].route;
@@ -1726,7 +1732,7 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   const keep: Task[] = [];
   for (const t of tr.tasks) {
     if (t.k === 'stop' && t.depotWork) break;
-    if (t.k === 'stop' && ((d === 'DN' && t.station >= station) || (d === 'UP' && t.station <= station))) break;
+    if (t.k === 'stop' && (t.station === station || ahead(d, station, t.station))) break;
     if (t.k !== 'stop') break;
     keep.push(t);
   }
@@ -1736,22 +1742,29 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   // cancel rest of current trip and find the trip to resume
   const block = tr.block >= 0 ? plan.blocks[tr.block] : null;
   const curTrip = tr.tripId >= 0 ? plan.trips[tr.tripId] : null;
-  let resumeIdx = -1;
   const back: TrackDir = d === 'DN' ? 'UP' : 'DN';
   let adj: Trip | null = null;
   if (block && curTrip) {
     const idx = block.trips.indexOf(curTrip.id);
     const nextTrip = block.trips.slice(idx + 1).map((i) => plan.trips[i]).find((t) => !t.cancelled);
-    if (nextTrip && nextTrip.dir === back) {
+    if (nextTrip && nextTrip.dir === back && ahead(back, station, nextTrip.to)) {
       // adjusted trip: from turnback station to the next trip's destination
       // depart as soon as the turnback allows (a station-front turnback occupies the opposite platform)
       const depAt = est + 240;
-      const stops = buildStops(sim.planCtx, back, station, nextTrip.to, depAt, true, 1);
-      adj = { id: plan.trips.length, no: `6${nextTrip.no.slice(1)}`, dir: back, kind: 'adj', from: station, to: nextTrip.to, stops, revenue: true, block: block.id };
+      const originalStops = new Map(nextTrip.stops.map(s => [s.st, s]));
+      const stops = buildStops(sim.planCtx, back, station, nextTrip.to, depAt, nextTrip.revenue, 1,
+        st => originalStops.get(st)?.stop ?? nextTrip.revenue);
+      for (const stop of stops) {
+        const original = originalStops.get(stop.st);
+        if (original) {
+          stop.stop = original.stop;
+          if (original.noBoard !== undefined) stop.noBoard = original.noBoard;
+        }
+      }
+      adj = { id: plan.trips.length, no: `6${nextTrip.no.slice(1)}`, dir: back, kind: 'adj', from: station, to: nextTrip.to, stops, revenue: nextTrip.revenue, block: block.id };
       plan.trips.push(adj);
       cancelTrip(nextTrip, `人工折返：${STATIONS[station].name}折返，改开调整车次${adj.no}`);
       block.trips.splice(block.trips.indexOf(nextTrip.id), 0, adj.id);
-      resumeIdx = block.trips.indexOf(nextTrip.id) + 1;
     }
     curTrip.cancelled = curTrip.cancelled || false;
     sim.truncatedTrips.set(curTrip.id, station);
@@ -1759,14 +1772,9 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   const fake: Trip = { id: -1, no: '', dir: d, kind: 'adj', from: station, to: station, stops: [], revenue: true, block: -1 };
   addTurnback(topo, fake, tasks);
   if (adj && block) {
-    tripTasks(topo, adj, tasks, false);
-    const rest = blockTasks(topo, plan, block, resumeIdx);
-    if (rest.length && rest[0].k === 'stop') {
-      addTurnback(topo, adj, tasks);
-      tasks.push(...rest);
-    } else {
-      appendBlockEndTasks(topo, plan, block, adj, tasks);
-    }
+    // The existing block builder owns direction changes and the final depot
+    // move. A same-direction empty continuation must not change ends again.
+    tasks.push(...blockTasks(topo, plan, block, block.trips.indexOf(adj.id)));
   } else {
     // no follow-on service: withdraw to depot after turning back
     depotTasks(topo, nearestDepot(sim, station, back), back, tasks);
@@ -2080,13 +2088,24 @@ export function cmdExchangeDuty(sim: Sim, tr: Train, other: number) {
   const retime = (t: Train, tasks: Task[]) => {
     const cur = t.tasks[0] as StopTask;
     const head = tasks[0] as StopTask;
+    if (!cur.revenue) {
+      // This cab has not completed its own physical depot exit. Keep only
+      // its unexecuted positioning steps, not the incoming duty's source.
+      const firstCall = t.tasks.findIndex(x => x.k === 'stop' && x.trip === cur.trip && x.revenue);
+      if (firstCall > 0) return [...t.tasks.slice(0, firstCall).map(x =>
+        x.k === 'stop' && x.trip === cur.trip ? { ...x, trip: head.trip } : x), ...tasks];
+    }
     // a train at the platform keeps its stop; it now leaves to the new timetable
     tasks[0] = t.phase === 'dwell' ? { ...cur, trip: head.trip, arr: head.arr, dep: head.dep } : { ...head, berth: cur.berth };
     return tasks;
   };
+  const serviceStation = (t: Train) => {
+    const call = t.tasks.find(x => x.k === 'stop' && x.trip === t.tripId && x.revenue);
+    return call?.k === 'stop' ? call.station : (t.tasks[0] as StopTask).station;
+  };
   const late = Math.round((sim.t - (tr.tasks[0] as StopTask).dep!) / 60);
-  const tailX = serviceDutyTail(sim, bw, tw, (tr.tasks[0] as StopTask).station);
-  const tailW = serviceDutyTail(sim, bx, tx, (w.tasks[0] as StopTask).station);
+  const tailX = serviceDutyTail(sim, bw, tw, serviceStation(tr));
+  const tailW = serviceDutyTail(sim, bx, tx, serviceStation(w));
   if (!tailX || !tailW) return { ok: false, msg: '车次调整缺少对应的实际客运停站，保留原车次' };
   const nx = retime(tr, tailX);
   const nw = retime(w, tailW);
