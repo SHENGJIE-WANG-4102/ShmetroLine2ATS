@@ -25,7 +25,7 @@ import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRang
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, rootCause, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
 import { standsAt } from './operatingDay';
-import { standbyTakeover } from './standby';
+import { standbyTakeover, RELIEF_DELAY } from './standby';
 import { recordTransition } from './invariants';
 import { TURNBACK } from './fsm';
 import { canStopBeforeSignal } from './protection';
@@ -511,9 +511,21 @@ function spawnStabled(sim: Sim, b: Block) {
     setTripFromTasks(sim, adopt);
     return;
   }
+  // A later day: no car stands where this duty starts (D111). Once its first
+  // departure is late by R1's margin the duty has lost its train, as on a
+  // withdrawal: its trips are cancelled and offered to a yard standby (R3).
+  // Left live they were taken later by any train that came to stand here,
+  // up to a day late (D157).
+  if (!sim.stabledPool.length && sim.t > firstDep(b) + RELIEF_DELAY) {
+    const live = b.trips.filter(id => !sim.plan.trips[id].cancelled && !sim.plan.trips[id].completed);
+    const why = `${st.name}存车位无车，表号${b.svc}未能出车`;
+    for (const id of live) cancelTrip(sim.plan.trips[id], why);
+    sim.planDirty = true;
+    standbyTakeover(sim, b.id, live, why);
+    return;
+  }
   if (bid === undefined) return;
   if (!sim.stabledPool.length) {
-    // a later day: no car stands where this duty starts (D111)
     sim.log('B', '车辆', `${st.name}存车位无车，表号 ${b.svc} 无法出车（首趟 ${first?.no ?? '-'}）`, { key: `stable-missing-${b.id}` });
     return;
   }
