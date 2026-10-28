@@ -20,7 +20,7 @@ import { FIXED_LATE_TRAINS } from '../data/current';
 import { FIRST_LAST } from '../data/current';
 import type { ClockBand } from '../data/simulation';
 import { plannedWaiting } from './plannedWaiting';
-import { plannedWaitLong, plannedWaitBerth } from './plannedWaitBerth';
+import { plannedNormalWork, plannedWaitLong, plannedWaitBerth } from './plannedWaitBerth';
 
 export interface Template {
   id: string;
@@ -72,7 +72,12 @@ const OPENING = SIMULATION.timetable.opening;
 export const OUTER_BAND_MARGIN = SIMULATION.timetable.outerBandMargin;
 /** whether a time at an outer station falls in a peak's 2'30"/5'00" pattern */
 export function inOuterAlternation(periods: Period[], t: number): boolean {
-  return periods.some(p => TEMPLATES[p.template].peak && t >= p.from + OUTER_BAND_MARGIN && t < p.to - OUTER_BAND_MARGIN);
+  return periods.some(p => {
+    const template = TEMPLATES[p.template], pattern = template.pattern;
+    const alternating = pattern.length >= 3 && pattern.some((kind, i) => kind === 'big'
+      && pattern[(i + 1) % pattern.length] === 'big' && pattern[(i + 2) % pattern.length] === 'small');
+    return template.peak && alternating && t >= p.from + OUTER_BAND_MARGIN && t < p.to - OUTER_BAND_MARGIN;
+  });
 }
 
 // ---------------------------------------------------------------- overlays (加开)
@@ -768,6 +773,21 @@ interface EndSupply {
   feeders: Map<number, DepotMove>;
   withdrawals: Map<number, DepotMove>;
   continuations: Map<number, number>;
+}
+
+/** A proposed vehicle connection may wait only at an actual safe berth. */
+function connectionSafe(topo: Topology, dayType: Plan['dayType'], a: Trip, d: Trip, candidates?: readonly number[]): boolean {
+  if (!plannedWaitLong(dayType, a, d)) return true;
+  const tasks: Task[] = [];
+  tripTasks(topo, a, tasks, false);
+  if (a.dir !== d.dir) addTurnback(topo, a, tasks);
+  const reverse = tasks.map(t => t.k === 'reverse').lastIndexOf(true);
+  const task = tasks[reverse];
+  tripTasks(topo, d, tasks, false);
+  const berths = candidates ?? (a.dir === d.dir ? [platformBerth(topo, a.to, a.dir)]
+    : task?.k === 'reverse' ? task.berths : []);
+  return plannedWaitBerth(topo, a, d, tasks, reverse, berths,
+    task?.k === 'reverse' ? task.chosen : undefined).safe;
 }
 
 /** Reserve actual terminal places and movements, rather than laying out
@@ -1494,12 +1514,13 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
   const continuing = new Set(supply?.continuations.values());
   let movementCount = -1;
   let movementCache: GenTrip[] = [];
+  const reservedRedirects = new Map<number, GenTrip>();
   const allForGaps = () => {
     if (movementCount !== trips.length) {
       movementCache = [...(baseTrips ?? []), ...trips.filter(t => t.block !== UNUSED_DEPOT_MOVE)];
       movementCount = trips.length;
     }
-    return movementCache;
+    return reservedRedirects.size ? [...movementCache, ...reservedRedirects.values()] : movementCache;
   };
   const nightPlaces = overlay ? reuse?.nightPlaces ?? [] : overnightPlaces(topo);
   const stablingNight: Record<number, number> = {};
@@ -1528,6 +1549,14 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
   };
   /** turnbacks added by extensions, on top of the base plan's (baseOcc) */
   const extOcc: { st: number; from: number; to: number; block: number }[] = [];
+  // Intermediate standby places are assigned from their configured windows.
+  // Reserve the physical turnback slot while matching ordinary services, so a
+  // later standby allocation cannot overfill the same station.
+  if (!overlay) for (const [index, place] of hotStandbyPlaces(topo).entries()) {
+    if (!place.depot || place.track !== 'turnback' || supply?.ends.has(place.station)) continue;
+    for (const window of standbyWindows(ctx.dayType, place))
+      extOcc.push({st:place.station,from:window.from,to:window.to,block:Number.MIN_SAFE_INTEGER+index});
+  }
   /** the station still has a place for a train standing there over [from, to) */
   const placeFree = (st: number, from: number, to: number, own: number) => {
     const clear = OPERATIONS.platformTurnClear[STATIONS[st].id] ?? 0;
@@ -1582,17 +1611,23 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
         const linked = ev.trip.prev;
         let i = linked === undefined ? -1 : present.findIndex(p => p.trip.id === linked && p.ready <= ev.time);
         if (i < 0 && linked !== undefined) unlink(trips[linked]);
-        if (i >= 0 && !placeFree(T, present[i].ready-mt, ev.time, -1)) i = -1;
-        if (i < 0) i = present.findIndex((p) => p.trip.next === undefined && p.ready <= ev.time && placeFree(T,p.ready-mt,ev.time,-1) && frontTurnClear(ctx, allForGaps(),
+        if (i >= 0 && (!placeFree(T, present[i].ready-mt, ev.time, -1) || !connectionSafe(topo, ctx.dayType, present[i].trip, ev.trip))) {
+          unlink(present[i].trip);
+          i = -1;
+        }
+        if (i < 0) i = present.findIndex((p) => p.trip.next === undefined && p.ready <= ev.time && placeFree(T,p.ready-mt,ev.time,-1) && connectionSafe(topo, ctx.dayType, p.trip, ev.trip) && frontTurnClear(ctx, allForGaps(),
           p.trip, ev.time, new Set([p.trip.id, ev.trip.id])));
-        if (i >= 0) pairs.push({ a: present.splice(i, 1)[0].trip, d: ev.trip });
+        if (i >= 0) {
+          const a = present.splice(i, 1)[0].trip;
+          pairs.push({ a, d: ev.trip });
+          extOcc.push({st:T,from:a.stops.at(-1)!.arr,to:ev.time,block:-a.id-2});
+        }
         else src.push(ev.trip);
       }
     }
     for (const p of present) out.push(p.trip);
     const m = { pairs, out, src };
     for (const p of m.pairs) { p.a.next = p.d.id; p.d.prev = p.a.id;
-      extOcc.push({st:T,from:p.a.stops.at(-1)!.arr,to:p.d.stops[0].dep,block:-p.a.id-2});
     }
     sinks.push(...m.out);
     sources.push(...m.src);
@@ -1640,16 +1675,17 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
     return null;
   };
   /** stops of a move starting at or after `earliest` that fit between the other trains along the whole path */
-  const fitAfter = (dir: TrackDir, earliest: number, build: (t0: number) => PlanStop[], accept: (st: PlanStop[]) => boolean = () => true, latest = earliest + 2400): PlanStop[] | null => {
+  const fitAfter = (dir: TrackDir, earliest: number, build: (t0: number) => PlanStop[], accept: (st: PlanStop[]) => boolean = () => true, latest = earliest + 2400, continuation?: GenTrip): PlanStop[] | null => {
     let at = earliest;
+    const protection = continuation ? new DepIndex(allForGaps().filter(t => t !== continuation)) : null;
     for (let k = 0; k <= 480 && at <= latest; k++) {
       const st = build(at);
-      if (accept(st) && pathClear(st, dir)) return st;
+      if (accept(st) && (protection ? protection.clear(st, dir) : pathClear(st, dir))) return st;
       // Fixed-endpoint empty returns may use the end of the actual conflict:
       // a ten-second grid can miss a narrow transition gap. Other lines keep
       // their original ten-second search sequence.
       let push = 0;
-      if (SIMULATION.timetable.preserveRevenueRoutes) for (const stop of st) {
+      if (!continuation && SIMULATION.timetable.preserveRevenueRoutes) for (const stop of st) {
         const deps = depsAt(stop.st, dir);
         let lo = 0, hi = deps.length;
         while (lo < hi) { const mid = (lo + hi) >> 1; if (deps[mid] <= stop.dep - MIN_HEADWAY) lo = mid + 1; else hi = mid; }
@@ -1932,6 +1968,10 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
               && (dir === D.dir || placeFree(D.from, stops.at(-1)!.arr, dep, -1)));
           if (!stops) continue; // Keep the original source; report its stock shortage.
           redirectMoves.set(D.id, {depot:alt,dir,from,to:D.from,stops,revenue:true});
+          // Subsequent sources must also fit the already selected redirect,
+          // even before that feeder is materialised in the block list.
+          reservedRedirects.set(D.id,{id:-D.id-2,no:'',dir,kind:'ins',from,to:D.from,stops,revenue:true,block:-1});
+          depIndexN = -1;
         }
         redirect.set(D.id, alt);
         spare[alt]--; remaining--; assigned = true; break;
@@ -1968,6 +2008,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
   const usedStorage = new Set<number>();
   for (let qi = 0; qi < queue.length; qi++) {
     const D = queue[qi];
+    if (reservedRedirects.delete(D.id)) depIndexN = -1;
     if (D.prev !== undefined) continue;
     const T = D.from;
     const dep = D.stops[0].dep;
@@ -2076,10 +2117,19 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
       // a single turnback place (广兰路): not in before the previous positioned train has left it
       const single = (TERMINAL_CAP[T] ?? topo.stations[T].turnbackBerths.length) === 1;
       const before = single ? Math.max(-Infinity, ...(positioned.get(T) ?? []).filter((x) => x <= dep)) : -Infinity;
-      const st = fitBefore(towardDir, placeBefore(ex, towardDir, dep - mt - (towardDir === D.dir ? 0 : 60) - run), (t0) => buildStops(ctx, towardDir, ex, T, t0, false, 1), towardDir === D.dir ? D : undefined,
+      const same = towardDir === D.dir;
+      let st = fitBefore(towardDir, placeBefore(ex, towardDir, dep - mt - (towardDir === D.dir ? 0 : 60) - run), (t0) => buildStops(ctx, towardDir, ex, T, t0, false, 1), towardDir === D.dir ? D : undefined,
         (stops) => stops.at(-1)!.arr >= before)
-        ?? fitBefore(towardDir, placeBefore(ex, towardDir, dep - mt - (towardDir === D.dir ? 0 : 60) - run), (t0) => buildStops(ctx, towardDir, ex, T, t0, false, 1), towardDir === D.dir ? D : undefined)
-        ?? buildStops(ctx, towardDir, ex, T, dep - mt - (towardDir === D.dir ? 0 : 60) - run, false, 1);
+        ?? fitBefore(towardDir, placeBefore(ex, towardDir, dep - mt - (towardDir === D.dir ? 0 : 60) - run), (t0) => buildStops(ctx, towardDir, ex, T, t0, false, 1), towardDir === D.dir ? D : undefined);
+      if (!st) {
+        // A nonstop feeder may catch a stopping train on the same path. Try
+        // the existing station-regulated positioning profile before giving up.
+        const stopping = (t0:number) => buildStops(ctx,towardDir,ex,T,t0,false,factorAt,()=>true);
+        const duration = stopping(0).at(-1)!.arr;
+        st = fitBefore(towardDir, dep-mt-(same ? 0 : 60)-duration, stopping,
+            same ? D : undefined, stops => stops.at(-1)!.arr >= before);
+      }
+      st ??= buildStops(ctx, towardDir, ex, T, dep - mt - (towardDir === D.dir ? 0 : 60) - run, false, 1);
       positioned.set(T, [...(positioned.get(T) ?? []), dep]);
       st[0].stop = false;
       if (towardDir === D.dir) st[st.length-1].stop = false;
@@ -2218,7 +2268,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
     if (turn && !turnbackAt(topo, trip.to, trip.dir)) return null;
     const earliest = arr + (turn ? minTurn(trip.to) : 45);
     return fitAfter(dir, earliest, t0 => buildStops(ctx, dir, trip.to, entryStation(topo, depot, dir), t0, true, factorAt),
-      path => pathClear(path, dir) && outerQuiet(path) && (!turn || frontTurnClear(ctx, allForGaps(), trip, path[0].dep, new Set([trip.id]))
+      path => outerQuiet(path) && (!turn || frontTurnClear(ctx, allForGaps(), trip, path[0].dep, new Set([trip.id]))
         && placeFree(trip.to, arr, path[0].dep, -1) && orderOk(trip.to, arr, path[0].dep, -1)),
       earliest + (turn ? intermediate(trip.to) ? 450 : MAX_LAYOVER : 2400));
   };
@@ -2380,7 +2430,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
     const awayDir = directionToward(topo.stations[T].chain, topo.depots[depot].junctionChain, 'UP');
     const en = entryStation(topo, depot, awayDir);
     if (en === T) { endOf.set(A.id, { kind: 'depot', depot }); returned(A, depot); continue; }
-    const mt = minTurn(T);
+    const mt = A.dir === awayDir ? plannedNormalWork(ctx.dayType,A,{dir:awayDir}) : minTurn(T);
     if (night) {
       const st = fitAfter(awayDir, arr + mt, (t0) => buildStops(ctx, awayDir, T, en, t0, false, 1)) ?? buildStops(ctx, awayDir, T, en, arr + mt, false, 1);
       st[st.length - 1].stop = false;
@@ -2403,13 +2453,13 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
           && (!overlay || entryClear(depot, { dir: awayDir, to: en, stops }))
           // an intermediate turnback holds an added train no longer than its turnback limit
           && (!overlay || A.dir === awayDir || T === 0 || T === topo.stations.length - 1 || stops[0].dep <= arr + mt + 450)
-          && (!overlay || A.dir === awayDir || orderOk(T, arr, stops[0].dep)));
+          && (!overlay || A.dir === awayDir || orderOk(T, arr, stops[0].dep)), undefined, A.dir === awayDir ? A : undefined);
       if (!st && !overlay) {
         // Passengers have already alighted at this terminal. If a stopping
         // withdrawal cannot fit, return empty using the existing pass times
         // instead of forcing another passenger trip into the core slots.
         st = fitAfter(awayDir, arr + mt, t0 => buildStops(ctx, awayDir, T, en, t0, false, 1),
-          stops => outerQuiet(stops) && frontTurnClear(ctx, allForGaps(), A, stops[0].dep, new Set([A.id])));
+          stops => outerQuiet(stops) && frontTurnClear(ctx, allForGaps(), A, stops[0].dep, new Set([A.id])), undefined, A.dir === awayDir ? A : undefined);
         if (st) withdrawalRevenue = false;
       }
       if (!st && overlay) {
@@ -2780,7 +2830,9 @@ function reuseTerminalReturns(ctx: PlanContext, blocks: Block[], trips: GenTrip[
           const continued = { ...incoming, end: block.end,
             trips: [...incoming.trips.slice(0, index + 1), ...block.trips.slice(feeder ? 1 : 0)] };
           const proposed = { trips, blocks: blocks.filter(b => b !== block).map(b => b === incoming ? continued : b) } as Plan;
-          const berth = dutyTurnBerths(ctx.topo, proposed, continued, arrival, departure)[0];
+          const berths = dutyTurnBerths(ctx.topo, proposed, continued, arrival, departure);
+          if (!connectionSafe(ctx.topo, ctx.dayType, arrival, departure, berths)) return false;
+          const berth = berths[0];
           const conflicts = berth === undefined ? [] : depotMoves(proposed.blocks, trips, ctx).filter(move => move.block !== incoming.id
             && turnLeadConflict(ctx.topo, move, trips, arrival, departure, berth));
           if (conflicts.length && clocks) {
