@@ -580,11 +580,13 @@ describe('timetable validator', () => {
       leave.stops[0].dep = 28 * 3600;
       expect(validatePlan(sim.planCtx, plan).some(i => i.code === 'STABLE_CONFLICT' && i.blocks?.includes(hot.id))).toBe(true);
       leave.stops[0].dep = saved;
-      // not in the peaks: both tracks turn trains then
+      // D148: the full-route terminals keep their spare through the day; a
+      // peak may borrow it, and the evening window holds it again until 22:00.
       if (dayType === 'weekday') for (const st of [0, E]) {
-        expect(at(st, 8 * 3600).length + at(st, 17.5 * 3600).length).toBe(0);
-        expect(at(st, 20.5 * 3600)).toHaveLength(0);
-        expect(at(st, 21.5 * 3600)).toHaveLength(0);
+        expect(at(st, 8 * 3600).length).toBeLessThanOrEqual(1);
+        expect(at(st, 17.5 * 3600).length).toBeLessThanOrEqual(1);
+        expect(at(st, 21 * 3600)).toHaveLength(1);
+        expect(at(st, 21.5 * 3600)).toHaveLength(1);
       }
       expect(fmtIssues(validatePlan(sim.planCtx, plan))).toBe('');
     }

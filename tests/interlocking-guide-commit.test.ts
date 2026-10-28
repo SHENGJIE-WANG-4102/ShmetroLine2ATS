@@ -12,7 +12,7 @@ const fields=(tr: Train)=>Object.fromEntries(['id','vehicle','link','off','dir',
 function fixture(speed:number){
  const sim=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'ordinary-guide-command',startTime:14400,seed:105,noPossessions:true});
  const tr=sim.trainList[0]!;
- const signature=diagnostics.topologySignature(sim.topo);assert.equal(signature,'3be985ee');signatures.add(signature);
+ const signature=diagnostics.topologySignature(sim.topo);assert.equal(signature,'f279e2b3');signatures.add(signature);
  for(const other of [...sim.trainList])if(other!==tr)sim.removeTrain(other);
  for(const rid of [...sim.routes.keys()])ci.releaseRoute(sim,rid);
  for(const block of sim.plan.blocks)sim.blockDone.add(block.id);

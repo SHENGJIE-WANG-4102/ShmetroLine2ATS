@@ -840,9 +840,32 @@ export function allocateTerminalServices(ctx: PlanContext, requests: readonly Se
     const taken = new Set(departures.slice(0, overnight).map(service => service.id));
     for (const [index, id] of [...taken].entries()) supply.stable.set(id, places[index].berth);
     const terminalPlace = hotStandbyPlaces(topo).find(place => place.station === terminal);
+    // Departures of the hour after `t` the free arrivals cannot cover,
+    // optionally without one car. Same rule as the pairing below: each
+    // departure takes the most recent ready car.
+    const unmet = (t: number, without?: (typeof arrivals)[number]) => {
+      const pool = arrivals.filter(service => service !== without && !night.has(service.id) && !supply.pairs.has(service.id)
+        && arrival(service) >= t - 2 * MAX_LAYOVER && arrival(service) <= t + 3600).map(arrival);
+      let missing = 0;
+      for (const service of departures) {
+        const dep = departure(service);
+        if (taken.has(service.id) || dep < t - MAX_LAYOVER || dep > t + 3600) continue;
+        let best = -1;
+        for (let i = 0; i < pool.length; i++) if (pool[i] + turn <= dep && pool[i] >= dep - MAX_LAYOVER) best = i;
+        if (best >= 0) pool.splice(best, 1); else missing++;
+      }
+      return missing;
+    };
     for (const window of terminalPlace ? standbyWindows(ctx.dayType, terminalPlace) : []) {
-      const incoming = arrivals.find(service => arrival(service) >= window.from && arrival(service) < Math.min(window.need, window.to - 240)
-        && !supply.pairs.has(service.id) && !night.has(service.id));
+      const eligible = (service: (typeof arrivals)[number]) => arrival(service) >= window.from
+        && arrival(service) < Math.min(window.need, window.to - 240) && !supply.pairs.has(service.id) && !night.has(service.id);
+      // D148: the spare is a car the line end has to spare (its departures
+      // stay covered without it); with none within the hour the next arrival
+      // stays anyway, as before.
+      const incoming = arrivals.find(service => eligible(service) && arrival(service) < window.from + 3600
+        && unmet(arrival(service), service) <= unmet(arrival(service)))
+        ?? arrivals.find(service => eligible(service) && arrival(service) >= window.from + 3600)
+        ?? arrivals.find(eligible);
       const outgoing = incoming && departures.find(service => !taken.has(service.id) && departure(service) >= Math.max(window.need, arrival(incoming) + turn));
       if (!incoming || !outgoing || !reserve(terminal, arrival(incoming), departure(outgoing))) continue;
       services[incoming.id] = { ...incoming, standby: true };
@@ -3097,6 +3120,32 @@ function addTo(trips: GenTrip[], dir: TrackDir, kind: TripKind, from: number, to
   return t;
 }
 
+/** Instead of going into its night berth, the last train of `block` runs
+ * empty on to the nearest yard ahead, or turns back to one when no yard lies
+ * ahead (a full-route terminal); the duty then ends in that yard. */
+function clearOnToYard(ctx: PlanContext, trips: GenTrip[], block: Block, last: Trip): GenTrip | undefined {
+  const toward = (dir: TrackDir) => OPERATIONS.depotReturns.filter(r => r.dir === dir)
+    .map(r => ({depot:depotIndex(ctx.topo,r.depot),station:STATIONS.findIndex(s => s.id === r.station)}))
+    .filter(r => r.station === last.to || ahead(dir, last.to, r.station))
+    .sort((x,y) => Math.abs(x.station-last.to)-Math.abs(y.station-last.to))[0];
+  const back: TrackDir = last.dir === 'DN' ? 'UP' : 'DN';
+  const ahead1 = toward(last.dir), rule = ahead1 ?? toward(back);
+  if (!rule) return;
+  const dir = ahead1 ? last.dir : back, turn = ahead1 ? 0 : minTurn(last.to);
+  const index = new DepIndex(trips.filter(t => t !== last));
+  for (let wait = 30; wait <= 180; wait += 10) {
+    const stops = buildStops(ctx,dir,last.to,rule.station,last.stops.at(-1)!.arr+turn+wait,false,1);
+    if (ahead1) stops[0].stop = false;
+    stops.at(-1)!.stop = false;
+    if (!index.clear(stops,dir)) continue;
+    const move = addTo(trips,dir,'empty',last.to,rule.station,stops,false);
+    move.block = block.id;
+    block.trips.push(move.id);
+    block.end = {kind:'depot',depot:rule.depot};
+    return move;
+  }
+}
+
 /** A path-scoped yard checks the actual entry and exit lead. Other yards keep
  * their existing conservative yard-wide check wherever a lead is shared. */
 export function depotLeadsConflict(topo: Topology, depot: number, entry: TrackDir, exit: TrackDir): boolean {
@@ -3208,25 +3257,8 @@ export function applyOverlay(ctx: PlanContext, plan: Plan, preset: { id: string;
     const place = overnightPlaces(ctx.topo).find(p => p.arrivalBerth === end.berth);
     if (!last || !place || ctx.topo.berths[end.berth!].kind !== 'platform' || last.to < Math.min(a,b) || last.to > Math.max(a,b)
       || preset.to < last.stops.at(-1)!.arr - 1800 || last.stops.at(-1)!.arr < (live?.now ?? OPENING.dayStart)) continue;
-    const rule = OPERATIONS.depotReturns.filter(r => r.dir === last.dir)
-      .map(r => ({depot:depotIndex(ctx.topo,r.depot),station:STATIONS.findIndex(s => s.id === r.station)}))
-      .filter(r => last.dir === 'DN' ? r.station >= last.to : r.station <= last.to)
-      .sort((x,y) => Math.abs(x.station-last.to)-Math.abs(y.station-last.to))[0];
-    if (!rule) continue;
-    const index = new DepIndex(trips.filter(t => t !== last));
-    let stops: PlanStop[] | undefined;
-    for (let wait = 30; wait <= 180; wait += 10) {
-      const candidate = buildStops(ctx,last.dir,last.to,rule.station,last.stops.at(-1)!.arr+wait,false,1);
-      candidate[0].stop = false;
-      candidate.at(-1)!.stop = false;
-      if (index.clear(candidate,last.dir)) { stops = candidate; break; }
-    }
-    if (!stops) continue;
-    const move = addTo(trips,last.dir,'empty',last.to,rule.station,stops,false);
-    move.block = block.id;
-    block.trips.push(move.id);
-    block.end = {kind:'depot',depot:rule.depot};
-    deferred.push({block,end,move:move.id,place});
+    const move = clearOnToYard(ctx, trips, block, last);
+    if (move) deferred.push({block,end,move:move.id,place});
   }
   const dirAB: TrackDir = a < b ? 'DN' : 'UP';
   const dirBA: TrackDir = dirAB === 'DN' ? 'UP' : 'DN';
@@ -3573,7 +3605,23 @@ function restoreCancelledHomes(ctx: PlanContext, plan: Plan, now: number) {
   };
   // A cancelled morning train still occupies its own berth; no delivery is
   // needed to that slot. Other cancelled night deliveries use the same duty.
-  for (const b of plan.blocks.filter(b => cancelled(b) && b.train === undefined && b.start.kind === 'depot' && b.end.kind === 'stable')) {
+  const deliveries = plan.blocks.filter(b => cancelled(b) && b.train === undefined && b.start.kind === 'depot' && b.end.kind === 'stable');
+  // A retained car already stands in a night berth whose own delivery still
+  // runs: that delivery is surplus, and its car clears on to a yard instead.
+  for (const start of retained.slice()) {
+    if (start.kind !== 'stable' || start.berth === undefined) continue;
+    const link = topo.berths[start.berth].link;
+    if (deliveries.some(b => b.end.kind === 'stable' && b.end.berth !== undefined && topo.berths[b.end.berth].link === link)) continue;
+    const live = plan.blocks.find(b => !cancelled(b) && b.train === undefined && b.end.kind === 'stable' && b.end.berth !== undefined
+      && topo.berths[b.end.berth].link === link);
+    const last = live && trips[live.trips.filter(id => !trips[id].cancelled).at(-1)!];
+    if (!live || !last || last.stops.at(-1)!.arr < now) continue;
+    const move = clearOnToYard(ctx, trips, live, last);
+    if (!move) continue;
+    index.add(move);
+    retained.splice(retained.indexOf(start), 1);
+  }
+  for (const b of deliveries) {
     if (b.end.kind !== 'stable' || b.end.berth === undefined) continue;
     const berth = topo.berths[b.end.berth];
     const stayed = retained.findIndex(start => start.kind === 'stable' && start.berth !== undefined && topo.berths[start.berth].link === berth.link);
@@ -3767,6 +3815,10 @@ export function turnbackAt(topo: Topology, station: number, arrDir: TrackDir): T
     const east = (l.chainB - l.chainA) * b.dir > 0;
     return arrDir === 'DN' ? east : !east;
   });
+  // D149: the station's main turnback track first; the others remain
+  // alternatives the arbiter offers only after it (occupancy, conflicts).
+  const main = OPERATIONS.mainTurnback?.[STATIONS[station].id];
+  if (main) rear.sort((a, b) => Number(topo.berths[b].name === main) - Number(topo.berths[a].name === main));
   if (rear.length) return { kind: 'rear', berths: rear };
   if (s.frontTurnback[arrDir]) {
     // arrive on the opposite platform against its normal direction
@@ -4404,7 +4456,12 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
   for (const place of OPERATIONS.overnightStabling) overnight.set(place.station, (overnight.get(place.station) ?? 0) + place.count);
   for (const [id, n] of overnight) {
     const st = STATIONS.findIndex(x => x.id === id);
-    const night = plan.blocks.filter(b => !b.withdrawal && b.end.kind === 'stable' && b.end.station === st).length;
+    // Cars actually there at night: live deliveries, plus a cancelled morning
+    // car that never left its berth.
+    const off = (b: Block) => b.trips.every(id => plan.trips[id].cancelled);
+    const night = plan.blocks.filter(b => !b.withdrawal && (off(b)
+      ? b.start.kind === 'stable' && b.start.station === st
+      : b.end.kind === 'stable' && b.end.station === st)).length;
     const morning = plan.blocks.filter(b => b.start.kind === 'stable' && b.start.station === st).length;
     if (night !== n || morning !== n)
       out.push({ severity: 'warn', code: 'FLEET', t: OPENING.dayStart, blocks: [], text: `${name(st)} 正线存车 ${n} 列：夜间入位 ${night} 列，早晨出车 ${morning} 列` });

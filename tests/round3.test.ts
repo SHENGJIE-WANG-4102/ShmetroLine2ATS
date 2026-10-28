@@ -101,9 +101,9 @@ describe('early and late added-service reservations',()=>{
     expect(through).toHaveLength(1);
     for(const trip of through) for(let station=1;station<=22;station++)
       expect(trip.stops.find(s=>s.st===station)?.stop).toBe(true);
-    expect(result.skipped).toBe(4);
+    expect(result.skipped).toBe(3);
     const omitted=plan.trips.filter(t=>t.overlay&&t.cancelled&&t.revenue);
-    expect(omitted).toHaveLength(4);
+    expect(omitted).toHaveLength(3);
     expect(omitted.every(t=>!!t.cancelReason)).toBe(true);
     expect(validatePlan(sim.planCtx,plan).filter(i=>i.severity==='error')).toEqual([]);
   });

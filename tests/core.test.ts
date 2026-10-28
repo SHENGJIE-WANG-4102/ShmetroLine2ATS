@@ -1300,7 +1300,7 @@ describe('standby trains (D45)', () => {
     const incident=capture(sim),nBlocks=sim.plan.blocks.length;
     let tr=candidates[0],lateness=0,r={ok:false,msg:'no reachable candidate'};
     for(const candidate of candidates) {
-      restore(sim,incident);tr=sim.trains.get(candidate.id)!;tr.delay=1200;
+      restore(sim,incident);tr=sim.trains.get(candidate.id)!;tr.delay=1800;
       lateness=predictedLateness(sim,tr);
       r=sim.command({c:'standby',train:tr.id});
       const end=tr.tasks.at(-1);

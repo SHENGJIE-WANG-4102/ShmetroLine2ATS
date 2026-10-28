@@ -262,6 +262,8 @@ export interface CoreLineData {
         /** Late trains at this terminal take the next ready departure in arrival order (D148). */
         firstReady?: boolean;
     }[];
+    /** Preferred rear turnback track by station id (berth name); others are alternatives. */
+    mainTurnback?: Record<string, string>;
     platformPassKmh: number;
     platformStopKmh: number;
     autoDoorOpenDelay: readonly [number, number];

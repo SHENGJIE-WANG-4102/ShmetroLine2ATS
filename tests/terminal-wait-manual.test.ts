@@ -35,7 +35,7 @@ describe('terminal waiting with a real manual departure', () => {
       const trips = block.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled);
       for (let i = 1; i < trips.length; i++) {
         const a = trips[i-1], d = trips[i];
-        if (a.to !== d.from || a.dir === d.dir || a.standby || d.stops[0].dep - a.stops.at(-1)!.arr < 1000) continue;
+        if (a.to !== d.from || a.dir === d.dir || a.standby || d.stops[0].dep - a.stops.at(-1)!.arr < 600) continue;
         const tasks = timetable.blockTasks(sim.topo, sim.plan, block);
         const arrival = tasks.findIndex(t => t.k === 'stop' && t.trip === a.id && t.station === a.to);
         const ri = tasks.findIndex((t,index) => index > arrival && t.k === 'reverse');

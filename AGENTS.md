@@ -55,7 +55,7 @@
 
 - 软件启动时选一个线路组（`?line=`、`ATS_LINE`），默认 2号线。2号线和 14号线分两个分支、两个对话并行开发。
 - 线路自己的数据只放 `src/data/lines/<线路>/`。`src/sim`、`src/ui` 一律从 `src/data/current.ts` 取当前线路，不许直接 import 某条线的目录，不许写 `if (LINE_ID === …)`；线路之间的差别写成数据或能力判据（例如 `supportsSignalSystem`）。
-- `src/sim/**`、`src/ui/**`、`src/data/` 下 `lines/` 以外的文件、`scripts/**` 是公共代码。改了要同时守住：2号线 `npx tsx scripts/plan-hash.ts` 不变（或者逐条说明为什么变），测试线 `tests/test-line.test.ts` 通过。D 条目里写明动了哪些公共文件。
+- `src/sim/**`、`src/ui/**`、`src/data/` 下 `lines/` 以外的文件、`scripts/**` 是公共代码。改了要同时守住：测试线 `tests/test-line.test.ts` 通过；2号线、14号线的运行图有变化时，在汇报里说明变在哪、为什么。D 条目里写明动了哪些公共文件。
 - 接口说明和两边的约定见 `reference/line14/line14-base-handoff.md`。
 
 ## 近期踩过的坑（2026-10-20 整理，写代码前对照一遍）
@@ -87,6 +87,10 @@
 2. **用户实地录音和 PIS 实拍**（`docs/field/recordings.md`、`docs/field/field-2026-10-16-pis.md`、`docs/field/field-calibration-2026-10.md`）：区间时分、停站、运行速度以它为准。
 3. **高德**（`reference/timetable-gaode/`）：只参考各时段开几列车（每 15 分钟车数，`scripts/gaode-compare.ts` 比的就是这个），和官方间隔冲突时以官方为准。高德分钟本身有约 ±30 s 偏差，不拿它定区间时分、停站或运行等级。
 - 没有任务明确要求时，不改运行时分、停站模型和运行等级（`calibration.ts`、`dynamics.ts`、D73/D74），也不改首末班常量（`src/data/lines/line2/firstlast.ts`）。
+- **旧运行图不是依据**（用户决定，2026-10-28）：现有排图本来就不准，用户带回的实地数据就是用来改准它的。
+  - 新数据、新运营规则让运行图变了，是正常结果；
+  - 不许为了保住旧图、保住 `plan-hash` 不变，去加特例规则或绕开新数据；
+  - 验收看结果是否符合上面的依据，不看和旧图是否一样。
 
 ## 遇到问题先自己解决，别第一时间丢回给用户
 
@@ -153,7 +157,7 @@ C. <怎么做>：<效果、影响、代价>
   - `npx tsx scripts/validate-plan.ts weekday` 和 `weekend`：两种日型都要 0 error；
   - `npx tsx scripts/firstlast.ts`：首末班和改前一致，或者偏差在任务允许的范围内；
   - `npx tsx scripts/gaode-compare.ts`：每 15 分钟车数的不合格格数不能比改前多。
-- 只整理结构、不该改变结果的改动：改前改后各跑一次 `npx tsx scripts/plan-hash.ts`（两种日型的 `trips`、`blocks` 哈希），必须完全一致。
+- 只整理结构、不该改变结果的改动：改前改后各跑一次 `npx tsx scripts/plan-hash.ts`（两种日型的 `trips`、`blocks` 哈希），必须完全一致。哈希只用在这一种情况，用来证明结构整理没改结果；其他改动哈希变是正常的，不作为通过条件（用户决定，2026-10-28）。
 - 动了 ATS / ARS、车载移动、联锁、调度命令、跨日搬运的，单测之外还要后台并行跑一小批随机压测（`scripts/fuzz-day.ts`，含第二天、天气和随机调度操作），0 完整性违例。只跑第一天、不带天气查不出这类问题：2026-10-20 第一天带故障 22 例全过，加上第二天和天气后 12 例里出了 4 例。
 - 不许为了让压测通过去放宽完整性检查的时限、豁免，也不许把现场标成「已知」跳过。
 - **后台任务注意内存**（2026-10-24，一个比对脚本吃到 50 GB 以上）：

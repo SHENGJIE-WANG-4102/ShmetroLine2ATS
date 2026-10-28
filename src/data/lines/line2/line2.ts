@@ -464,10 +464,21 @@ export const OPERATIONS = {
   hotStandby: [
     { station: 'PXL', track: 'turnback', berth: 0, windows: TERMINAL_STANDBY_WINDOWS, firstReady: true },
     { station: 'PDA', track: 'turnback', berth: 0, windows: TERMINAL_STANDBY_WINDOWS, firstReady: true },
-    { station: 'KJG', track: 'turnback', berth: 0, depot: 'BZL', incoming: 'DN' },
+    // 主用折返线是科技馆1道（D149），热备放另一条。
+    { station: 'KJG', track: 'turnback', berth: 1, depot: 'BZL', incoming: 'DN' },
     { station: 'CXZ', track: 'storage', berth: 0, depot: 'CSD', incoming: 'UP' },
   ] as { station: string; track: 'turnback' | 'storage'; berth: number; depot?: string; incoming?: 'UP' | 'DN';
     windows?: typeof TERMINAL_STANDBY_WINDOWS; firstReady?: boolean }[],
+  /** 用户决定（2026-10-28，D149）：站后折返只用一条主用折返线；另一条只在运行图
+   * 要求（长候班、热备）、占用冲突或调度调整时才用。主用的是直通出发正线、出发不
+   * 过渡线的那条（用户按蟠祥路配线图标注）；其余各站按同一规律推得【假设】。 */
+  mainTurnback: {
+    PXL: '蟠祥路2道折返线',
+    GJH: '国家会展中心2道尽头线',
+    SHR: '淞虹路2道（出入段线）',
+    KJG: '上海科技馆1道折返线',
+    PDA: '浦东1号2号航站楼上行尾轨',
+  } as Record<string, string>,
   /** a train passing a platform without stopping (跨站/跳停) runs through it at no more than this (km/h) */
   platformPassKmh: 45,
   /** a train entering or leaving a platform it stops at runs at no more than this (km/h) */

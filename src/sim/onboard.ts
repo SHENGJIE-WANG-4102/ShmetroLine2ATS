@@ -449,7 +449,10 @@ export function updateOnboard(sim: Sim) {
       if (!forced) {
         // DTO degraded → the driver takes the cab at the next stop (ATO); back
         // to DTO at a stop once it is allowed again (D52)
-        const stop = standing && (tr.phase === 'dwell' || tr.phase === 'reversing' || !tr.inService);
+        // (a hot spare standing at its standby berth is at a stop too)
+        const head = tr.tasks[0];
+        const stop = standing && (tr.phase === 'dwell' || tr.phase === 'reversing' || !tr.inService
+          || head?.k === 'stop' && !!head.standby);
         if (tr.mode === 'DTO' && !dtoAllowed(sim, tr) && stop) setMode(sim, tr, 'AM', 'CBTC', sim.atoLine ? '全线ATO运营，转ATO（司机驾驶）' : `降级ATO（${tr.dtoInhibit}）`);
         else if (tr.mode === 'AM' && dtoAllowed(sim, tr) && stop) setMode(sim, tr, 'DTO', 'CBTC', '恢复DTO');
         continue;
