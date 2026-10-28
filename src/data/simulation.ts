@@ -18,6 +18,11 @@ export interface ServiceData {
   standby: { from: number; need: number; to: number }[];
 }
 export interface TimetableData {
+  /** Soft costs for a future duty allocation; these do not forbid a movement. */
+  duty?: { yardPreferences?: {
+    exitDirections: { depot: string; direction: TrackDir; penalty: number }[];
+    movements: { depot: string; kind: 'in' | 'out'; from: number; to: number; penalty: number }[];
+  } };
   templates: Record<string, Template>;
   dayPeriods: Record<DayType, Period[]>;
   shownPeriods: Record<DayType, Period[]>;

@@ -152,10 +152,26 @@ function authorityHalt(sim: Sim, tr: Train): { code: HaltCode; train: number; de
 /** current halt code of a train from its own state (no graph propagation) */
 export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; detail: string; plannedUntil: number; alternatives?: WaitAlternative[] } {
   const r = (code: HaltCode, train = -1, detail = '', plannedUntil = 0) => ({ code, train, detail, plannedUntil });
+  const emergency = () => {
+    if (tr.ebCause === 'spad') return r('SPAD', -1, tr.ebReason);
+    if (tr.ebCause === 'comm' && !tr.comm) return r('COMM_LOSS', -1, tr.ebReason);
+    if (tr.ebCause === 'zc' && sim.zoneState[sim.topo.links[tr.link].zone] === 'ZCFAIL') return r('ZC_FAULT', -1, tr.ebReason);
+    if (!sim.autoRadio && sim.t >= sim.config.startTime) return r('DISPATCHER', -1, tr.ebReason);
+    return r('EB', -1, tr.ebReason);
+  };
   if (tr.phase === 'stabled') return r('STABLED');
   if (tr.failed) return r('FAILED');
   if (tr.phase === 'coupling') return r('COUPLING');
   if (tr.phase === 'dwell') {
+    const work = tr.tasks[0]?.k === 'stop' ? tr.tasks[0].depotWork : undefined;
+    if (work) {
+      if (tr.eb) return emergency();
+      if (tr.hold) return r('HOLD');
+      if (sim.t >= tr.dwellUntil && (tr.doorsOpen || tr.doorSide || tr.doorMotion || sim.t < (tr.doorLockedAt ?? 0)))
+        return r(tr.manual ? 'MANUAL' : 'DWELL', -1, '等待车门关闭锁闭');
+      if (sim.t >= tr.dwellUntil && tr.vfault && tr.vfault.stage !== 'armed') return r('FAILED', -1, '等待车辆故障处理');
+      return r('DWELL', -1, work.kind === 'in' ? '入段固定作业' : '出段固定作业', tr.dwellUntil);
+    }
     if (tr.atoDriver || simulatedAmDoorWork(tr)) {
       const start = atoStartReady(sim, tr);
       return r(start.code, start.train, start.ready && tr.atoButtons?.f && tr.atoButtons?.g ? '等待列车起步' : start.detail, tr.dwellUntil);
@@ -178,14 +194,7 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if (tr.phase === 'reversing') return r('TURNBACK', -1, '', tr.dwellUntil);
   if (tr.phase !== 'run') return r('NONE');
   if (tr.v > 0.05) return r('NONE');
-  if (tr.eb) {
-    if (tr.ebCause === 'spad') return r('SPAD', -1, tr.ebReason);
-    if (tr.ebCause === 'comm' && !tr.comm) return r('COMM_LOSS', -1, tr.ebReason);
-    if (tr.ebCause === 'zc' && sim.zoneState[sim.topo.links[tr.link].zone] === 'ZCFAIL') return r('ZC_FAULT', -1, tr.ebReason);
-    // the release needs a dispatcher answer: with manual answering the clock is the dispatcher's
-    if (!sim.autoRadio && sim.t >= sim.config.startTime) return r('DISPATCHER', -1, tr.ebReason);
-    return r('EB', -1, tr.ebReason);
-  }
+  if (tr.eb) return emergency();
   if (tr.pendingMode) return r('MODE_CHANGE');
   if (tr.stopUntil > sim.t) return r('INCIDENT', -1, tr.stopReason, tr.stopUntil);
   if (tr.hold) return r('HOLD');

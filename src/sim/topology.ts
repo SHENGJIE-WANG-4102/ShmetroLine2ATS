@@ -15,12 +15,12 @@
  *    that node ("entry key" = node*65536 + link).
  */
 import {
-  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, stationChainages,
+  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, OPERATIONS, stationChainages,
   type CrossoverKind, type SidingLane, type LeadDef,
 } from '../data/current';
 
 import { ahead } from './topologyOrder';
-export { ahead } from './topologyOrder';
+export { ahead, directionToward } from './topologyOrder';
 
 export type TrackKind = 'DN' | 'UP' | 'X' | 'SID' | 'CON' | 'DEP';
 export type Dir = 1 | -1;
@@ -203,7 +203,10 @@ export interface TDepot {
   outGateLink: number;
   /** leads into the yard: transfer track t0, t1, t2 (t2 ends at the gate), the
    *  joint where the lead's stub ends, and the depot exit signal (-1 on an entry-only lead) */
-  transferPaths: { gate: number; links: number[]; throat: number; flow: 'in' | 'out' | 'shared'; exitSignal: number; /** the lead's stub link (a turnback berth may lie on it) */ stub: number }[];
+  transferPaths: { gate: number; links: number[]; throat: number; flow: 'in' | 'out' | 'shared'; exitSignal: number; /** the lead's stub link (a turnback berth may lie on it) */ stub: number;
+    /** Outbound work reuses the physical door-test stop ahead of the exit signal. */
+    exitWorkBerth?: number;
+  }[];
   berth: number; // entry berth at gate
   /** 入段 berth per transferPaths entry, -1 on an exit-only lead */
   entryBerths: number[];
@@ -1366,6 +1369,20 @@ export function buildTopology(): Topology {
       },
     });
   });
+
+  // Append, so existing platform, siding and depot berth identities stay put.
+  // A departing head approaches the exit signal on links[1] in direction -1.
+  for (const depot of depots) {
+    if (!OPERATIONS.depotLeadWork?.[depot.key]) continue;
+    const test = OPERATIONS.depotDoorTests[depot.key];
+    if (!test) continue;
+    for (const path of depot.transferPaths) {
+      if (path.exitSignal < 0) continue;
+      path.exitWorkBerth = addBerth({ kind: 'depot', link: path.links[1], offset: test.beforeSignal,
+        dir: -1, platform: -1, station: depot.station, depot: depot.id, reverse: false,
+        name: `${depot.name}出段固定作业` });
+    }
+  }
 
   // ------------------------------------------------------------------ routes
   const routes: TRoute[] = [];

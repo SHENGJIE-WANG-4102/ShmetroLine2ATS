@@ -10,7 +10,7 @@
  * or non-revenue moves before/after service.
  */
 import type { Topology } from './topology';
-import { ahead } from './topology';
+import { ahead, directionToward } from './topology';
 import type { RunTimes } from './dynamics';
 import { cancelTrip, type Block, type DayType, type Plan, type PlanStop, type StopTask, type Task, type Trip, type TripKind, type TrackDir } from './model';
 import { plannedDwell } from './calibration';
@@ -1078,13 +1078,15 @@ function addIntermediateStandbys(ctx: PlanContext, trips: GenTrip[], blocks: Blo
           if (!index.clear(stops, heading)) continue;
           const test = { dir: heading, to, stops };
           const [start, clear] = arriving ? outboundWindow(ctx, depot, test) : inboundWindow(topo, depot, test);
-          if (sharedLead(topo, depot) && blocks.some(b => {
+          if (blocks.some(b => {
             if (arriving && b.end.kind === 'depot' && b.end.depot === depot) {
               const last = trips[b.trips.at(-1)!];
+              if (!depotLeadsConflict(topo, depot, last.dir, heading)) return false;
               const [a, z] = inboundWindow(topo, depot, last);
               return start < z && clear > a;
             }
             if (!arriving && b.start.kind === 'depot' && b.start.depot === depot) {
+              if (!depotLeadsConflict(topo, depot, heading, trips[b.trips[0]].dir)) return false;
               const [a, z] = outboundWindow(ctx, depot, trips[b.trips[0]]);
               return start < z && clear > a;
             }
@@ -1605,21 +1607,24 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
   const reused = new Set<number>();
   /** Added moves through BZL/CSD's shared conversion track are planned
    * clear of the other trains' exits and returns (DEPOT_CONFLICT, D47). */
-  const exitsPlanned: { depot: number; at: number; clear: number }[] = [];
-  const shared = (depot: number) => sharedLead(topo, depot);
+  const exitsPlanned: { depot: number; at: number; clear: number; dir: TrackDir }[] = [];
   const baseLive = (b: Block) => !reused.has(b.id) && b.trips.some(id => !trips[id].cancelled);
-  const exitClear = (depot: number, start: number, first?: Pick<Trip,'dir'|'stops'>) => !reuse || !shared(depot)
+  const exitClear = (depot: number, start: number, first: Pick<Trip,'dir'|'stops'>) => !reuse
     || reuse.blocks.every(b => !baseLive(b) || b.end.kind !== 'depot' || b.end.depot !== depot || (() => {
-      const [approach, clear] = inboundWindow(topo, depot, b.trips.map(id => trips[id]).filter(t => !t.cancelled).at(-1)!);
-      const exitEnd=first?outboundWindow(ctx,depot,first)[1]:start+topo.depots[depot].exitTime;
+      const last = b.trips.map(id => trips[id]).filter(t => !t.cancelled).at(-1)!;
+      if (!depotLeadsConflict(topo, depot, last.dir, first.dir)) return true;
+      const [approach, clear] = inboundWindow(topo, depot, last);
+      const exitEnd=outboundWindow(ctx,depot,first)[1];
       return !(start < clear && exitEnd > approach);
     })());
-  const entryClear = (depot: number, last: Trip) => {
-    if (!reuse || !shared(depot)) return true;
+  const entryClear = (depot: number, last: Pick<Trip,'dir'|'to'|'stops'>) => {
+    if (!reuse) return true;
     const [approach, clear] = inboundWindow(topo, depot, last);
-    const exits = [...exitsPlanned.filter(x => x.depot === depot).map(x => [x.at,x.clear]),
+    const exits = [...exitsPlanned.filter(x => x.depot === depot && depotLeadsConflict(topo, depot, last.dir, x.dir)).map(x => [x.at,x.clear]),
       ...reuse.blocks.filter(b => baseLive(b) && b.start.kind === 'depot' && b.start.depot === depot)
-        .map(b => outboundWindow(ctx,depot,trips[b.trips.find(id=>!trips[id].cancelled)!]))];
+        .map(b => trips[b.trips.find(id=>!trips[id].cancelled)!])
+        .filter(first => depotLeadsConflict(topo, depot, last.dir, first.dir))
+        .map(first => outboundWindow(ctx,depot,first))];
     return exits.every(([start,end]) => !(start < clear && end > approach));
   };
   const intermediate = (st: number) => st > 0 && st < topo.stations.length - 1;
@@ -1907,7 +1912,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
         const tried = triedDepots.get(D.id) ?? new Set<number>(); tried.add(depot); triedDepots.set(D.id, tried); qi--; continue;
       }
       startOf.set(D.id, { kind: 'depot', depot, time: 0 });
-      if (overlay) exitsPlanned.push({ depot, at: depotStartTime(ctx, depot, D),clear:outboundWindow(ctx,depot,D)[1] });
+      if (overlay) exitsPlanned.push({ depot, at: depotStartTime(ctx, depot, D),clear:outboundWindow(ctx,depot,D)[1],dir:D.dir });
       continue;
     }
     const mt = towardDir === D.dir ? 0 : minTurn(T);
@@ -1967,7 +1972,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
             && frontTurnClear(ctx, allForGaps(), {dir:towardDir,to:T,stops}, dep, new Set([D.id])));
         feederRevenue = false;
       }
-      if (st && overlay) exitsPlanned.push({ depot, at: exitAt(st),clear:outboundWindow(ctx,depot,{dir:towardDir,stops:st})[1] });
+      if (st && overlay) exitsPlanned.push({ depot, at: exitAt(st),clear:outboundWindow(ctx,depot,{dir:towardDir,stops:st})[1],dir:towardDir });
       if (!st && overlay) {
         const tried = triedDepots.get(D.id) ?? new Set<number>(); tried.add(depot); triedDepots.set(D.id, tried); qi--;
         continue;
@@ -2209,7 +2214,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
       endOf.set(empty.id, { kind: 'depot', depot: csd });
       continue;
     }
-    const awayDir: TrackDir = topo.stations[T].chain < topo.depots[depot].junctionChain ? 'DN' : 'UP';
+    const awayDir = directionToward(topo.stations[T].chain, topo.depots[depot].junctionChain, 'UP');
     const en = entryStation(topo, depot, awayDir);
     if (en === T) { endOf.set(A.id, { kind: 'depot', depot }); returned(A, depot); continue; }
     const mt = minTurn(T);
@@ -2232,7 +2237,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
       let withdrawalRevenue = !st && !retainedHomes.has(A.id);
       st ??= fitAfter(awayDir, overlay ? Math.max(arr+mt,earliest) : arr+mt, (t0) => buildStops(ctx, awayDir, T, en, t0, true, factorAt),
         stops => outerQuiet(stops) && frontTurnClear(ctx, allForGaps(), A, stops[0].dep, new Set([A.id]))
-          && (!overlay || entryClear(depot, { to: en, stops } as unknown as Trip))
+          && (!overlay || entryClear(depot, { dir: awayDir, to: en, stops }))
           // an intermediate turnback holds an added train no longer than its turnback limit
           && (!overlay || A.dir === awayDir || T === 0 || T === topo.stations.length - 1 || stops[0].dep <= arr + mt + 450)
           && (!overlay || A.dir === awayDir || orderOk(T, arr, stops[0].dep)));
@@ -2259,7 +2264,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
           }
           return stops;
         };
-        st = fitAfter(awayDir,arr+mt,regulate,stops => entryClear(depot,{to:en,stops} as Trip)
+        st = fitAfter(awayDir,arr+mt,regulate,stops => entryClear(depot,{dir:awayDir,to:en,stops})
           && (A.dir === awayDir || placeFree(T,arr,stops[0].dep,-1) && orderOk(T,arr,stops[0].dep))
           && stops[0].dep <= arr+mt+(intermediate(T)?450:MAX_LAYOVER)
           && frontTurnClear(ctx,allForGaps(),A,stops[0].dep,new Set([A.id])));
@@ -2280,7 +2285,7 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
         let s2: PlanStop[] | null = null;
         for (let w = STATIONS[T].dwell; to !== T && !s2 && w <= 60; w += 10) {
           const x = buildStops(ctx, A.dir, T, to, arr + w, true, factorAt);
-          if (outerQuiet(x) && entryClear(on!, { to, stops: x } as unknown as Trip) && others.clear(x, A.dir)) s2 = x;
+          if (outerQuiet(x) && entryClear(on!, { dir:A.dir, to, stops: x }) && others.clear(x, A.dir)) s2 = x;
         }
         if (s2) {
           const wd = addTo(trips, A.dir, 'extra', T, to, s2, true, overlay);
@@ -2914,13 +2919,11 @@ function addTo(trips: GenTrip[], dir: TrackDir, kind: TripKind, from: number, to
   return t;
 }
 
-/** BZL/CSD share their conversion track: a returning train holds it from
- * 1500 m before the junction until it is clear inside the yard. */
-/** some lead of the depot takes both trains going in and trains coming out
- *  (北翟路: each 出入段线 for its direction; 川沙: the 出入段线), so an added
- *  return can meet a planned exit on it */
-export function sharedLead(topo: Topology, depot: number): boolean {
-  const p = topo.depots[depot].portals;
+/** A path-scoped yard checks the actual entry and exit lead. Other yards keep
+ * their existing conservative yard-wide check wherever a lead is shared. */
+export function depotLeadsConflict(topo: Topology, depot: number, entry: TrackDir, exit: TrackDir): boolean {
+  const yard = topo.depots[depot], p = yard.portals;
+  if (OPERATIONS.depotLeadConflictScope?.[yard.key] === 'path') return p.entry[entry].path === p.exit[exit].path;
   const ins = new Set([p.entry.DN.path, p.entry.UP.path]);
   return ins.has(p.exit.DN.path) || ins.has(p.exit.UP.path);
 }
@@ -2930,7 +2933,8 @@ export function inboundWindow(topo: Topology, depot: number, last: Pick<Trip, 't
   const distance = Math.abs(topo.stations[last.to].chain - d.junctionChain);
   const arr = last.stops.at(-1)!.arr;
   const transfer = d.transferPaths[0].links.reduce((sum, id) => sum + topo.links[id].len, 0);
-  return [arr + 15 + Math.max(0, distance - 1500) / 20, arr + 15 + distance / 20 + (transfer + LINE_INFO.trainLength) / (25 / 3.6) + 25];
+  const work = OPERATIONS.depotLeadWork?.[d.key]?.entryS ?? 0;
+  return [arr + 15 + Math.max(0, distance - 1500) / 20, arr + 15 + distance / 20 + (transfer + LINE_INFO.trainLength) / (25 / 3.6) + 25 + work];
 }
 
 /** A reversing exit occupies the conversion track until it can reach and
@@ -2957,7 +2961,8 @@ export function depotStartTime(ctx: Pick<PlanContext, 'topo'>, depot: number, fi
   // (+ the change of ends where the lead reaches the line against `dir`)
   // (callers may pass bare stops: then the direction follows from their order)
   const dir: TrackDir = first.dir ?? (first.stops.length > 1 && first.stops[1].st < st0 ? 'UP' : 'DN');
-  const travel = 95 + dist / 13 + 25 + (topo.depots[depot].portals.exit[dir].reverse ? PORTAL_REVERSE : 0);
+  const work = OPERATIONS.depotLeadWork?.[topo.depots[depot].key]?.exitS ?? 0;
+  const travel = 95 + dist / 13 + 25 + work + (topo.depots[depot].portals.exit[dir].reverse ? PORTAL_REVERSE : 0);
   return Math.round(refTime - travel - (first.stops[0].stop ? 75 : 30));
 }
 
@@ -3344,12 +3349,14 @@ function restoreCancelledHomes(ctx: PlanContext, plan: Plan, now: number) {
       if (depotStartTime(ctx, depot, { dir, stops }) < now + 120 || !index.clear(stops, dir)
         || !storedPlatformsClear(topo,plan,{dir,to:station,stops},end.kind==='stable'?end.berth:undefined)) continue;
       const first = { dir, stops }, [start, clear] = outboundWindow(ctx, depot, first);
-      if (sharedLead(topo, depot) && plan.blocks.some(b => b.end.kind === 'depot' && b.end.depot === depot && !cancelled(b)
-        && (([a,z]) => start < z && clear > a)(inboundWindow(topo, depot, trips[b.trips.filter(id => !trips[id].cancelled).at(-1)!])))) continue;
+      if (plan.blocks.some(b => b.end.kind === 'depot' && b.end.depot === depot && !cancelled(b)
+        && (() => { const last=trips[b.trips.filter(id => !trips[id].cancelled).at(-1)!];
+          return depotLeadsConflict(topo,depot,last.dir,dir) && (([a,z]) => start < z && clear > a)(inboundWindow(topo,depot,last)); })())) continue;
       if (end.kind === 'depot') {
         const [a,z] = inboundWindow(topo, end.depot, { to: station, stops });
-        if (sharedLead(topo, end.depot) && plan.blocks.some(b => b.start.kind === 'depot' && b.start.depot === end.depot && !cancelled(b)
-          && (([x,y]) => x < z && y > a)(outboundWindow(ctx, end.depot, trips[b.trips.find(id => !trips[id].cancelled)!])))) continue;
+        if (plan.blocks.some(b => b.start.kind === 'depot' && b.start.depot === end.depot && !cancelled(b)
+          && (() => { const first=trips[b.trips.find(id => !trips[id].cancelled)!];
+            return depotLeadsConflict(topo,end.depot,dir,first.dir) && (([x,y]) => x < z && y > a)(outboundWindow(ctx,end.depot,first)); })())) continue;
       }
       // Stock-restoring empty moves use the same lead reservations as a
       // passenger duty: an otherwise clear return may still cut across a
@@ -3680,7 +3687,14 @@ export function blockTasks(topo: Topology, plan: Plan, block: Block, fromTrip = 
     const trip = plan.trips[ids[k]];
     if (trip.cancelled) continue;
     const fromDepot = k === 0 && block.start.kind === 'depot' && fromTrip === 0;
-    if (fromDepot && block.start.kind === 'depot') portalExitTasks(topo, block.start.depot, trip, tasks);
+    if (fromDepot && block.start.kind === 'depot') {
+      const depot = topo.depots[block.start.depot], work = OPERATIONS.depotLeadWork?.[depot.key];
+      const berth = depot.transferPaths[depot.portals.exit[trip.dir].path].exitWorkBerth;
+      if (work && berth !== undefined) tasks.push({ k:'stop', berth, station:depot.station, trip:-1,
+        arr:null, dep:null, doors:false, revenue:false, minDwell:work.exitS, note:'出段固定作业',
+        depotWork:{kind:'out',depot:block.start.depot,berths:[berth]} });
+      portalExitTasks(topo, block.start.depot, trip, tasks);
+    }
     const first = tasks.length;
     tripTasks(topo, trip, tasks, fromDepot);
     // An explicit overnight berth fixes the departure platform as well as
@@ -3714,18 +3728,38 @@ export function blockTasks(topo: Topology, plan: Plan, block: Block, fromTrip = 
         }
       }
     }
-    else if (block.end.kind === 'depot') depotTasks(topo, block.end.depot, trip.dir, tasks);
-    else if (block.end.kind === 'stable') {
-      if (block.end.berth !== undefined) {
-        if (topo.berths[block.end.berth].kind === 'platform') retargetArrival(tasks, trip.to, block.end.berth);
-        tasks.push({ k: 'stable', berth: block.end.berth, reason: '存车', station: trip.to });
-        continue;
-      }
-      const tb = turnbackAt(topo, trip.to, trip.dir);
-      if (tb && tb.kind === 'rear' && !tailTasks(topo, plan, block, trip, tasks)) tasks.push({ k: 'stable', berth: -1, reason: '存车', station: trip.to });
-    }
+    else appendBlockEndTasks(topo, plan, block, trip, tasks);
   }
   return tasks;
+}
+
+/** Finish the same block after its last service, including an adjusted trip. */
+export function appendBlockEndTasks(topo: Topology, plan: Plan, block: Block, trip: Trip, tasks: Task[]) {
+  const destination = block.end.kind === 'depot' ? entryStation(topo, block.end.depot, trip.dir)
+    : block.end.kind === 'stable' ? block.end.station : trip.to;
+  let direction = trip.dir;
+  const toward = directionToward(topo.stations[trip.to].chain, topo.stations[destination].chain, direction);
+  if (toward !== direction && turnbackAt(topo, trip.to, direction)) {
+    addTurnback(topo, trip, tasks);
+    direction = toward;
+    // The normal block task builder starts the positioning trip at the
+    // departure platform after the same turnback.
+    tasks.push({ k:'stop', berth:platformBerth(topo,trip.to,direction), station:trip.to,
+      trip:-1, arr:null, dep:null, doors:false, revenue:false, note:'回段定位' });
+  }
+  if (block.end.kind === 'depot') depotTasks(topo, block.end.depot, direction, tasks);
+  else if (block.end.kind === 'stable') {
+    if (destination !== trip.to) tasks.push({ k:'stop', berth:platformBerth(topo,destination,direction), station:destination,
+      trip:-1, arr:null, dep:null, doors:false, revenue:false, note:'存车定位' });
+    if (block.end.berth !== undefined) {
+      if (topo.berths[block.end.berth].kind === 'platform') retargetArrival(tasks, destination, block.end.berth);
+      tasks.push({ k: 'stable', berth: block.end.berth, reason: '存车', station: destination });
+      return;
+    }
+    const positioned = destination === trip.to ? trip : { ...trip, to:destination, dir:direction };
+    const tb = turnbackAt(topo, destination, direction);
+    if (tb && tb.kind === 'rear' && !tailTasks(topo, plan, block, positioned, tasks)) tasks.push({ k: 'stable', berth: -1, reason: '存车', station: destination });
+  }
 }
 
 /**
@@ -3776,6 +3810,14 @@ function portalExitTasks(topo: Topology, depot: number, trip: Trip, tasks: Task[
  * direction the train first changes ends on the junction station's platform. */
 export function depotTasks(topo: Topology, depot: number, dir: TrackDir, tasks: Task[]) {
   const p = topo.depots[depot].portals.entry[dir];
+  const yard = topo.depots[depot], work = OPERATIONS.depotLeadWork?.[yard.key];
+  const addWork = (berths:number[]) => {
+    if (!work || !berths.length) return;
+    tasks.push({ k:'stop', berth:berths[0], station:yard.station, trip:-1, arr:null, dep:null,
+      doors:false, revenue:false, minDwell:work.entryS, note:'入段固定作业',
+      depotWork:{kind:'in',depot,berths} });
+  };
+  if (work?.entryPosition === 'platform') addWork([platformBerth(topo, p.station, dir)]);
   if (p.reverse) {
     const berth = platformBerth(topo, p.station, dir);
     const last = tasks[tasks.length - 1];
@@ -3784,7 +3826,16 @@ export function depotTasks(topo: Topology, depot: number, dir: TrackDir, tasks: 
     }
     tasks.push({ k: 'reverse', berths: [berth], chosen: berth, station: p.station, minTime: 40 });
   }
-  tasks.push({ k: 'depot', depot, berth: topo.depots[depot].entryBerths[p.path] });
+  if (work?.entryPosition === 'lead') {
+    const candidates = yard.transferPaths.flatMap((path,index) => {
+      if (yard.entryBerths[index] < 0) return [];
+      const berth = topo.berths.find(b => b.link === path.stub && b.dir === 1 && b.kind === 'siding');
+      return berth ? [{ index, berth:berth.id }] : [];
+    });
+    candidates.sort((a,b) => Number(b.index === p.path) - Number(a.index === p.path));
+    addWork(candidates.map(c => c.berth));
+  }
+  tasks.push({ k: 'depot', depot, berth: yard.entryBerths[p.path] });
 }
 
 export function tripTasks(topo: Topology, trip: Trip, tasks: Task[], fromDepot: boolean) {
@@ -3826,7 +3877,7 @@ function retargetArrival(tasks: Task[], station: number, berth: number) {
  * planned one (广兰路 middle track instead of the UP main). */
 export function departureBerthAfterReverse(topo: Topology, reversedAt: number, planned: number): number {
   const b = topo.berths[reversedAt];
-  if (b.kind !== 'platform' || topo.berths[planned].platform === b.platform) return planned;
+  if (b.kind !== 'platform' || topo.berths[planned].kind !== 'platform' || topo.berths[planned].platform === b.platform) return planned;
   return topo.berths.find((x) => x.platform === b.platform && x.dir !== b.dir)?.id ?? planned;
 }
 

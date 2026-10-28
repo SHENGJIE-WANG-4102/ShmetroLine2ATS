@@ -771,7 +771,7 @@ export class Sim {
         body, v: tr.v, level: tr.level, comm: tr.comm, mode: tr.mode, eb: tr.eb, phase: tr.phase, delay: tr.delay,
         tbStage: tr.tbStage, depotStage: tr.depotStage,
         load: tr.load, hold: tr.hold, failed: tr.failed, doors: tr.doorsOpen, doorClosing: tr.doorMotion?.kind === 'closing', doorSide: tr.doorSide, doorsAwait: tr.doorsAwait,
-        platSide: t0?.k === 'stop' && (tr.phase === 'dwell' || (tr.stopDist >= 0 && tr.stopDist < 400)) ? platformSide(this, tr, this.topo.berths[t0.berth].platform) : '',
+        platSide: t0?.k === 'stop' && this.topo.berths[t0.berth].platform >= 0 && (tr.phase === 'dwell' || (tr.stopDist >= 0 && tr.stopDist < 400)) ? platformSide(this, tr, this.topo.berths[t0.berth].platform) : '',
         inService: tr.inService, hot: hotMark(tr), chain: this.trainChain(tr),
         maReason: tr.maReason, maDist: tr.maDist, vPermit: tr.vPermit, nextSig: tr.nextSignal,
         task: t0 ? describeTask(this, t0) : '—', kind: tr.tripId >= 0 ? this.plan.trips[tr.tripId].kind : '',

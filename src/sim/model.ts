@@ -123,6 +123,8 @@ export interface StopTask {
   revenue: boolean;
   /** minimum dwell override */
   minDwell?: number;
+  /** Physical fixed work on a depot movement, including its possible leads. */
+  depotWork?: { kind: 'in' | 'out'; depot: number; berths: number[] };
   note?: string;
   /** set-down only (定点班车): nobody boards here */
   noBoard?: boolean;
@@ -204,6 +206,8 @@ export interface Train {
   dtoInhibit: string;
   /** section where CBTC became available again; the upgrade waits for the next section boundary (relocalisation) */
   relocSec: number;
+  /** onboard position kept since a standing CBTC→TBTC degrade: upgrade without moving (D146) */
+  locKept?: boolean;
   /** last mode / level change */
   modeSince: number;
   /** signal the RM authorisation is bound to (-1 = none: RM gives no authority to pass a signal at danger) */

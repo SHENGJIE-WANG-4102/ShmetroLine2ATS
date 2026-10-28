@@ -91,6 +91,9 @@ export function setMode(sim: Sim, tr: Train, mode: Mode, level: Level, why: stri
   if (!a.ok) return false;
   tr.mode = mode;
   tr.level = level;
+  // A standing degrade keeps the onboard position; moving under TBTC loses
+  // it until the next relocalisation point (D146).
+  if (level === 'TBTC' && from.endsWith('-C')) tr.locKept = tr.v < 0.05;
   tr.modeSince = sim.t;
   if (tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.manual && !tr.atoDriver) {
     const delta=(Number(simulatedAmDriver(tr))-Number(wasSimulatedDriver))*OPERATIONS.atoDriverWork.postLockExtraS;
@@ -450,12 +453,13 @@ export function updateOnboard(sim: Sim) {
       continue;
     }
     // ---- upgrade TBTC → CBTC on the move after relocalisation (P1 不停车升级)
+    if (tr.v > 0.05) tr.locKept = false;
     // (not towards a stop in a zone switched to TBTC: it would only degrade again there)
     if (!avail || tr.forceLevel === 'TBTC' || nextStopZone(sim, tr) !== 'CBTC') { tr.relocSec = -1; continue; }
     const sec = topo.links[tr.link].section;
     if (tr.relocSec < 0) { tr.relocSec = sec; continue; }
-    const atBeacon = tr.v < 0.1 && topo.berths.some(b => b.link === tr.link && Math.abs(b.offset - tr.off) < 1);
-    if (sec !== tr.relocSec || tr.phase === 'dwell' || atBeacon) {
+    const atBeacon = atRelocalisationBeacon(sim, tr);
+    if (sec !== tr.relocSec || tr.phase === 'dwell' || atBeacon || tr.locKept) {
       if (setMode(sim, tr, tr.mode === 'CM' ? 'CM' : autoMode(sim, tr, 'CBTC'), 'CBTC', '升级CBTC')) tr.relocSec = -1;
     }
   }
@@ -470,6 +474,11 @@ function nextStopZone(sim: Sim, tr: Train) {
     return sim.zoneState[sim.topo.links[sim.topo.berths[b].link].zone];
   }
   return 'CBTC';
+}
+
+/** standing on a stopping-point beacon (a known berth position) */
+export function atRelocalisationBeacon(sim: Sim, tr: Train): boolean {
+  return tr.v < 0.1 && sim.topo.berths.some(b => b.link === tr.link && Math.abs(b.offset - tr.off) < 1);
 }
 
 export function callDegrade(sim: Sim, tr: Train) {

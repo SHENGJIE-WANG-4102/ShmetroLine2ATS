@@ -1349,7 +1349,10 @@ describe('shared depot admission',()=>{
     expect(block).toBeDefined();
     expect(block.start.kind).toBe('depot');if(block.start.kind!=='depot')return;
     sim.plan.blocks=[block];sim.t=block.start.time-1;
-    const tasks=blockTasks(sim.topo,sim.plan,block),first=tasks[0];expect(first.k).toBe('stop');if(first.k!=='stop')return;
+    const tasks=blockTasks(sim.topo,sim.plan,block),work=tasks[0],first=tasks[1];
+    expect(work.k).toBe('stop');if(work.k!=='stop')return;
+    expect(work.depotWork).toMatchObject({kind:'out',depot:depot.id});
+    expect(first.k).toBe('stop');if(first.k!=='stop')return;
     const index=tasks.findIndex(t=>t.k==='stop'&&t.station===first.station&&t.dep!==null&&(t.arr===null||t.arr===t.dep));
     const origin=tasks[index];if(origin.k!=='stop'||origin.dep===null)throw new Error('origin');
     const initial=sim.trainList.length;
@@ -1359,14 +1362,15 @@ describe('shared depot admission',()=>{
     sim.t=block.start.time;
     const admission=arbitrateResources(sim).decisions.get(-(block.id+1))!;
     expect(admission).toMatchObject({admitted:true,blocker:-1});
-    expect(admission.option.phases).toHaveLength(1);
-    expect(admission.option.phases[0].goal).toBe(first.berth);
+    expect(admission.option.phases).toHaveLength(2);
+    expect(admission.option.phases[0].goal).toBe(work.berth);
+    expect(admission.option.phases[1].goal).toBe(first.berth);
     expect(first.trip).toBe(block.trips[0]);
     expect(origin.trip).toBe(block.trips[0]);
     expect(admission.request.origin).toMatchObject({trip:block.trips[0],berth:origin.berth,dep:origin.dep});
     expect(sim.topo.berths[first.berth].platform).toBeGreaterThanOrEqual(0);
     expect(sim.topo.berths[origin.berth].platform).toBe(sim.topo.berths[first.berth].platform);
-    expect(admission.option.choices).toEqual([{index:0,berth:first.berth}]);
+    expect(admission.option.choices).toEqual([{index:0,berth:work.berth},{index:1,berth:first.berth}]);
     expect(admission.request.readyAt).toBe(sim.t);
     spawnDue(sim);
     expect(block.train).toBeDefined();expect(sim.depotStock[depot.id]).toBe(stock-1);
@@ -1376,7 +1380,7 @@ describe('shared depot admission',()=>{
 
     // Derive the completed cab-change pose from that actual arrival path;
     // do not invent an unrelated platform or shorten the consist.
-    const phase=admission.option.phases[0];
+    const phase=admission.option.phases[1];
     const incoming=phase.path.map(step=>({link:step.link,dir:(step.to>step.from?1:-1) as 1|-1}));
     const point=reversedBerthPoint(sim.topo,first.berth,train.len,incoming)!;
     expect(point).toBeDefined();

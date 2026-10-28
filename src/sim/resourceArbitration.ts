@@ -14,6 +14,7 @@ import { MIN_DWELL } from './calibration';
 import { LINE_INFO } from '../data/current';
 import { peekVehicle } from './yard';
 import { distanceToBerthFrom, signalAheadFrom, depotBerth, berthHolder, cowTask, applyDepotChoice, routeUser, routeOccupant, trainLabel, depotSourceBusy, arsReadyAt } from './ats';
+import { walkRouteToBerth } from './routePath';
 
 export interface ResourcePhase {
   goal: number;
@@ -80,6 +81,7 @@ const allocations = new WeakMap<Sim, ResourceAllocation>();
 /** Geometry for approaching trains, without admission or ownership. */
 const approaches = new WeakMap<Sim, Map<number, ResourceRequest>>();
 const chains = new WeakMap<Sim['routeTable'], Map<string, number[]>>();
+const firstRouteChoices = new WeakMap<Sim['routeTable'], Map<string, number[]>>();
 /** These pure geometry queries are shared within one allocation only. */
 const queryCaches = new WeakMap<Sim, ReturnType<typeof newQueryCache>>();
 function newQueryCache() {
@@ -169,14 +171,32 @@ function resourceLinks(sim: Sim): ReadonlySet<number> {
   return topologyResourceLinks(sim.topo);
 }
 
+/** Consecutive stops at the same physical platform are one approach to a
+ * cab change, even when an operational work stop sits between them. */
+function platformTurnAfter(sim: Sim, tasks: Task[], index: number, berth: number,
+  choices: readonly {index:number;berth:number}[] = []): { index:number; task:Extract<Task,{k:'reverse'}> } | undefined {
+  const platform=sim.topo.berths[berth]?.platform;
+  if (platform === undefined || platform < 0) return undefined;
+  for (let i=index+1;i<tasks.length;i++) {
+    const task=tasks[i], selected=choices.find(c=>c.index===i)?.berth;
+    if (task.k==='stop' && sim.topo.berths[selected ?? task.berth]?.platform===platform) continue;
+    if (task.k==='reverse') {
+      const candidates=selected !== undefined ? [selected] : task.chosen >= 0 ? [task.chosen] : task.berths;
+      if (candidates.some(b=>sim.topo.berths[b]?.platform===platform)) return {index:i,task};
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 /** The same physical platform remains a resource through its cab change
  * and origin stop, even though its two directional berths are different. */
 function optionResourceLinks(sim: Sim, option: ResourceOption, tasks: Task[]): Set<number> {
   const links = new Set(resourceLinks(sim));
   for (const c of option.choices) {
-    const task = tasks[c.index], next = tasks[c.index + 1], berth = sim.topo.berths[c.berth];
-    const turn = next?.k === 'reverse' && sim.topo.berths[option.choices.find(v => v.index === c.index + 1)?.berth ?? next.chosen];
-    if (task.k === 'stop' && turn && berth.platform >= 0 && turn.platform === berth.platform
+    const task = tasks[c.index], berth = sim.topo.berths[c.berth];
+    const turn = task.k === 'stop' && platformTurnAfter(sim,tasks,c.index,c.berth,option.choices);
+    if (task.k === 'stop' && turn
       || task.k === 'reverse' && berth.kind === 'platform' || task.k === 'stable') links.add(berth.link);
   }
   return links;
@@ -333,7 +353,9 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
     const task = tasks[index];
     if (!task || depth > tasks.length) return [];
     let candidates = [projected ?? taskBerth(sim, task)];
-    if (task.k === 'reverse') {
+    if (task.k === 'stop' && task.depotWork?.kind === 'in' && projected === undefined) {
+      candidates = [task.berth, ...task.depotWork.berths.filter(b => b !== task.berth)];
+    } else if (task.k === 'reverse') {
       const kind = sim.topo.sections[sim.topo.links[point.link].section].kind;
       const physical = (kind === 'tail' || kind === 'siding') && sim.topo.stations[task.station].turnbackBerths.find(id => {
         const b = sim.topo.berths[id];
@@ -380,7 +402,10 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
       // A turn continuing into another resource still includes its exit.
       const nextTask = tasks[index + 1];
       const reverseNext = task.k === 'stop' && nextTask?.k === 'reverse' && nextTask.station === task.station;
-      if (reverseNext) {
+      const laterPlatformTurn = task.k === 'stop' && !reverseNext && platformTurnAfter(sim,tasks,index,goal);
+      if (laterPlatformTurn && nextTask?.k === 'stop') {
+        out.push(...build(index+1, {link:berth.link,off:berth.offset,dir:berth.dir}, next, depth+1, path));
+      } else if (reverseNext) {
         if (nextTask.chosen === goal) {
           if (canWaitAfterTurn(index + 2)) { out.push(next); continue; }
           const rear = reversed();
@@ -411,10 +436,10 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
   return complete.length ? complete : incomplete;
 }
 
-function firstTaskIndex(tr: Train): number {
+function firstTaskIndex(sim: Sim, tr: Train): number {
   // An on-platform cab change has not released the platform while dwelling.
-  if (tr.phase === 'dwell' && tr.tasks[1]?.k === 'reverse' && tr.tasks[0]?.k === 'stop'
-    && tr.tasks[1].chosen === tr.tasks[0].berth) return 0;
+  if (tr.phase === 'dwell' && tr.tasks[0]?.k === 'stop'
+    && platformTurnAfter(sim,tr.tasks,0,tr.tasks[0].berth)) return 0;
   return tr.phase === 'dwell' || tr.phase === 'reversing' ? 1 : 0;
 }
 
@@ -476,7 +501,8 @@ function makeRequest(sim: Sim, id: number, tasks: Task[], point: TrackPoint, len
   // first grant must not prevent collecting those alternatives next tick.
   if (goal < 0 && task.k !== 'stable' && task.k !== 'reverse') return undefined;
   const nextTask = tasks[first + 1];
-  const reverse = nextTask?.k === 'reverse' && task.k === 'stop' && nextTask.station === task.station;
+  const reverse = task.k === 'stop' && (nextTask?.k === 'reverse' && nextTask.station === task.station
+    || !!platformTurnAfter(sim,tasks,first,goal));
   const physical = resourceLinks(sim);
   const transit = tr ? sim.resourceTransit.get(tr.id) : undefined;
   const departing = !!tr && (!!transit || tr.body.some(p => physical.has(p.link)));
@@ -541,7 +567,7 @@ export function collectResourceRequests(sim: Sim): ResourceRequest[] {
   const requests: ResourceRequest[] = [];
   for (const tr of sim.trainList) {
     if (tr.failed && !sim.resourceTransit.get(tr.id)?.entered || !['run', 'dwell', 'reversing'].includes(tr.phase)) continue;
-    const first = firstTaskIndex(tr);
+    const first = firstTaskIndex(sim,tr);
     const reverse = tr.phase === 'reversing' && tr.tasks[0]?.k === 'reverse' ? tr.tasks[0] : undefined;
     const point = reverse ? reversedBerthPoint(sim.topo, reverse.chosen, tr.len, tr.hist) : { link: tr.link, off: tr.off, dir: tr.dir };
     const transit = sim.resourceTransit.get(tr.id);
@@ -642,6 +668,22 @@ function physicalBlocker(sim: Sim, option: ResourceOption, self: number): Resour
 
 type PhysicalOrder = Map<number, Set<number>>;
 
+/** A physical predecessor is binding only if every reachable first route is occupied. */
+export function routePhysicalPredecessors(sim: Sim, tr: Train, goal: number): number[] {
+  const signal=sim.topo.signals[tr.nextSignal];
+  if (tr.phase !== 'run' || !sim.topo.berths[goal] || signal?.dir !== tr.dir) return [];
+  let cache=firstRouteChoices.get(sim.routeTable);
+  if (!cache) firstRouteChoices.set(sim.routeTable,cache=new Map());
+  const key=`${signal.id}/${goal}`;
+  let routes=cache.get(key);
+  if (!routes) {
+    routes=signal.routes.filter(id=>Number.isFinite(walkRouteToBerth(sim.topo,sim.routeTable,{route:id,index:0},goal)));
+    cache.set(key,routes);
+  }
+  const blockers=routes.map(id=>routeOccupant(sim,id,tr.id));
+  return blockers.length && blockers.every(Boolean) ? [...new Set(blockers.map(b=>b!.train))] : [];
+}
+
 /** Rule 3: only actual occupancy/following creates these dependencies. No
  * reservation, scheduling wait, driving grade or wait-message text is read. */
 function physicalOrder(sim: Sim, requests: ResourceRequest[]): PhysicalOrder {
@@ -659,9 +701,13 @@ function physicalOrder(sim: Sim, requests: ResourceRequest[]): PhysicalOrder {
     if (tr.intervalWait && tr.intervalWait.train >= 0) predecessors.add(tr.intervalWait.train);
     if (!applicants.has(tr.id)) {
       // Applicants already checked all reachable berth alternatives above.
-      const task = tr.tasks[firstTaskIndex(tr)], goal = task ? taskBerth(sim, task) : -1;
+      const task = tr.tasks[firstTaskIndex(sim,tr)], goal = task ? taskBerth(sim, task) : -1;
       const occupant = goal >= 0 ? berthHolder(sim, goal, tr.id, true) : -1;
       if (occupant >= 0) predecessors.add(occupant);
+      // An ordinary train may have no resource request and no TRAIN_AHEAD MA
+      // even though all its reachable first routes are physically occupied.
+      // Include those actual occupants before applying timetable order.
+      for (const blocker of routePhysicalPredecessors(sim,tr,goal)) predecessors.add(blocker);
     }
     order.set(tr.id, predecessors);
   }
@@ -821,6 +867,7 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
         }
         for (const c of option.choices) {
           const task = tr.tasks[c.index];
+          if (task.k === 'stop' && task.depotWork && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;
           if (task.k === 'reverse' && task.chosen !== c.berth) cowTask(tr, task).chosen = c.berth;
           if (task.k === 'stable' && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;
           if (option.phases.some(p => reachesBerth(sim, p, c.berth))) sim.berthRes.set(c.berth, tr.id);
@@ -905,6 +952,7 @@ export function adoptSpawnResources(sim: Sim, block: number, tr: Train) {
   rememberTransit(sim, tr, decision.option);
   for (const c of decision.option.choices) {
     const task = tr.tasks[c.index];
+    if (task.k === 'stop' && task.depotWork && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;
     if (task.k === 'reverse' && task.chosen !== c.berth) cowTask(tr, task).chosen = c.berth;
     if (task.k === 'depot' && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;
     if (task.k === 'stable' && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;

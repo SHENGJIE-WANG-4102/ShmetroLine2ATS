@@ -461,6 +461,17 @@ export const OPERATIONS = {
   reverseKmh: 5,
   /** 【假设】库线未建模，以各段出段信号前5米、±1米代替试验库线。 */
   depotDoorTests: { BZL: { beforeSignal: 5 }, LYD: { beforeSignal: 5 }, CSD: { beforeSignal: 5 } } as Record<string, { beforeSignal: number }>,
+  // 【假设】 30 s each for the fixed work; the existing 15 s non-passenger
+  // stop is the lower bound, with allowance for the work itself. Exit uses
+  // the existing door-test position instead of a second stopping point.
+  depotLeadWork: {
+    BZL: { exitS: 30, entryS: 30, entryPosition: 'lead' },
+    LYD: { exitS: 30, entryS: 30, entryPosition: 'platform' },
+    CSD: { exitS: 30, entryS: 30, entryPosition: 'lead' },
+  } as const,
+  // User-confirmed separate normal entry/exit; a reverse exit still shares
+  // the actual entry path. Other yards retain their existing slot model.
+  depotLeadConflictScope: { CSD: 'path' } as const,
   /** Fixed seconds allowance over the minimum ATO run per stopping section (s). */
   sectionRunAllowanceS: 22.5, // 用户决定（2026-10-23）：停站区间统一固定富余秒数。
   // 【假设】沿用原ATS试探规则的12km/h，避免用极低速消耗富余；非ATP最低速度。

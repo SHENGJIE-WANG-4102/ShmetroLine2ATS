@@ -813,7 +813,13 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     vEbi = Math.min(vEbi, brakingSpeedH(d, v, PERF.bEbGuaranteed, dh) + PERF.atpTolerance);
     if (v < scan.vBody - 0.1) consider(d, v, '限速');
   }
-  vT = Math.min(vT, brakingSpeed(scan.maDist - 1, 0, bPlan));
+  // When authority ends before the station stop, approach that nearer target
+  // with the same jerk-aware anticipation used for other restrictive limits.
+  // The ATP permission and intervention curves below remain unchanged.
+  const authorityFirst = scan.maDist < scan.stopDist - 1;
+  vT = Math.min(vT, authorityFirst
+    ? atoLimitSpeed(scan.maDist - 1, 0, tr.v, tr.a, bPlan)
+    : brakingSpeed(scan.maDist - 1, 0, bPlan));
   if (scan.stopDist !== Infinity) {
     // Only the ATO station-stop shape changes. Wet-rail precautions, authority
     // and ATP curves retain their independently supervised braking rates.

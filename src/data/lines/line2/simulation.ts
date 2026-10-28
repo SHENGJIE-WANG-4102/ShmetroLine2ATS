@@ -167,6 +167,18 @@ export const SIMULATION: SimulationData = {
   ...SIMULATION_EXTRAS,
   topology: { wrapAfter: 'LJZ' },
   timetable: {
+    // 【假设】 Broad preferred windows are soft costs, not restrictions.
+    duty: { yardPreferences: {
+      exitDirections: [
+        { depot: 'CSD', direction: 'UP', penalty: 3600 },
+        { depot: 'LYD', direction: 'UP', penalty: 3600 },
+        { depot: 'BZL', direction: 'DN', penalty: 3600 },
+      ],
+      movements: [
+        { depot: 'CSD', kind: 'in', from: H(10), to: H(12), penalty: 3600 },
+        { depot: 'CSD', kind: 'out', from: H(15), to: H(16,30), penalty: 3600 },
+      ],
+    } },
     templates: TEMPLATES, dayPeriods: DAY_PERIODS, shownPeriods: SHOWN_PERIODS,
     dwellBands: DWELL_BANDS, runBands: RUN_BANDS, serviceData: SERVICE_DATA,
     opening: OPENING, outerBandMargin: 1200, overlays: OVERLAY_PRESETS,

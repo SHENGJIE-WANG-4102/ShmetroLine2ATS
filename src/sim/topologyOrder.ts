@@ -4,3 +4,9 @@
 export function ahead(direction: 'DN' | 'UP', from: number, to: number): boolean {
   return direction === 'DN' ? to > from : to < from;
 }
+
+/** Direction from a station chainage to a target; preserve the caller's
+ * direction when both lie at the same point. */
+export function directionToward(fromChain: number, targetChain: number, same: 'DN' | 'UP'): 'DN' | 'UP' {
+  return targetChain > fromChain ? 'DN' : targetChain < fromChain ? 'UP' : same;
+}

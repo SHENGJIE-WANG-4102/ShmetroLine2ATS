@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/engine';
 import { capture, restore, type Checkpoint } from '../src/sim/state';
-import { berthBusy, berthHolder, cancelArsRoute, routeFaultCode, runARS, routeBlocker, updateTrainTasks, signalAheadFrom } from '../src/sim/ats';
+import { berthBusy, berthHolder, cancelArsRoute, routeFaultCode, runARS, routeBlocker, updateTrainTasks, signalAheadFrom, newTrain } from '../src/sim/ats';
 import { cancelRoute, committedTrain, computeOccupancy, releaseRoute, trySetRoute, updateInterlocking, signalPassed } from '../src/sim/interlocking';
 import { computeBody, indexBodies, scanAhead, stopError, updateTrainMotion, withdrawAuthority } from '../src/sim/movement';
 import { canAcceptRestriction, signalStopDistance, restrictionDistance, canStopBeforeSignal, restrictionDistanceAt, type RestrictionBrake } from '../src/sim/protection';
@@ -16,7 +16,7 @@ import { validateCommand } from '../src/sim/commands';
 import type { Command } from '../src/sim/model';
 import { openCall } from '../src/sim/radio';
 import { allowed, TURNBACK } from '../src/sim/fsm';
-import { arbitrateResources, collectResourceRequests, routeResourceBlocker, resourceAdmissionBlocked, resourceAllocation, type ResourceRequest } from '../src/sim/resourceArbitration';
+import { arbitrateResources, collectResourceRequests, routePhysicalPredecessors, routeResourceBlocker, resourceAdmissionBlocked, resourceAllocation, type ResourceRequest } from '../src/sim/resourceArbitration';
 import { blockTasks, depotTasks } from '../src/sim/timetable';
 import { reversedBerthPoint, downstreamTerminal, orderedStations, safeWaitingPoint, buildTopology, linkChain, travelDirection, type Dir, type Topology } from '../src/sim/topology';
 import { profileOf, chainSense, gradeAccelAt, G, type Profile } from '../src/sim/gradient';
@@ -44,6 +44,53 @@ function fixture(keepThird = false) {
 }
 
 describe('whole-movement resource admission', () => {
+  it('does not invent a physical predecessor when an alternate route to the same berth is free', () => {
+    const sim=new Sim({dayType:'weekday',dateLabel:'physical-route-or',startTime:14400,seed:7,noPossessions:true});
+    for(const tr of [...sim.trainList])sim.removeTrain(tr);
+    const signal=sim.topo.signals.find(s=>s.name==='X0905')!;
+    const goal=sim.topo.berths.find(b=>b.name==='江苏路 下行站台')!;
+    const straight=sim.topo.routes.find(r=>r.name==='X0905→X0911')!;
+    const side=sim.topo.routes.find(r=>r.name==='X0905→X0911(侧向)')!;
+    expect(sim.routeTable.next.get(goal.id)![signal.id]).toBe(straight.id);
+    const first=sim.topo.links.find(l=>sim.topo.sections[l.section].name==='G0909')!;
+    const second=sim.topo.links.find(l=>sim.topo.sections[l.section].name==='G0910')!;
+    expect(straight.sections).toContain(first.section);expect(side.sections).not.toContain(first.section);
+    const applicant=newTrain(sim,null,signal.link,0,signal.dir,[{link:signal.link,dir:signal.dir}],'applicant');
+    applicant.nextSignal=signal.id;applicant.len=10;
+    expect(routePhysicalPredecessors(sim,applicant,sim.topo.berths.length)).toEqual([]);
+    const blocker=newTrain(sim,null,first.id,70,1,[{link:first.id,dir:1}],'first-blocker');blocker.len=10;
+    const origin=(dep:number)=>({k:'stop' as const,berth:goal.id,station:goal.station,trip:-1,arr:null,dep,doors:false,revenue:false});
+    applicant.tasks=[origin(sim.t+10)];blocker.tasks=[origin(sim.t+20)];
+    const request:ResourceRequest={id:blocker.id,train:blocker,tasks:blocker.tasks,inside:true,safeHere:true,committed:false,
+      time:sim.t,readyAt:sim.t,options:[{phases:[{goal:goal.id,start:{link:first.id,off:70,dir:1},routes:[],
+        path:[{link:goal.link,from:0,to:goal.offset}],distance:100}],sections:new Set([first.section]),
+        choices:[{index:0,berth:goal.id}],resourceLinks:new Set()}]};
+    computeBody(sim,applicant);computeBody(sim,blocker);indexBodies(sim);computeOccupancy(sim);
+    expect(routePhysicalPredecessors(sim,applicant,goal.id)).toEqual([]);
+    expect(arbitrateResources(sim,[request]).decisions.get(blocker.id)).toMatchObject({admitted:false,code:'REGULATION',blocker:applicant.id});
+    const other=newTrain(sim,null,second.id,20,1,[{link:second.id,dir:1}],'second-blocker');other.len=10;
+    computeBody(sim,other);indexBodies(sim);computeOccupancy(sim);
+    expect(new Set(routePhysicalPredecessors(sim,applicant,goal.id))).toEqual(new Set([blocker.id,other.id]));
+    expect(arbitrateResources(sim,[request]).decisions.get(blocker.id)).toMatchObject({admitted:true});
+  });
+  it('lets the physical predecessor clear when an earlier ordinary origin is blocked at its first route', () => {
+    const sim=new Sim({dayType:'weekend',date:'2026-10-24',dateLabel:'physical-origin',startTime:14400,seed:7,noPossessions:true});
+    for(const tr of [...sim.trainList])sim.removeTrain(tr);
+    for(const block of sim.plan.blocks)sim.blockDone.add(block.id);
+    const depot=sim.topo.depots.find(d=>d.key==='CSD')!,station=depot.station;
+    const link=(name:string)=>sim.topo.links.find(l=>sim.topo.sections[l.section].name===name)!;
+    const signal=(name:string)=>sim.topo.signals.find(s=>s.name===name)!;
+    const a=link('G2919'),b=link('G2927');expect(a).toBeDefined();expect(b).toBeDefined();
+    const front=newTrain(sim,null,a.id,6.35,-1,[{link:a.id,dir:-1}],'front');
+    const rear=newTrain(sim,null,b.id,5,-1,[{link:b.id,dir:-1}],'rear');
+    const goal=platformBerth(sim.topo,station,'UP');sim.t=80608;
+    const stop=(dep:number)=>({k:'stop' as const,berth:goal,station,trip:-1,arr:dep,dep,doors:false,revenue:false});
+    Object.assign(front,{tasks:[stop(72447)],nextSignal:signal('S2916').id,nextSignalDist:.35,phase:'run',maCode:'ROUTE_WAIT',maTrain:-1});
+    Object.assign(rear,{tasks:[stop(69826)],nextSignal:signal('DCSD2').id,nextSignalDist:0,phase:'run',maCode:'ROUTE_WAIT',maTrain:-1});
+    computeBody(sim,front);computeBody(sim,rear);indexBodies(sim);computeOccupancy(sim);
+    expect(collectResourceRequests(sim).some(r=>r.id===rear.id)).toBe(false);
+    expect(arbitrateResources(sim).decisions.get(front.id)).toMatchObject({admitted:true});
+  });
   it('preserves the complete admission rejection cause through ARS at its current entrance', () => {
     const { sim, front, rear, third, signal } = fixture(true); sim.resourceTransit.clear();
     const depot = sim.topo.depots[0];
@@ -683,15 +730,18 @@ describe('whole-movement resource admission', () => {
     sim.blockDone.delete(block.id); sim.t = block.start.time;
     const request = collectResourceRequests(sim).find(r => r.id === -(block.id + 1))!;
     const tasks = blockTasks(sim.topo, sim.plan, block);
-    const origin = tasks[2];
+    const work = tasks[0], arrival = tasks[1], origin = tasks[3];
+    if (work.k !== 'stop' || arrival.k !== 'stop') throw new Error('expected depot work and platform arrival');
+    expect(work.depotWork).toMatchObject({kind:'out',depot:block.start.depot});
     if (origin.k !== 'stop') throw new Error('expected source trip origin');
     // User C: the whole train can wait on this cab-change platform. Its
     // later ordinary departure must not reserve the incoming yard motion.
-    expect(request.options[0].phases).toHaveLength(1);
-    expect(request.options[0].phases[0].goal).toBe((tasks[0] as { berth: number }).berth);
+    expect(request.options[0].phases).toHaveLength(2);
+    expect(request.options[0].phases[0].goal).toBe(work.berth);
+    expect(request.options[0].phases[1].goal).toBe(arrival.berth);
     expect(request.origin).toMatchObject({ trip: block.trips[0], berth: origin.berth, dep: origin.dep });
-    expect(sim.topo.berths[request.options[0].phases[0].goal].platform).toBe(sim.topo.berths[origin.berth].platform);
-    expect(request.options[0].choices).toEqual([{ index: 0, berth: (tasks[0] as { berth: number }).berth }]);
+    expect(sim.topo.berths[request.options[0].phases[1].goal].platform).toBe(sim.topo.berths[origin.berth].platform);
+    expect(request.options[0].choices).toEqual([{index:0,berth:work.berth},{index:1,berth:arrival.berth}]);
     expect(request.readyAt).toBe(sim.t);
     expect(arbitrateResources(sim, [request]).decisions.get(request.id)?.admitted).toBe(true);
     expect(sim.trainList).toHaveLength(0);

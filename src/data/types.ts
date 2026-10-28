@@ -241,6 +241,15 @@ export interface CoreLineData {
     depotDoorTests: Record<string, {
         beforeSignal: number;
     }>;
+    /** Mandatory operational work at a depot lead; durations are seconds.
+     * Exit work uses the existing door-test position where one is configured. */
+    depotLeadWork?: Record<string, {
+        exitS: number;
+        entryS: number;
+        entryPosition: 'lead' | 'platform';
+    }>;
+    /** Scope of the existing conservative entry/exit slot check. */
+    depotLeadConflictScope?: Record<string, 'path' | 'yard'>;
     sectionRunAllowanceS: number;
     sectionCruiseMinKmh: number;
     sectionCoastMinKmh: number;
