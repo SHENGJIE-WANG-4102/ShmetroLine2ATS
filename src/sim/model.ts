@@ -311,7 +311,7 @@ export interface Train {
   doorsCut: number;
   vCap: number;
   vfault: VehicleFault | null;
-  /** withdraw at the end of the current trip (终点站下线) */
+  /** come off at the first yard-entry station or the terminus (就近回段站下线, D150) */
   withdrawAtEnd: boolean;
   /** wheels at the adhesion limit this step: spinning in traction, sliding under braking */
   slip: '' | 'slip' | 'slide';

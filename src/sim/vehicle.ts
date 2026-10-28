@@ -3,9 +3,10 @@
  *  - 牵引单元故障: inverters cut out (of 6, 6M2T with one per motor car 【假设】),
  *    the train keeps running with less traction (the electric brake is
  *    blended out by the friction brake, so braking is unchanged). A driver's
- *    reset may bring them back; otherwise the dispatcher lets it run to the
- *    terminus and withdraw (终点站下线), clears it at the next station, or
- *    keeps it in service.
+ *    reset may bring them back; otherwise the dispatcher lets it carry on to
+ *    the first station where it can leave for a yard, or its terminus, and
+ *    withdraw there (就近回段站下线, 用户决定 D150), clears it at the next
+ *    station, or keeps it in service.
  *  - 车门故障: a car door does not close at a stop. The driver isolates it
  *    (切除, 60–90 s); with a door cut out every stop takes a little longer.
  *    Severe: it can neither close nor be isolated — clear the passengers and
@@ -20,6 +21,7 @@ import type { Sim } from './engine';
 import type { Train, VehicleFault } from './model';
 import { openCall } from './radio';
 import { trainLabel, cmdWithdraw } from './ats';
+import { entryStation } from './timetable';
 import { injectFault } from './faults';
 import { STATIONS } from '../data/current';
 
@@ -58,7 +60,7 @@ export function injectTraction(sim: Sim, tr: Train, units: number, recover: bool
     kind: 'vTraction', from: driverOf(tr), train: tr.id,
     text: `牵引系统故障，已切除 ${tr.tractionCut} 个牵引单元，剩余牵引力约 ${left}%，加速变慢，请求指示`,
     options: [
-      { key: 'end', label: '继续运营，终点站下线' },
+      { key: 'end', label: '继续运营，就近回段站下线' },
       { key: 'withdraw', label: '前方站清客回段' },
       { key: 'keep', label: '继续运营（夜间检修）' },
     ],
@@ -126,13 +128,16 @@ export function vehicleTick(sim: Sim) {
     f.repairAt = sim.t;
   }
   for (const tr of sim.trainList) {
-    // a train told to withdraw at the end of its trip does so at the terminus
+    // A minor fault carries its passengers on and comes off at the first
+    // station where it can leave for a yard, or at its terminus (用户决定 D150).
     if (tr.withdrawAtEnd && tr.phase === 'dwell') {
       const t = tr.tasks[0];
-      if (t?.k === 'stop' && t.trip >= 0 && t.dep === null) {
+      const dir = t?.k === 'stop' && t.trip >= 0 ? sim.plan.trips[t.trip].dir : undefined;
+      const yard = dir !== undefined && t?.k === 'stop' && sim.topo.depots.some((_, d) => entryStation(sim.topo, d, dir) === t.station);
+      if (t?.k === 'stop' && t.trip >= 0 && (t.dep === null || yard)) {
         tr.withdrawAtEnd = false;
-        cmdWithdraw(sim, tr, '车辆故障：终点站下线');
-        sim.log('I', '调度', `列车 ${trainLabel(tr)} 车辆故障，终点站下线回段`, { train: tr.id });
+        cmdWithdraw(sim, tr, '车辆故障：就近回段站下线');
+        sim.log('I', '调度', `列车 ${trainLabel(tr)} 车辆故障，${STATIONS[t.station].name}下线回段`, { train: tr.id });
       }
     }
     const f = tr.vfault;
@@ -159,7 +164,7 @@ function doorStep(sim: Sim, tr: Train, f: VehicleFault) {
       openCall(sim, {
         kind: 'vDoorCut', from: driverOf(tr), train: tr.id,
         text: `${where}第${f.car}车${f.door}号门无法关闭，已切除（对应站台门由车站张贴告示），请求指示`,
-        options: [{ key: 'keep', label: '继续运营（夜间检修）' }, { key: 'end', label: '继续运营，终点站下线' }],
+        options: [{ key: 'keep', label: '继续运营（夜间检修）' }, { key: 'end', label: '继续运营，就近回段站下线' }],
         auto: 'keep', timeout: 120,
       });
     }
@@ -206,7 +211,7 @@ function brakeStep(sim: Sim, tr: Train, f: VehicleFault) {
   openCall(sim, {
     kind: 'vBrake', from: driverOf(tr), train: tr.id,
     text: `第${f.car}车制动不缓解，已切除该车制动，限速 ${Math.round(BRAKE_CUT_VMAX * 3.6)} km/h，请求指示`,
-    options: [{ key: 'end', label: '限速运行至终点站下线' }, { key: 'withdraw', label: '前方站清客回段' }],
+    options: [{ key: 'end', label: '限速运行至就近回段站下线' }, { key: 'withdraw', label: '前方站清客回段' }],
     auto: 'end', timeout: 120,
   });
 }
@@ -231,7 +236,7 @@ export function answerVehicle(sim: Sim, kind: string, tr: Train | undefined, opt
   if (option === 'withdraw') return cmdWithdraw(sim, tr, '车辆故障：清客回段');
   if (option === 'end') {
     tr.withdrawAtEnd = true;
-    return { ok: true, msg: '继续运营，终点站下线' };
+    return { ok: true, msg: '继续运营，就近回段站下线' };
   }
   return { ok: true, msg: '继续运营，夜间检修' };
 }
@@ -251,6 +256,6 @@ export function vehicleNote(tr: Train): string {
   if (tr.doorsCut) n.push(`门切除${tr.doorsCut}`);
   if (tr.vfault && tr.vfault.stage !== 'armed') n.push(tr.vfault.kind === 'door' ? '车门故障' : '制动不缓解');
   if (tr.vCap < Infinity) n.push(`限速${Math.round(tr.vCap * 3.6)}`);
-  if (tr.withdrawAtEnd) n.push('终点下线');
+  if (tr.withdrawAtEnd) n.push('回段站下线');
   return n.join(' ');
 }
