@@ -146,6 +146,7 @@ function appendDuty(sim: Sim, from: Sim, tr: Train): { trips: Map<number, number
     const carried: typeof t = { ...t, id: nid, block,
       prev: t.prev === undefined ? undefined : trips.get(t.prev),
       next: t.next === undefined ? undefined : trips.get(t.next),
+      ...(t.cut ? { cut: { ...t.cut } } : {}),
       stops: t.stops.map(s => ({ ...s, arr: back(s.arr), dep: back(s.dep) })) };
     sim.plan.trips.push(carried);
   }
@@ -158,10 +159,13 @@ function appendDuty(sim: Sim, from: Sim, tr: Train): { trips: Map<number, number
 
 function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number } | null): Train {
   const trip = (id: number) => id < 0 ? id : duty?.trips.get(id) ?? -1;
+  const lastCallTrip = tr.lastCompletedCall ? trip(tr.lastCompletedCall.trip) : -1;
   const task = <T extends Task>(k: T): T => k.k !== 'stop' ? structuredClone(k)
     : { ...k, trip: trip(k.trip), arr: k.arr === null ? null : back(k.arr), dep: k.dep === null ? null : back(k.dep) };
   return {
     ...tr,
+    lastCompletedCall: tr.lastCompletedCall && lastCallTrip >= 0
+      ? { ...tr.lastCompletedCall, trip: lastCallTrip } : undefined,
     uto: tr.uto && {...tr.uto,until:tr.uto.until-DAY_S,returnAt:tr.uto.returnAt===undefined?undefined:tr.uto.returnAt-DAY_S,closeAt:tr.uto.closeAt===undefined?undefined:tr.uto.closeAt-DAY_S},
     utoDoorWarningAt: tr.utoDoorWarningAt===undefined?undefined:tr.utoDoorWarningAt-DAY_S,
     dmiAcknowledged: tr.dmiAcknowledged?.map(key=>{const i=key.indexOf('|');return `${Number(key.slice(0,i))-DAY_S}${key.slice(i)}`;}),

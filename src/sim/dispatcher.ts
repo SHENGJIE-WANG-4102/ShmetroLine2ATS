@@ -22,10 +22,10 @@
  *  - train failure that cannot be cleared: rescue by the train behind
  *  - recovery regulation (D44/D45): a standby takes over the departures of a
  *    train that will start them more than RELIEF_DELAY late; with no standby,
- *    the explicit terminal rules R1/R2 of cmdRecoverService; at an
+ *    the terminal rule R2 of cmdRecoverService; at an
  *    intermediate station, a late train exchanges duties with the trip due
- *    there now (R4, cmdExchangeDuty), else, more than SEVERE_DELAY late, is
- *    cleared and positioned or withdrawn (R5)
+ *    there now (R4, cmdExchangeDuty), else it keeps carrying passengers
+ *    late: no clearing and empty positioning (D147)
  *
  * Every RM authorisation first runs the same safety check the desk shows
  * (unsafeAhead) and is never given to a train held by another train.
@@ -34,7 +34,7 @@ import type { Sim } from './engine';
 import type { Command, Train } from './model';
 import { unsafeAhead, rescuerFor } from './radio';
 import { goalBerth } from './movement';
-import { routeLeadsTo, rescueBlockedByConsist, SEVERE_DELAY, exchangePartner } from './ats';
+import { routeLeadsTo, rescueBlockedByConsist, exchangePartner } from './ats';
 import { predictedLateness, RELIEF_DELAY } from './standby';
 
 /** reaction time before answering a call / starting a procedure (s) */
@@ -220,10 +220,7 @@ function recoveryRegulation(sim: Sim) {
       // at an intermediate station: R4 duty exchange, else R5 (R1 en route)
       const partner = due(sim, `exchange-${tr.id}`, 5) ? exchangePartner(sim, tr) : null;
       if (partner) { cmd(sim, { c: 'exchangeDuty', train: tr.id, with: partner.id }); continue; }
-      if (sim.t - at.dep > SEVERE_DELAY && due(sim, `recover-${tr.id}`, 60)) {
-        cmd(sim, { c: 'recoverService', train: tr.id });
-        continue;
-      }
+      // D147: otherwise it keeps carrying passengers late; no clearing.
     }
     // R1: a standby takes over a departure this train will make too late.
     const late = tr.relievedBy ? 0 : predictedLateness(sim, tr);
@@ -231,11 +228,11 @@ function recoveryRegulation(sim: Sim) {
     const stop = tr.tasks[0];
     if (relieved || tr.relievedBy || tr.phase !== 'dwell' || stop?.k !== 'stop' || stop.dep !== null || stop.trip < 0
       || !sim.plan.trips[stop.trip].completed) continue;
-    // Fallback at the terminal when no standby could: reposition or withdraw
-    // a severely late train (R1), or skip a missed cycle (R2).
+    // Fallback at the terminal when no standby could: skip a missed cycle
+    // (R2); a late train otherwise runs its own plan late (D147).
     const next = tr.tasks.find((task, i) => i > 0 && task.k === 'stop' && task.arr === null && task.dep !== null);
     const missed = next?.k === 'stop' && next.dep !== null && next.dep < sim.t - 120;
-    if ((late > SEVERE_DELAY || missed) && due(sim, `recover-${tr.id}`, 60))
+    if (missed && due(sim, `recover-${tr.id}`, 60))
       cmd(sim, { c: 'recoverService', train: tr.id });
   }
 }

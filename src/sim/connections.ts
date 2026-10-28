@@ -13,12 +13,13 @@
  * dispatcher call). Passenger numbers are approximations.
  */
 import type { Sim } from './engine';
-import type { Connection, StopTask, TrackDir, Train } from './model';
+import type { Connection, StopTask, TrackDir, Train, Trip } from './model';
 export type { Connection };
 import { STATIONS, LINE_INFO } from '../data/current';
 import { OTHER_LAST_TRAINS } from '../data/current';
 import { parseIso } from './calendar';
 import { trainLabel } from './ats';
+import { effectiveStops } from './timetable';
 
 const DIR_NAME: Record<TrackDir, string> = { DN: '下行', UP: '上行' };
 
@@ -71,6 +72,19 @@ function miss(sim: Sim, c: Connection, why: string) {
   sim.metrics.stranded += c.pax;
   sim.passengersStranded += c.pax;
   sim.log('I', '客流', `${stName(c)} 末班换乘未衔接：${why}，约 ${c.pax} 名换乘乘客滞留`, { key: `conn-${c.id}` });
+}
+
+/** A dispatcher turnback cancels or shortens a trip: its connections at the
+ * calls it no longer makes are missed now instead of waiting for an arrival
+ * that cannot come. */
+export function settleDroppedCalls(sim: Sim, ...trips: Trip[]) {
+  for (const trip of trips) {
+    const served = trip.cancelled ? new Set<number>() : new Set(effectiveStops(trip).filter(s => s.stop).map(s => s.st));
+    for (const c of sim.connections) {
+      if (c.trip !== trip.id || c.state !== 'pending' || served.has(c.st)) continue;
+      miss(sim, c, `${trip.no} 人工折返，不再到达${stName(c)}`);
+    }
+  }
 }
 
 /** a Line 2 train left a stop: settle the connections of that trip there */

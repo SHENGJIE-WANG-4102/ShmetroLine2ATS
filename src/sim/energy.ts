@@ -20,6 +20,7 @@ import { PERF } from './dynamics';
 import { SIMULATION } from '../data/current';
 export { levelBand, levelAccel } from './dynamics';
 import { linkChain } from './topology';
+import { effectiveStops } from './timetable';
 
 /** empty 8-car A-type train (kg) and a passenger */
 const MASS0 = SIMULATION.energy.mass;
@@ -54,16 +55,17 @@ export function trainLevel(sim: Sim, tr: Train, delay = tr.delay): number {
   const trip = sim.plan.trips[tr.tripId];
   const task = tr.tasks[0];
   if (!trip || task?.k !== 'stop' || task.trip !== trip.id) return 1;
+  const stops = effectiveStops(trip);
   if (!trip.revenue) {
     const chain = linkChain(sim.topo, tr.link, tr.off);
     const half = tr.len / 2;
-    const ahead = trip.stops.findIndex(s => trip.dir === 'DN'
+    const ahead = stops.findIndex(s => trip.dir === 'DN'
       ? sim.topo.stations[s.st].chain + half > chain
       : sim.topo.stations[s.st].chain - half < chain);
-    return trip.stops[Math.max(0, (ahead < 0 ? trip.stops.length : ahead) - 1)]?.runLevel ?? 1;
+    return stops[Math.max(0, (ahead < 0 ? stops.length : ahead) - 1)]?.runLevel ?? 1;
   }
-  const index = trip.stops.findIndex(s => s.st === task.station);
-  return trip.stops[Math.max(0, index - 1)]?.runLevel ?? 1;
+  const index = stops.findIndex(s => s.st === task.station);
+  return stops[Math.max(0, index - 1)]?.runLevel ?? 1;
 }
 
 const draw = new Map<number, number>();

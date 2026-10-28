@@ -2,7 +2,7 @@ import {describe,expect,it} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {cmdTurnback,newTrain,turnbackOptions,signalAheadFrom} from '../src/sim/ats';
 import {computeBody,indexBodies} from '../src/sim/movement';
-import {depotTasks,platformBerth,turnbackAt} from '../src/sim/timetable';
+import {blockTasks,depotTasks,platformBerth,turnbackAt} from '../src/sim/timetable';
 import {ahead,reversedBerthPoint} from '../src/sim/topology';
 import {walkRouteToBerth} from '../src/sim/routePath';
 import type {Task} from '../src/sim/model';
@@ -24,6 +24,8 @@ function turnbackFixture(continues:boolean,needsDepot=false,returnBehind=false) 
         &&(!needsDepot||sim.topo.depots.some(d=>ahead(cur.dir,cur.from,d.station)&&ahead(cur.dir,d.station,st))));
       if(station===undefined){sim.removeTrain(tr);continue;}
       block.trips=continues?[cur.id,next.id,later.id]:[cur.id,next.id];
+      // The command reads the train's own remaining calls (D14x progress).
+      tr.tasks=blockTasks(sim.topo,sim.plan,block,0);
       return {sim,tr,block,cur,next,later,station};
     }
   }
@@ -56,7 +58,7 @@ describe('block ending after an adjusted turnback service',()=>{
     const {sim,tr,cur,station}=turnbackFixture(false,true);
     const depot=sim.topo.depots.find(d=>ahead(cur.dir,cur.from,d.station)&&ahead(cur.dir,d.station,station))!;
     const old:Task[]=[];depotTasks(sim.topo,depot.id,cur.dir,old);
-    const work=old.find(t=>t.k==='stop'&&t.depotWork)!;tr.tasks=[work];
+    const work=old.find(t=>t.k==='stop'&&t.depotWork)!;tr.tasks=[work,...tr.tasks];
     const result=cmdTurnback(sim,tr,station);expect(result.ok,result.msg).toBe(true);
     expect(tr.tasks[0]).toMatchObject({k:'stop',station,note:'人工折返'});
   });

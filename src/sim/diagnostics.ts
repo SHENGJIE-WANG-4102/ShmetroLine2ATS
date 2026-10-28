@@ -5,7 +5,7 @@ import { capture, restore, type Checkpoint } from './state';
 import type { Topology } from './topology';
 import { assertScope, currentScope, type LineScope } from '../data/scope';
 
-export type RecordedInput = { scope?: LineScope } & ({ t: number; cmd: Command } | { t: number; drive: { train: number; notch: number } });
+export type RecordedInput = { scope?: LineScope } & ({ t: number; cmd: Command; reasonCode?: string } | { t: number; drive: { train: number; notch: number } });
 export interface Diagnostics {
   version: 2;
   scope?: LineScope;
@@ -107,7 +107,12 @@ export function replayDiagnostics(bundle: Diagnostics): Sim {
 
 export function applyInput(sim: Sim, input: RecordedInput) {
   assertScope(input.scope);
-  if ('cmd' in input) sim.command(input.cmd);
+  if ('cmd' in input) {
+    const result = sim.command(input.cmd);
+    if (input.reasonCode !== undefined && result.reasonCode !== input.reasonCode) {
+      sim.log('C', '回放', `命令原因不一致：记录 ${input.reasonCode}，重放 ${result.reasonCode ?? '无'}`);
+    }
+  }
   else sim.drive(input.drive.train, input.drive.notch);
 }
 

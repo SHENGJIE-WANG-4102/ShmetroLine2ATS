@@ -101,7 +101,6 @@ export class Sim {
   alarmsDirty = true;
   nextEventId = 1;
   noRouteLogged = new Set<number>();
-  truncatedTrips = new Map<number, number>();
   planDirty = false;
   removedTraces: { train: number; pts: number[] }[] = [];
 
@@ -308,7 +307,7 @@ export class Sim {
     this.resourceTransit.delete(tr.id);
     // the occupancy map is rebuilt next step; until then nobody may see the removed train
     for (const [l, segs] of this.linkBodies) if (segs.some((x) => x.train === tr.id)) this.linkBodies.set(l, segs.filter((x) => x.train !== tr.id));
-    for (const k of ['eb', 'comm', 'tf', 'tfr', 'spad', 'late']) this.clearAlarm(`${k}-${tr.id}`);
+    for (const k of ['eb', 'comm', 'tf', 'tfr', 'spad', 'late', 'turnback-departure-train', 'turnback-wait-unsafe']) this.clearAlarm(`${k}-${tr.id}`);
     for (const c of this.calls) if (c.state === 'ringing' && c.train === tr.id) c.state = 'withdrawn';
   }
 
@@ -489,13 +488,16 @@ export class Sim {
 
   /** a dispatcher command; `by` names a non-human issuer (自动调度) in the log */
   command(cmd: Command, by?: string): CmdResult {
-    if (!by && !this.replaying) this.inputLog.push({ scope: currentScope(), t: this.t, cmd: structuredClone(cmd) });
+    const recorded: Extract<RecordedInput, { cmd: Command }> | undefined = !by && !this.replaying
+      ? { scope: currentScope(), t: this.t, cmd: structuredClone(cmd) } : undefined;
+    if (recorded) this.inputLog.push(recorded);
     const error = validateCommand(this, cmd);
     if (error) {
       this.log('C', '调度', `命令拒绝：${error}`, { manual: !by });
       return { ok: false, msg: error };
     }
     const r = this.execCommand(cmd);
+    if (recorded && r.reasonCode !== undefined) recorded.reasonCode = r.reasonCode;
     if (r.ok) faultProcedure(this, cmd);
     const text = describeCommand(this, cmd);
     this.log(r.ok ? 'I' : 'C', '调度', `${by ? `【${by}】` : ''}${text}：${r.msg}`, { manual: !by });

@@ -49,6 +49,8 @@ export interface Trip {
   from: number;
   to: number;
   stops: PlanStop[];
+  /** Runtime endpoint; replace the whole immutable value to preserve checkpoints. */
+  cut?: Readonly<{ station?: number; stopIndex: number; cause: 'turnback' }>;
   revenue: boolean;
   block: number;
   /** Revenue endpoint reached; rescue cancellation preserves already completed trips. */
@@ -113,6 +115,8 @@ export const STANDBY_CALL = 240;
 
 export interface StopTask {
   k: 'stop';
+  /** Original trip.stops index; absent on older checkpoints and synthetic stops. */
+  stopIndex?: number;
   berth: number;
   station: number;
   trip: number; // trip id, -1 when unplanned
@@ -134,6 +138,8 @@ export interface StopTask {
   /** the first departure of a train stabled overnight: it keeps to its
    *  stabling place until shortly before it, like a hot standby (D72) */
   stabledOut?: boolean;
+  /** A completed turn is waiting off-platform for this plan origin. */
+  turnbackWaitBerth?: number;
 }
 export interface ReverseTask { k: 'reverse'; berths: number[]; chosen: number; station: number; minTime: number }
 export interface DepotTask { k: 'depot'; depot: number; /** 入段 berth of the lead used (default: the depot's) */ berth?: number }
@@ -268,6 +274,8 @@ export interface Train {
   pendingLevel: Level | null;
   // service
   tasks: Task[];
+  /** Last completed call; IDs are rebound at day rollover. Replace as a value. */
+  lastCompletedCall?: Readonly<{ trip: number; stopIndex: number }>;
   phase: TrainPhase;
   phaseSince: number;
   dwellUntil: number;

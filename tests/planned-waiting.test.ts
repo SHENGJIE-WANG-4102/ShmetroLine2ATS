@@ -75,7 +75,7 @@ describe('pure planned waiting evidence', () => {
     expect(plannedWaiting({ topo }, plan).issues).toHaveLength(1);
   });
 
-  it('also proves ordinary exits after station-front platform turns', () => {
+  it('reports long station-front platform waits without a configured platform exception', () => {
     const topo = buildTopology();
     const fronts = topo.stations.flatMap(station => (['DN', 'UP'] as const).flatMap(dir =>
       turnbackAt(topo, station.index, dir)?.kind === 'front' && topo.stations.some(s => ahead(dir, s.index, station.index))
@@ -83,8 +83,8 @@ describe('pure planned waiting evidence', () => {
     expect(fronts.length).toBeGreaterThan(0);
     for (const front of fronts) {
       const result = plannedWaiting({ topo }, pair(topo, front.station, front.dir, minTurn(front.station) + 600));
-      expect(result.issues, `${front.station}/${front.dir}`).toEqual([]);
-      expect(result.waits[0].reason).toBe('SAFE_WAITING_POINT');
+      expect(result.issues, `${front.station}/${front.dir}`).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'UNSAFE_WAIT' })]));
+      expect(result.waits[0].reason).toBe('NO_SAFE_WAITING_POINT');
     }
   });
 

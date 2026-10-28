@@ -8,6 +8,7 @@ import type { StopTask, Train } from './model';
 import { STATIONS, LINE_INFO } from '../data/current';
 import { callCrowd } from './radio';
 import { ahead } from './topology';
+import { effectiveStops } from './timetable';
 
 import { boardingDemand, inPeakSection, passengerMinimum } from './calibration';
 
@@ -20,15 +21,17 @@ function boardingWindows(sim: Sim) {
   if (!windows || windows.rev !== sim.planRev || windows.trips !== sim.plan.trips) {
     const first = sim.topo.platforms.map(() => Infinity);
     const last = sim.topo.platforms.map(() => -Infinity);
-    for (const trip of sim.plan.trips) if (trip.revenue && !trip.cancelled)
-      for (let i = 0; i < trip.stops.length - 1; i++) {
-        const stop = trip.stops[i];
+    for (const trip of sim.plan.trips) if (trip.revenue && !trip.cancelled) {
+      const stops = effectiveStops(trip);
+      for (let i = 0; i < stops.length - 1; i++) {
+        const stop = stops[i];
         // (a set-down-only stop is no boarding opportunity)
         if (!stop.stop || stop.noBoard) continue;
         const platform = sim.topo.stations[stop.st].platforms[trip.dir];
         first[platform] = Math.min(first[platform], stop.dep - 900);
         last[platform] = Math.max(last[platform], stop.dep);
       }
+    }
     windows = { rev: sim.planRev, trips: sim.plan.trips, first, last };
     serviceWindows.set(sim, windows);
   }
@@ -99,8 +102,9 @@ export function planPassengerExchange(sim: Sim, tr: Train, platform: number, tas
   // (a trip with a stopping pattern: among the stations it still stops at)
   let rem = 0;
   const trip = task.trip >= 0 ? sim.plan.trips[task.trip] : undefined;
-  if (trip?.revenue && trip.stops.some((x) => !x.stop)) {
-    for (const x of trip.stops) if (x.stop && (x.st === st || ahead(direction, st, x.st))) rem += STATIONS[x.st].demand;
+  const stops = trip && effectiveStops(trip);
+  if (trip?.revenue && stops && (trip.cut || stops.some((x) => !x.stop))) {
+    for (const x of stops) if (x.stop && (x.st === st || ahead(direction, st, x.st))) rem += STATIONS[x.st].demand;
   } else {
     const onward = STATIONS.map((_, i) => i).filter(i => i === st || ahead(direction, st, i));
     if (direction === 'UP') onward.reverse();

@@ -19,7 +19,7 @@ import { psdSafe } from './psd';
 import type { EbCause } from './model';
 import { OPERATIONS } from '../data/current';
 import { SIGNAL_MARGIN, canStopBeforeSignal, restrictionDistanceAt } from './protection';
-import { resourceAuthorityBlocker, sourceReadyAt } from './resourceArbitration';
+import { resourceAuthorityBlocker, sourceReadyAt, sourceWaitReason } from './resourceArbitration';
 
 /** speed limits / platform stops further than this do not influence the braking curves */
 const LOOKAHEAD = 1400;
@@ -218,11 +218,11 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
     && topo.platforms[berth.platform].station === tr.lastStation;
   // (a hot standby not yet called out does not queue for the platform, D70)
   const t0 = tr.tasks[0];
-  const standing = t0?.k === 'stop' && sourceReadyAt(sim, t0) > sim.t;
+  const standing = t0?.k === 'stop' && sourceReadyAt(sim, t0, tr) > sim.t;
   // The preceding reversal (or overnight spawn) already placed the body at
   // its registered berth. Withholding ARS alone still lets ATO creep to the
   // exit signal. Keep authority here until the scheduled call-out instead.
-  if (standing && !tr.manual) obstacle(res, 0, t0.standby ? '热备待命' : '存车待发', 'REGULATION');
+  if (standing && !tr.manual) obstacle(res, 0, sourceWaitReason(t0), 'REGULATION');
   if (pulloutStart && !standing) {
     const holder = trainInSection(sim, topo.links[berth.link].section, tr.id);
     if (holder >= 0) obstacle(res, 0, '折返发车站台有车，等待平台出清', 'BERTH_WAIT', false, holder);

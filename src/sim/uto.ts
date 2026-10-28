@@ -218,7 +218,7 @@ export function utoFleetTick(sim:Sim) {
       const stops=tr.tasks.filter((t):t is StopTask=>t.k==='stop'&&(t.trip<0||active.has(t.trip)));
       // Wake and release share the same clock, including a dep=null feeder.
       // The lookup also keeps a live intermediate hold's own departure.
-      const departure=stops.map(task=>sourceDepartureAt(sim,task)).find(at=>at!==null&&Number.isFinite(at));
+      const departure=stops.map(task=>sourceDepartureAt(sim,task,tr)).find(at=>at!==null&&Number.isFinite(at));
       if(departure==null||!Number.isFinite(departure)||departure-sim.t>rule.wakeLeadS)continue;
       u.stage='power';u.until=sim.t+rule.powerS;
     }

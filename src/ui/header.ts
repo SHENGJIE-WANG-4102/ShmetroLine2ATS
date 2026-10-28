@@ -14,6 +14,7 @@ import { timePick } from './timepick';
 import metroLogo from './assets/metro-logo.png';
 import { LINE, GROUP, visibleLineGroups } from '../data/current';
 import { lineBadge } from './branding';
+import { effectiveStops } from '../sim/timetable';
 
 export const SPEEDS = [1, 2, 5, 10, 30, 60, 120];
 export { dayTypeOf, dateLabel } from '../sim/calendar';
@@ -192,7 +193,7 @@ export class Header {
       // holiday return nights) still run: not 收车 yet
       let label = p?.label ?? '—';
       if (label === '末班/收车') {
-        const end = (x: (typeof plan.trips)[number]) => x.stops[x.stops.length - 1].arr ?? 0;
+        const end = (x: (typeof plan.trips)[number]) => effectiveStops(x).at(-1)?.arr ?? 0;
         const live = plan.trips.filter((x) => x.revenue && !x.cancelled && end(x) > s.t);
         if (live.length && live.every((x) => x.kind === 'extra')) label = `延时运营（${live.length}班）`;
       }

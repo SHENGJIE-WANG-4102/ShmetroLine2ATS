@@ -1205,14 +1205,14 @@ describe('fault recovery service regulation', () => {
     // Rejected command adds an audit event but preserves tasks, history and trip state.
     expect(sim.metrics.tripDelays).toEqual([1000]);expect(tr.tasks[0].k==='stop'&&tr.tasks[0].trip).toBe(0);expect(before).toContain('R0');
   });
-  it('repositions a severely late train for a later original slot when the missed cycle cannot be skipped', () => {
+  it('keeps a severely late train on its own plan when the missed cycle cannot be skipped (D147)', () => {
     const {sim,tr}=fixture();sim.plan.trips[3].stops[0].dep=sim.t+3600;
     tr.tasks=tr.tasks.map(t=>t.k==='stop'&&t.trip===3&&t.arr===null?{...t,dep:sim.t+3600}:t);
-    expect(sim.command({c:'recoverService',train:tr.id}).ok).toBe(true);
-    expect(sim.plan.trips.map(t=>!!t.cancelled)).toEqual([false,true,true,false]);
-    expect(sim.plan.trips[1].cancelReason).toContain('定位');
-    expect(tr.tasks.filter(t=>t.k==='stop'&&t.revenue).every(t=>t.k==='stop'&&t.trip===3)).toBe(true);
-    expect(sim.metrics.tripDelays).toEqual([1000]);
+    const tasks=structuredClone(tr.tasks);
+    expect(sim.command({c:'recoverService',train:tr.id}).ok).toBe(false);
+    expect(sim.plan.trips.every(t=>!t.cancelled)).toBe(true);
+    expect(tr.tasks).toEqual(tasks);expect(tr.inService).toBe(true);
+    expect(tr.tasks.some(t=>t.k==='stop'&&t.note==='空驶定位')).toBe(false);
   });
   it('returns the vehicle to a yard when withdrawn, keeping completed trips', () => {
     const {sim,tr}=fixture();
@@ -1223,29 +1223,19 @@ describe('fault recovery service regulation', () => {
     expect(sim.trains.has(tr.id)).toBe(false);expect(sim.yards.some(y=>y.tracks.some(track=>track.includes(vehicle)))).toBe(true);
     expect(sim.metrics.tripDelays).toEqual([1000]);expect(sim.integrity.violations).toHaveLength(0);
   });
-  it.each([false, true])('R1 depends on the train, not on any incident or clearance timer (future reachable=%s)', reachable => {
+  it.each([false, true])('a late train is never cleared to chase a slot, during or after an incident (future slot=%s, D147)', reachable => {
     const {sim,tr}=fixture();
     for (const id of [1,2,3]) {
       const dep = reachable && id === 3 ? sim.t + 3600 : sim.t - 900;
       sim.plan.trips[id].stops[0].dep = dep;
       tr.tasks = tr.tasks.map(t=>t.k==='stop'&&t.trip===id&&t.arr===null?{...t,dep}:t);
     }
-    // An open incident does not hold the rule back, and nothing records a clearance time.
     expect(sim.command({c:'fault',kind:'signal',target:0,duration:3600}).ok).toBe(true);
     tr.load=200;const before=structuredClone(sim.plan.trips.map(t=>t.stops));
-    expect(sim.command({c:'recoverService',train:tr.id}).ok).toBe(true);
-    expect(tr.inService).toBe(false);expect(tr.load).toBe(0);
-    expect(sim.plan.trips[0].completed).toBe(true);expect(sim.plan.trips[0].cancelled).toBeUndefined();
+    expect(sim.command({c:'recoverService',train:tr.id}).ok).toBe(false);
+    expect(tr.inService).toBe(true);expect(tr.load).toBe(200);expect(tr.withdrawn).toBeFalsy();
+    expect(sim.plan.trips.every(t=>!t.cancelled)).toBe(true);
     expect(sim.metrics.tripDelays).toEqual([1000]);expect(sim.plan.trips.map(t=>t.stops)).toEqual(before);
-    if(reachable){
-      expect(sim.plan.trips[3].cancelled).toBeUndefined();
-      expect(sim.plan.trips[1].cancelReason).toContain('定位');
-      expect(tr.tasks.some(t=>t.k==='reverse')).toBe(true);
-    }else{
-      expect(tr.withdrawn).toBe(true);
-      expect(sim.plan.trips.slice(1).every(t=>t.cancelReason?.includes('不可达'))).toBe(true);
-    }
-    expect([...sim.dispatcher.next.keys()].some(k=>k.includes('cleared'))).toBe(false);
     const cp=capture(sim);const replay=make();restore(replay,cp);expect(fingerprint(replay)).toBe(fingerprint(sim));
   });
   it('leaves a moderately late train in service', () => {

@@ -371,6 +371,17 @@ export const TURNOUT_SPEEDS = {
 // Operations (published anchors + approximations)
 // ---------------------------------------------------------------------------
 
+/** 用户决定（2026-10-28，D148）：大交路两端白天的热备窗口。from 起留一列，need 起
+ * 可被高峰取用，to 后归队；峰后的下一窗口把它补回来。【假设】时刻按早晚高峰。 */
+const TERMINAL_STANDBY_WINDOWS = {
+  weekday: [
+    { from: 6 * 3600, need: 7 * 3600 + 15 * 60, to: 9 * 3600 },
+    { from: 9 * 3600, need: 16 * 3600 + 45 * 60, to: 19 * 3600 + 30 * 60 },
+    { from: 19 * 3600 + 30 * 60, need: 22 * 3600, to: 22 * 3600 },
+  ],
+  weekend: [{ from: 6 * 3600, need: 21 * 3600, to: 21 * 3600 }],
+};
+
 export const OPERATIONS = {
   atoRandomOverrunProbability: 0,
   /** 【假设】均衡修简化：任何有列检能力的车场过夜即列检；正线过夜不算。
@@ -418,6 +429,8 @@ export const OPERATIONS = {
   // GLL reverses on its middle-track platform (配线图 PDF): a change of ends
   // on the platform without a run into a tail.
   minTurnback: { PXL: 240, PDA: 240, SHR: 240, GLL: 100 } as Record<string, number>,
+  // 用户决定（2026-10-27）：广兰路长候班留在站台。
+  longWaitPlatformStations: ['GLL'] as const,
   /** platform turnback track: minimum time from one turning train's departure
    *  to the next turning train's arrival on the same track (s). The leaving
    *  train must clear the shared west throat before the next entry route
@@ -446,12 +459,15 @@ export const OPERATIONS = {
     { station: 'CXZ', count: 1, departure: 'DN', kind: 'feeder', nightAfter: 22 * 3600 + 30 * 60 },
   ] as { station: string; count: number; departure: 'UP' | 'DN'; kind: 'terminal' | 'platform' | 'origin' | 'feeder'; origin?: string; track?: 'turnback'; nightAfter?: number }[],
   /** 【假设】平峰热备共用夜间泊位；中途两处各一列，按配线方向进出。 */
+  // 用户决定（2026-10-28，D148）：白天大交路两端固定一列热备、只用一条折返线；
+  // 高峰可先取用，峰后补回。【假设】窗口按早晚高峰划分。
   hotStandby: [
-    { station: 'PXL', track: 'turnback', berth: 0 },
-    { station: 'PDA', track: 'turnback', berth: 0 },
+    { station: 'PXL', track: 'turnback', berth: 0, windows: TERMINAL_STANDBY_WINDOWS, firstReady: true },
+    { station: 'PDA', track: 'turnback', berth: 0, windows: TERMINAL_STANDBY_WINDOWS, firstReady: true },
     { station: 'KJG', track: 'turnback', berth: 0, depot: 'BZL', incoming: 'DN' },
     { station: 'CXZ', track: 'storage', berth: 0, depot: 'CSD', incoming: 'UP' },
-  ] as { station: string; track: 'turnback' | 'storage'; berth: number; depot?: string; incoming?: 'UP' | 'DN' }[],
+  ] as { station: string; track: 'turnback' | 'storage'; berth: number; depot?: string; incoming?: 'UP' | 'DN';
+    windows?: typeof TERMINAL_STANDBY_WINDOWS; firstReady?: boolean }[],
   /** a train passing a platform without stopping (跨站/跳停) runs through it at no more than this (km/h) */
   platformPassKmh: 45,
   /** a train entering or leaving a platform it stops at runs at no more than this (km/h) */

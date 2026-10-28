@@ -12,6 +12,7 @@ import { injectFault } from './faults';
 import { setWeather, addPossession } from './env';
 import { callPecu, callTrackPerson } from './radio';
 import { dayRandom, OPERATING_DAY } from './dayRandom';
+import { effectiveStops } from './timetable';
 
 export interface InstructorScheduleEntry { event: string; at: number; step?: number }
 export interface InstructorOccurrence extends InstructorScheduleEntry {
@@ -348,7 +349,8 @@ export interface RandomFaultEntry extends InstructorScheduleEntry {
 export function scheduleRandomFaults(seed:number,start:number,level:number,plan:Plan,count=OPERATIONS.randomFaults.levels[level-1]?.count??0,allowMajor=true):RandomFaultEntry[] {
   if(!count)return [];
   const rules=OPERATIONS.randomFaults,rng=dayRandom(seed,0x72616e64^level);
-  const calls=plan.trips.filter(t=>t.revenue&&!t.cancelled).flatMap(t=>t.stops);
+  const calls=plan.trips.filter(t=>t.revenue&&!t.cancelled).flatMap(t=>effectiveStops(t));
+  if (!calls.length) return [];
   const passenger:[[number,number]]=[[Math.max(start,Math.min(...calls.map(s=>s.dep))),Math.max(...calls.map(s=>s.arr))]];
   const peak=rules.crowdWindows.map(([a,b])=>[Math.max(a,passenger[0][0]),Math.min(b,passenger[0][1])]).filter(([a,b])=>b>a);
   const major=allowMajor&&rng()<rules.levels[level-1].majorProbability?Math.floor(rng()*count):-1;
@@ -416,7 +418,7 @@ function injectRandom(sim: Sim, kind: string, usedVehicles?: string[]): string {
   const passengerTrains=sim.trainList.filter(t=>t.inService&&t.phase!=='stabled');
   const running = sim.trainList.filter((t) => t.inService && t.phase === 'run' && !t.failed && !t.manual && topo.links[t.link].track !== 'DEP'&&!usedVehicles?.includes(t.vehicle));
   const served=topo.stations.filter(s=>{
-    const calls=sim.plan.trips.filter(t=>t.revenue&&!t.cancelled).flatMap(t=>t.stops.filter(stop=>stop.st===s.index&&stop.stop));
+    const calls=sim.plan.trips.filter(t=>t.revenue&&!t.cancelled).flatMap(t=>effectiveStops(t).filter(stop=>stop.st===s.index&&stop.stop));
     return calls.some(c=>c.arr<=sim.t)&&calls.some(c=>c.dep>=sim.t);
   });
   const busy = served.filter((s) => STATIONS[s.index].demand >= 1.2).map((s) => s.index);

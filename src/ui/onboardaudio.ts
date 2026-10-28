@@ -8,6 +8,7 @@ import { STATIONS } from '../data/current';
 import { onboardAnnouncement, onboardDoorSide } from '../data/audio/onboardbank';
 import { PLT, type Snapshot, type TrainSnap, type Plan } from '../sim/model';
 import type { Topology } from '../sim/topology';
+import { effectiveStops } from '../sim/timetable';
 import { RecordedSoundPlayer, automatic, audioTrain, stopEstimate, VVVF_MAX_RATE, STATION_ALIGNMENT_S,
   type StationTrain, type StationSoundCommand } from './stationaudio';
 
@@ -20,7 +21,7 @@ export function onboardFrame(snap: Snapshot, heard: TrainSnap | null, topo: Topo
   const train = heard ? audioTrain(heard, heard.nextStation, topo) : null;
   // A crossover's local link orientation does not change the service direction.
   if(train&&intent)train.direction=intent.dir;
-  const planned = heard && plan?.trips[heard.tripId]?.stops.find(s => s.st === heard.nextStation);
+  const planned = heard && intent && effectiveStops(intent).find(s => s.st === heard.nextStation);
   const platform = train && topo.stations[train.nextStation]?.platforms[train.direction];
   const skipped = platform !== null && platform !== undefined && !!(snap.platforms[platform] & PLT.SKIP);
   const destination = heard?.dest ?? '';

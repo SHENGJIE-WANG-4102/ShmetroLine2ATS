@@ -9,7 +9,7 @@ import { STATIONS, LINE_INFO, SIMULATION, stationOpened } from '../data/current'
 const RULES = SIMULATION.pis;
 import { FIRST_LAST } from '../data/current';
 import { PERF } from './dynamics';
-import { serviceEnd } from './timetable';
+import { effectiveStops, serviceEnd } from './timetable';
 
 /** Platform countdown: it counts down to the train standing in the platform
  *  (an arriving train still counts), then reads 00:00 while it stands. */
@@ -101,8 +101,10 @@ export function computePis(sim: Sim, station: number): PisData {
       if (i === 0 && tr.phase === 'dwell') status = tr.doorsOpen ? 'at' : 'departing';
       else if (i === 0 && tr.stopDist < 350) status = 'arriving';
       const trip = t.trip >= 0 ? sim.plan.trips[t.trip] : null;
+      const tripEnd = trip ? serviceEnd(sim.plan, trip) : undefined;
+      if (trip && tripEnd === undefined) continue;
       // a train terminating here is still listed by its destination name, as photographed (D86)
-      const end = t.dep === null ? station : trip ? serviceEnd(sim.plan, trip) : -1;
+      const end = t.dep === null ? station : tripEnd ?? -1;
       const dest = end >= 0 ? STATIONS[end].name : tr.destText;
       // a train starting here waits for its planned departure
       if (status === 'eta' && t.dep !== null && t.arr === null) eta = Math.max(eta, t.dep - 60);
@@ -119,7 +121,7 @@ export function computePis(sim: Sim, station: number): PisData {
   // Never invent a vehicle for an unassigned/cancelled/withdrawn duty.
   for (const trip of sim.plan.trips) {
     if (trip.from !== station || !trip.revenue || trip.cancelled || trip.completed || listed.has(trip.id)) continue;
-    const first = trip.stops[0], block = sim.plan.blocks[trip.block];
+    const first = effectiveStops(trip)[0], block = sim.plan.blocks[trip.block];
     if (!first?.stop || first.noBoard || !block?.trips.includes(trip.id)) continue;
     const platform = topo.stations[station].platforms[trip.dir];
     if (sim.plat[platform].skip) continue;
@@ -134,6 +136,7 @@ export function computePis(sim: Sim, station: number): PisData {
     // present lateness, rather than counting to zero and vanishing
     const expected = first.dep + (vehicle ? Math.max(0, vehicle.delay) : 0);
     const end = serviceEnd(sim.plan, trip);
+    if (end === undefined) continue;
     out[trip.dir].push({ dest: STATIONS[end].name, destSt: end, eta: Math.max(0, expected - sim.t),
       status: 'eta', trip: trip.no, load: vehicle ? Math.min(1.3, vehicle.load/LINE_INFO.capacity) : 0,
       ...(LINE_INFO.cars ? { carLoads: Array(LINE_INFO.cars).fill(vehicle ? Math.min(1.3, vehicle.load / LINE_INFO.capacity) : 0) } : {}) });
@@ -146,8 +149,9 @@ export function computePis(sim: Sim, station: number): PisData {
   const next: PisData['next'] = {}, done: PisData['done'] = {}, ahead: PisData['ahead'] = {};
   for (const trip of sim.plan.trips) {
     if (!trip.revenue || trip.cancelled) continue;
-    for (let i = 0; i < trip.stops.length - 1; i++) {
-      const x = trip.stops[i];
+    const stops = effectiveStops(trip);
+    for (let i = 0; i < stops.length - 1; i++) {
+      const x = stops[i];
       if (x.st !== station || !x.stop || x.noBoard) continue;
       const k = trip.dir as 'DN' | 'UP';
       if (x.dep >= sim.t) { next[k] = Math.min(next[k] ?? Infinity, x.dep); ahead[k] = (ahead[k] ?? 0) + 1; }

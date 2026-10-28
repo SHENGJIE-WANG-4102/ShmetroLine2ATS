@@ -224,6 +224,8 @@ export interface CoreLineData {
     lastBigWestboundArrival: number;
     peakCoreHeadway: number;
     minTurnback: Record<string, number>;
+    /** Station IDs where long turnback waits remain at the platform. */
+    longWaitPlatformStations?: readonly string[];
     platformTurnClear: Record<string, number>;
     depotReturns: {
         depot: string;
@@ -255,6 +257,10 @@ export interface CoreLineData {
         alternatives?: { depot: string; incoming: "UP" | "DN" }[];
           /** May remain unassigned, with a reported reason, when no safe slot/source exists. */
           optional?: boolean;
+        /** Own standby windows per day type; absent means the line's default windows. */
+        windows?: Partial<Record<'weekday' | 'weekend', { from: number; need: number; to: number }[]>>;
+        /** Late trains at this terminal take the next ready departure in arrival order (D148). */
+        firstReady?: boolean;
     }[];
     platformPassKmh: number;
     platformStopKmh: number;

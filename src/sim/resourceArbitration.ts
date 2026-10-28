@@ -9,7 +9,7 @@ import { approachLocked, committedTrain } from './interlocking';
 import { canStopBeforeSignal } from './protection';
 import { SIGNAL_MARGIN } from './protection';
 import type { HaltCode, WaitAlternative } from './halt';
-import { blockTasks, departureBerthAfterReverse } from './timetable';
+import { blockTasks, departureBerthAfterReverse, effectiveStops } from './timetable';
 import { MIN_DWELL } from './calibration';
 import { LINE_INFO } from '../data/current';
 import { peekVehicle } from './yard';
@@ -446,12 +446,22 @@ function firstTaskIndex(sim: Sim, tr: Train): number {
 /** A positioning trip can omit its origin stop task. Its diagram origin is
  * still the departure clock, provided it is the actual overnight location.
  * Read the current plan so carried trip ids/times use the current day. */
-export function sourceDepartureAt(sim: Sim, task: Task): number | null {
+export function sourceDepartureAt(sim: Sim, task: Task, tr?: Train): number | null {
   if (task.k !== 'stop') return null;
+  if (task.turnbackWaitBerth !== undefined && !task.standby && !task.stabledOut) {
+    const trip = sim.plan.trips[task.trip], origin = trip && effectiveStops(trip)[0], berth = sim.topo.berths[task.turnbackWaitBerth];
+    const key = tr ? `turnback-departure-train-${tr.id}` : `turnback-departure-berth-${task.turnbackWaitBerth}`;
+    if (trip && berth && !trip.cancelled && !trip.completed && trip.from === berth.station
+      && origin?.st === berth.station && Number.isFinite(origin.dep)) { sim.clearAlarm(key); return origin.dep; }
+    sim.log('B', '运营', `折返候班首动时刻无法对应实际车次（车次${task.trip}）`,
+      { key,
+        code: 'SOURCE_DEPARTURE_UNKNOWN', ...(tr ? { train: tr.id } : {}) });
+    return null;
+  }
   if (task.dep !== null) return task.dep;
   if (!task.stabledOut) return null;
   const trip = sim.plan.trips[task.trip], block = trip && sim.plan.blocks[trip.block];
-  const origin = trip?.stops[0], start = block?.start;
+  const origin = trip && effectiveStops(trip)[0], start = block?.start;
   if (trip && !trip.cancelled && !trip.completed && origin && Number.isFinite(origin.dep)
     && start?.kind === 'stable' && start.station === origin.st && trip.from === origin.st
     && (start.berth === undefined || sim.topo.berths[start.berth]?.station === origin.st)) return origin.dep;
@@ -462,10 +472,27 @@ export function sourceDepartureAt(sim: Sim, task: Task): number | null {
 }
 
 /** Existing source readiness, shared by admission, ordinary ARS and onboard. */
-export function sourceReadyAt(sim: Sim, task: Task): number {
-  if (task.k !== 'stop' || !(task.standby || task.stabledOut)) return -Infinity;
-  const departure = sourceDepartureAt(sim, task);
+export function sourceReadyAt(sim: Sim, task: Task, tr?: Train): number {
+  if (task.k !== 'stop' || !(task.standby || task.stabledOut || task.turnbackWaitBerth !== undefined)) return -Infinity;
+  if (task.turnbackWaitBerth !== undefined && !task.standby && !task.stabledOut) {
+    // The marker describes a physical wait, not an ongoing speed rule. A
+    // manual departure, rescue or changed body must never pin a train on a
+    // shared route after it has left the safe waiting point.
+    const link = tr && sim.topo.links[tr.link], section = link && sim.topo.sections[link.section], kind = section?.kind;
+    const berth = sim.topo.berths[task.turnbackWaitBerth];
+    if (!tr || !link || !berth || tr.lastStation !== berth.station || !tr.body.some(part => part.link === berth.link)
+      || tr.phase !== 'reversing' && tr.phase !== 'run' || tr.phase === 'run' && (tr.v >= .05 || tr.lastDs > 1e-6)
+      || kind !== 'tail' && kind !== 'siding'
+      || !safeWaitingPoint(sim.topo, { link: tr.link, off: tr.off, dir: tr.dir, incoming: tr.hist }, tr.len)) return -Infinity;
+  }
+  const departure = sourceDepartureAt(sim, task, tr);
   return departure === null ? -Infinity : departure - STANDBY_CALL;
+}
+
+/** Shared reason for the existing source-readiness gate. */
+export function sourceWaitReason(task: Task): string {
+  return task.k === 'stop' && task.standby ? '热备待命'
+    : task.k === 'stop' && !task.stabledOut && task.turnbackWaitBerth !== undefined ? '折返线图定候班' : '存车待发';
 }
 
 /** Scheduling at an origin applies only to a motion entering its physical
@@ -571,7 +598,7 @@ function makeRequest(sim: Sim, id: number, tasks: Task[], point: TrackPoint, len
   const readyAt = Math.min(...options.map(o => o.readyAt!));
   // Existing standby/stabling release is a source-readiness condition, not a
   // reservation lasting until a future service. The shared throat cannot wait.
-  const callAt = !inside || safeHere ? Math.max(sim.t, sourceReadyAt(sim, task)) : sim.t;
+  const callAt = !inside || safeHere ? Math.max(sim.t, sourceReadyAt(sim, task, tr)) : sim.t;
   for (const option of options) option.readyAt = Math.max(option.readyAt!, callAt);
   const request = { id, train: tr, tasks, options, inside, committed, readyAt: Math.max(readyAt, callAt), origin, safeHere,
     time: tr?.halt.since || sim.t };

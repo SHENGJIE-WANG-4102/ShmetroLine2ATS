@@ -10,8 +10,7 @@ import type { FromWorker, ToWorker, SimConfig } from './model';
 import { nextOperatingConfig, unfinishedAtRollover } from './operatingDay';
 import { OPERATING_DAY } from './dayRandom';
 import { capture, restore, type Checkpoint } from './state';
-import { compactCheckpoints, exportDiagnostics, stringifyDiagnostics, type RecordedInput } from './diagnostics';
-import { currentScope } from '../data/scope';
+import { applyInput, compactCheckpoints, exportDiagnostics, stringifyDiagnostics, type RecordedInput } from './diagnostics';
 import { preparePlan } from './planning';
 import { captureWarmup, readWarmup, restoreWarmup, warmupKey, writeWarmup } from './warmupCache';
 
@@ -149,8 +148,7 @@ function stepOnce(keepCheckpoints = true) {
   while (pending.length && pending[0].t <= sim.t + 1e-6) {
     const e = pending.shift()!;
     sim.replaying = true;
-    if ('cmd' in e) sim.command(e.cmd);
-    else applyDrive(e.drive.train, e.drive.notch);
+    applyInput(sim, e);
     sim.replaying = false;
     sim.inputLog.push(structuredClone(e));
   }
@@ -315,8 +313,9 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case 'cmd': {
       if (!sim) return;
       takeOver();
+      const inputIndex = sim.inputLog.length;
       const r = sim.command(m.cmd);
-      cmdLog.push({ scope: currentScope(), t: sim.t, cmd: m.cmd });
+      cmdLog.push(structuredClone(sim.inputLog[inputIndex]));
       post({ type: 'cmdResult', id: m.id, ok: r.ok, msg: r.msg });
       flushEvents();
       sendSnapshot();

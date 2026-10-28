@@ -14,7 +14,7 @@ import { confirmAndSend, type CmdSpec } from './confirm';
 import { LINE, STATIONS, LINE_INFO, OPERATIONS, supportsSignalSystem, unattended } from '../data/current';
 import { PERF } from '../sim/dynamics';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT, type TrackDir, type TrainSnap } from '../sim/model';
-import { turnbackAt, exitStation, OVERLAY_PRESETS } from '../sim/timetable';
+import { turnbackAt, exitStation, effectiveEnd, OVERLAY_PRESETS } from '../sim/timetable';
 import { fmtTime, fmtDelay } from './theme';
 import { StopView } from './stopview';
 import { Dmi } from './dmi';
@@ -326,7 +326,10 @@ export class CommandPanel {
     if (!next.length) this.el.append(h('div', { class: 'hint' }, '近期无出段计划'));
     else {
       const tb = h('tbody');
-      for (const b of next) tb.append(h('tr', {}, h('td', { class: 'mono' }, fmtTime((b.start as { time: number }).time, false)), h('td', { class: 'mono' }, `表号 ${b.svc}`), h('td', {}, plan.trips[b.trips[0]] ? `→ ${STATIONS[plan.trips[b.trips[0]].to].name}` : '')));
+      for (const b of next) {
+        const trip = plan.trips[b.trips[0]], end = trip && effectiveEnd(trip);
+        tb.append(h('tr', {}, h('td', { class: 'mono' }, fmtTime((b.start as { time: number }).time, false)), h('td', { class: 'mono' }, `表号 ${b.svc}`), h('td', {}, end !== undefined && STATIONS[end] ? `→ ${STATIONS[end].name}` : '')));
+      }
       this.el.append(h('table', { class: 'grid' }, tb));
     }
     this.el.append(h('div', { class: 'cmdgrid' }, this.btn('打开车场图', () => this.hooks.openYard(id), 'primary')));
@@ -399,7 +402,9 @@ export class CommandPanel {
     }));
     const dir = this.trainDir(t0);
     const ahead = topo.stations.filter((s) => (dir === 'DN' ? s.chain > t0.chain + 20 : s.chain < t0.chain - 20)).sort((a, b) => (dir === 'DN' ? a.chain - b.chain : b.chain - a.chain));
-    const tbOpts = ahead.filter((s) => turnbackAt(topo, s.index, dir));
+    // The simulator checks the actual route, including an already completed
+    // turn; station-centre chainage cannot decide whether that route exists.
+    const tbOpts = topo.stations.filter((s) => turnbackAt(topo, s.index, 'DN') || turnbackAt(topo, s.index, 'UP'));
     const intervalHeld = t0.halt?.code === 'INTERVAL_LIMIT';
     const release = t0.hold || intervalHeld;
     this.el.append(h('div', { class: 'sect-title' }, '调度命令'));
@@ -416,8 +421,8 @@ export class CommandPanel {
     ));
     const skipSel = h('select', {}, ...ahead.slice(0, 8).map((s) => h('option', { value: s.index }, s.name))) as HTMLSelectElement;
     const tbSel = h('select', {}, ...tbOpts.map((s) => {
-      const tb = turnbackAt(topo, s.index, dir)!;
-      return h('option', { value: s.index }, `${s.name}（${tb.kind === 'rear' ? '站后' : '站前'}）`);
+      const tb = turnbackAt(topo, s.index, dir);
+      return h('option', { value: s.index }, `${s.name}（${tb ? tb.kind === 'rear' ? '站后' : '站前' : '反向折返'}）`);
     })) as HTMLSelectElement;
     this.el.append(h('div', { class: 'form' }, h('label', {}, '跳停'), skipSel,
       this.btn('设置跳停', () => void confirmAndSend(this.store, { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 跳停 ${STATIONS[Number(skipSel.value)].name}`, cmd: { c: 'trainSkip', train: id, station: Number(skipSel.value), on: true } }))));

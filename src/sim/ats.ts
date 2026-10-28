@@ -1,6 +1,5 @@
 import { unattended } from '../data/current';
 import { utoBusy, utoVehicleWait, utoDoorWarningReady, beginUtoReturn, requestUtoControl, crewLabel, computerCrew } from './uto';
-import { PERF } from './dynamics';
 import { doorCloseHold, departureHold, DOOR_CUT_DWELL } from './vehicle';
 /**
  * ATS: train spawning from the plan, task execution (dwell, turnback, depot),
@@ -9,15 +8,16 @@ import { doorCloseHold, departureHold, DOOR_CUT_DWELL } from './vehicle';
  */
 import type { Sim } from './engine';
 import { cancelTrip, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
-import type { Dir, Topology } from './topology';
-import { nextLink, travelDirection, ahead } from './topology';
+import { settleDroppedCalls } from './connections';
+import type { Dir, Topology, TrackPoint, RouteStep } from './topology';
+import { nextLink, travelDirection, ahead, reversedBerthPoint } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, signalPassed, type CmdResult } from './interlocking';
 import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission, retreatRouteBlocker } from './movement';
 import { takeVehicle, putVehicle, peekVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell, simulatedAmDriver, driverTurnbackKind } from './onboard';
 import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
-import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces } from './timetable';
+import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/current';
 import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
 import { dmiNote } from './dmi';
@@ -25,12 +25,13 @@ import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRang
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, rootCause, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
 import { standsAt } from './operatingDay';
-import { standbyTakeover, predictedLateness } from './standby';
+import { standbyTakeover } from './standby';
 import { recordTransition } from './invariants';
 import { TURNBACK } from './fsm';
 import { canStopBeforeSignal } from './protection';
-import { arbitrateResources, resourceAllocation, routeResourceBlocker, adoptSpawnResources, resourceRouteReserved, resourceWaitDetail, sourceReadyAt, routeNeedsResourceProtection, resourceAdmissionBlocked } from './resourceArbitration';
-import { walkRouteToBerth, type TaskPathVisitor } from './routePath';
+import { arbitrateResources, resourceAllocation, routeResourceBlocker, adoptSpawnResources, resourceRouteReserved, resourceWaitDetail, sourceReadyAt, sourceWaitReason, routeNeedsResourceProtection, resourceAdmissionBlocked } from './resourceArbitration';
+import { plannedWaitLong, plannedWaitBerth } from './plannedWaitBerth';
+import { routePathStart, walkRouteToBerth, type TaskPathVisitor } from './routePath';
 export type { RouteTable, TaskPathVisitor } from './routePath';
 
 /** Every actual turnback stage is observed at the event, including atomic platform turns. */
@@ -479,7 +480,8 @@ function spawnStabled(sim: Sim, b: Block) {
   // before the first arrivals turn), later ones in the storage tail, the
   // earlier of those nearer the platform
   const at = b.start.station;
-  const firstDep = (x: Block) => sim.plan.trips[x.trips.find((id) => !sim.plan.trips[id].cancelled)!].stops[0].dep;
+  const firstDep = (x: Block) => x.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled)
+    .map(t => effectiveStops(t)[0]?.dep).find(dep => dep !== undefined) ?? Infinity;
   const rank = sim.plan.blocks.filter((x) => x.start.kind === 'stable' && x.start.station === at && x.trips.some((id) => !sim.plan.trips[id].cancelled))
     .sort((x, y) => firstDep(x) - firstDep(y)).indexOf(b);
   const places = [...st.turnbackBerths, ...st.storageBerths];
@@ -536,11 +538,13 @@ export function extendTrainTasks(sim: Sim, tr: Train, last: number) {
   if (cut < 0 || !next) return;
   const tasks = tr.tasks.slice(0, cut + 1);
   const trip = plan.trips[last];
+  const actualTrip = effectiveTrip(trip);
+  if (!actualTrip) return;
   if (next.dir !== trip.dir) {
     // keep a turnback the train already had planned (its berth may be reserved)
     const own = tr.tasks[cut + 1];
     if (own?.k === 'reverse') tasks.push(own);
-    else addTurnback(topo, trip, tasks);
+    else addTurnback(topo, actualTrip, tasks);
   }
   tasks.push(...blockTasks(topo, plan, block, block.trips.indexOf(next.id)));
   const keep = new Set(tasks.flatMap(t => t.k === 'stop' ? [t.berth] : []));
@@ -565,13 +569,15 @@ export function setTripFromTasks(sim: Sim, tr: Train) {
   const trip = sim.plan.trips[t.trip];
   if (tr.tripId !== trip.id) {
     tr.tripId = trip.id;
+    tr.lastCompletedCall = { trip: trip.id, stopIndex: -1 };
     tr.tripNo = trip.no;
-    tr.destStation = serviceEnd(sim.plan, trip);
-    tr.destText = STATIONS[tr.destStation].name;
     tr.inService = trip.revenue;
     // Live delay belongs to this assignment, not the completed inbound trip.
     if (t.arr === null && t.dep !== null) tr.delay = Math.max(0, sim.t - t.dep);
   }
+  const end = serviceEnd(sim.plan, trip);
+  tr.destStation = end ?? -1;
+  tr.destText = end === undefined ? '' : STATIONS[end].name;
 }
 
 // ---------------------------------------------------------------- per-step task logic
@@ -634,7 +640,18 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
 
 export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
   const { topo } = sim;
-  const task = tr.tasks[0];
+  const departureAlarm = `turnback-departure-train-${tr.id}`;
+  if (sim.alarms.has(departureAlarm) && !tr.tasks.some(t => t.k === 'stop' && t.turnbackWaitBerth !== undefined))
+    sim.clearAlarm(departureAlarm);
+  if (tr.phase === 'run' && (tr.v >= .05 || tr.lastDs > 1e-6)) sim.clearAlarm(`turnback-wait-unsafe-${tr.id}`);
+  let task = tr.tasks[0];
+  // Once the physical departure starts, the tail wait is consumed. Manual
+  // driving followed by automatic control must not reapply it on a shared link.
+  if (tr.phase === 'run' && task?.k === 'stop' && task.turnbackWaitBerth !== undefined
+    && (tr.v >= .05 || tr.lastDs > 1e-6)) {
+    task = cowTask(tr, task); delete task.turnbackWaitBerth;
+    sim.clearAlarm(`turnback-departure-train-${tr.id}`);
+  }
   if (tr.tbStage === 'manual' && tr.level === 'CBTC') { setTurnbackStage(sim, tr, 'depart'); tr.tbExitSig = -1; }
   if (tr.failed || utoVehicleWait(sim,tr) || utoBusy(tr) && !(tr.uto?.stage==='doors'&&tr.doorsAwait)) return;
   if (tr.depotStage === 'out' && topo.links[tr.link].track !== 'DEP') tr.depotStage = 'none';
@@ -768,6 +785,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     tr.intervalRelease = undefined;
     const remaining = stopError(sim, tr);
     tr.departureDisplay = { stop: st, at: dwellDepartureAt(tr), remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p) };
+    rememberCompletedCall(sim, tr, st);
     tr.tasks.shift();
     ps.lastDep = sim.t;
     tr.phase = 'run';
@@ -804,6 +822,11 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
   const { topo } = sim;
   tr.v = 0;
   if (task.k === 'stop') {
+    // Once physically at the next stop, this is no longer a tail call-out.
+    if (task.turnbackWaitBerth !== undefined) {
+      task = cowTask(tr, task); delete task.turnbackWaitBerth;
+      sim.clearAlarm(`turnback-departure-train-${tr.id}`);
+    }
     if (tr.tbStage === 'depart') setTurnbackStage(sim, tr, 'none');
     if (task.depotWork) {
       tr.phase = 'dwell'; tr.phaseSince = sim.t; tr.arrivedAt = sim.t;
@@ -842,8 +865,8 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
       const trip = sim.plan.trips[task.trip];
       const ids = sim.plan.blocks[trip.block]?.trips ?? [];
       const prev = ids.slice(0, ids.indexOf(trip.id)).map((id) => sim.plan.trips[id]).filter((t) => !t.cancelled).at(-1);
-      const end = prev?.stops.at(-1);
-      if (prev && end && prev.revenue && !prev.completed && !end.stop && end.st === task.station && trip.stops[0].st === task.station)
+      const end = prev && effectiveStops(prev).at(-1);
+      if (prev && end && prev.revenue && !prev.completed && !end.stop && end.st === task.station && effectiveStops(trip)[0]?.st === task.station)
         complete(prev, end.arr);
     }
     recordTrace(sim, tr, true);
@@ -859,6 +882,28 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     return;
   }
   if (task.k === 'reverse') {
+    sim.clearAlarm(`turnback-wait-unsafe-${tr.id}`);
+    // Only mark a genuine planned adjacent connection, after the train has
+    // physically reached the actual selected off-platform berth. This avoids
+    // freezing an online exchange or a shortened task list on the main line.
+    const next = tr.tasks[1];
+    if (next?.k === 'stop') {
+      const d = sim.plan.trips[next.trip], block = sim.plan.blocks[tr.block];
+      const index = block?.trips.indexOf(next.trip) ?? -1;
+      const a = index > 0 ? block.trips.slice(0, index).map(id => sim.plan.trips[id]).filter(t => t && !t.cancelled).at(-1) : undefined;
+      const berth = topo.berths[task.chosen];
+      const adjacent = !!a && !!d && !d.cancelled && effectiveEnd(a) === d.from && effectiveEnd(a) === task.station && a.dir !== d.dir;
+      const long = adjacent && plannedWaitLong(sim.plan.dayType, a, d);
+      const actual = berth && a && berth.station === effectiveEnd(a) && (berth.kind === 'tail' || berth.kind === 'siding') && tr.link === berth.link
+        && tr.dir === berth.dir;
+      const choice = long && actual ? plannedWaitBerth(topo, a!, d!, tr.tasks, 0, [task.chosen], task.chosen,
+        { point: { link: tr.link, off: tr.off, dir: tr.dir }, incoming: tr.hist, length: tr.len }) : undefined;
+      if (choice?.safe && !next.standby && !next.stabledOut) cowTask(tr, next).turnbackWaitBerth = task.chosen;
+      else if (next.turnbackWaitBerth !== undefined) { const copy = cowTask(tr, next); delete copy.turnbackWaitBerth; }
+      if (long && actual && choice && !choice.safe)
+        sim.log('C', '运营', `列车 ${trainLabel(tr)} 所选 ${berth!.name} 不能全列安全候班，继续原折返作业`,
+          { key: `turnback-wait-unsafe-${tr.id}`, code: 'TURNBACK_WAIT_UNSAFE', train: tr.id });
+    }
     setTurnbackStage(sim, tr, 'reverse');
     tr.phase = 'reversing';
     tr.phaseSince = sim.t;
@@ -867,10 +912,10 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     tr.lastStation = task.station;
     // reversed at a platform track: the next departure here leaves from it
     // (set now: the pull-out route is taken from tasks[1] while reversing)
-    const next = tr.tasks[1];
-    if (next?.k === 'stop' && next.station === task.station) {
-      const berth = departureBerthAfterReverse(topo, task.chosen, next.berth);
-      if (berth !== next.berth) cowTask(tr, next).berth = berth;
+    const following = tr.tasks[1];
+    if (following?.k === 'stop' && following.station === task.station) {
+      const berth = departureBerthAfterReverse(topo, task.chosen, following.berth);
+      if (berth !== following.berth) cowTask(tr, following).berth = berth;
     }
     return;
   }
@@ -901,6 +946,7 @@ function platformTurn(topo: Topology, tr: Train, st: StopTask): boolean {
 
 /** change ends at the platform with the doors open, straight into the next trip's stop */
 function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
+  rememberCompletedCall(sim, tr, st);
   tr.tasks.shift();
   const rev = tr.tasks.shift();
   if (rev?.k !== 'reverse') return;
@@ -1629,8 +1675,8 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
     const r = topo.routes[rid];
     // a hot standby keeps to its turnback track until it is called out (D70),
     // a train stabled overnight to its stabling place (D72)
-    if (!decision && sourceReadyAt(sim, goalTask) > sim.t) {
-      setArsWait(sim, tr, 'REGULATION', -1, sig, goalTask.k === 'stop' && goalTask.standby ? '热备待命' : '存车待发');
+    if (!decision && sourceReadyAt(sim, goalTask, tr) > sim.t) {
+      setArsWait(sim, tr, 'REGULATION', -1, sig, sourceWaitReason(goalTask));
       return { train: tr, signal: sig, route: rid, prio, eta, ready: false, dist, via };
     }
     let ok = ready && (level === 0 || dist < 1500);
@@ -1720,39 +1766,193 @@ export function turnbackOptions(sim: Sim, tr: Train): number[] {
   return stationsAhead(sim, tr).filter((s) => turnbackAt(sim.topo, s, d) !== null);
 }
 
+/** Follow only the registered route selected for this movement. Live switch
+ * positions, occupancy and faults are deliberately left to normal ARS. */
+function turnbackPath(sim: Sim, point: TrackPoint, goal: number, incoming: readonly RouteStep[], route?: number) {
+  const start = routePathStart(sim.topo, point, goal, route);
+  if (!start) return;
+  const path = [...start.segments];
+  if (!('reached' in start) && !Number.isFinite(walkRouteToBerth(sim.topo, sim.routeTable, start.start, goal,
+    (link, from, to) => path.push({ link, from, to })))) return;
+  const history = [...incoming];
+  for (const segment of path) {
+    if (segment.from === segment.to) continue;
+    const step: RouteStep = { link: segment.link, dir: segment.to > segment.from ? 1 : -1 };
+    const last = history.at(-1);
+    if (!last || last.link !== step.link || last.dir !== step.dir) history.push(step);
+  }
+  const berth = sim.topo.berths[goal];
+  return { point: { link: berth.link, off: berth.offset, dir: berth.dir } as TrackPoint, history };
+}
+
+/** A physical route already assigned to this train is the only selected
+ * route to continue; do not inspect or modify another train's routes. */
+function turnbackSelectedRoute(sim: Sim, tr: Train): number | undefined {
+  for (const ar of sim.routes.values()) {
+    if (ar.owner !== tr.id && ar.committed !== tr.id && ar.arsTrain !== tr.id) continue;
+    if (sim.topo.routes[ar.route]?.steps.some(s => s.link === tr.link && s.dir === tr.dir)) return ar.route;
+  }
+}
+
+function reversedTrainPoint(tr: Train): TrackPoint | undefined {
+  const tail = tr.body.at(-1), hist = tr.hist.slice(tr.hist.length - tr.body.length);
+  if (!tail || !hist.length || hist[0].link !== tail.link) return;
+  const dir = hist[0].dir;
+  return { link: tail.link, off: dir === 1 ? tail.from : tail.to, dir: -dir as Dir };
+}
+
+/** Recognise an existing turn only if its physical continuation is valid. */
+function existingTurnbackSatisfied(sim: Sim, tr: Train, station: number): boolean {
+  const first = tr.tasks[0];
+  if (tr.phase === 'reversing' && first?.k === 'reverse' && first.station === station) {
+    const next = tr.tasks[1], point = reversedTrainPoint(tr), berth = sim.topo.berths[first.chosen];
+    if (next?.k !== 'stop' || next.station !== station || !point || !berth || berth.station !== station
+      || !tr.body.some(part => part.link === berth.link)) return false;
+    const trip = sim.plan.trips[next.trip];
+    const goal = next.station === station ? departureBerthAfterReverse(sim.topo, first.chosen, next.berth) : next.berth;
+    const target = sim.topo.berths[goal], direction = travelDirection(sim.topo, point);
+    if (!target || target.station !== station) return false;
+    const matchingTrip = trip ? trip.from === station && trip.dir === direction
+      : next.station === station && !!target && travelDirection(sim.topo, { link: target.link, dir: target.dir }) === direction;
+    return matchingTrip
+      && !!turnbackPath(sim, point, goal, []);
+  }
+  if (first?.k !== 'stop' || first.station !== station || tr.phase !== 'run' || tr.v >= .05 || tr.lastDs > 1e-6 || tr.lastStation !== station
+    || !['depart', 'manual'].includes(tr.tbStage)) return false;
+  const trip = sim.plan.trips[first.trip];
+  const physical = first.turnbackWaitBerth === undefined
+    ? sim.topo.berths.some(b => b.station === station && tr.body.some(part => part.link === b.link))
+    : sim.topo.berths[first.turnbackWaitBerth]?.station === station
+      && tr.body.some(part => part.link === sim.topo.berths[first.turnbackWaitBerth!].link);
+  const target = sim.topo.berths[first.berth], direction = dirOf(tr, sim.topo);
+  if (!target || target.station !== station) return false;
+  const matchingTrip = trip ? trip.from === station && trip.dir === direction
+    : first.station === station && !!target && travelDirection(sim.topo, { link: target.link, dir: target.dir }) === direction;
+  return physical && matchingTrip
+    && !!turnbackPath(sim, { link: tr.link, off: tr.off, dir: tr.dir }, first.berth, tr.hist, turnbackSelectedRoute(sim, tr));
+}
+
+/** Preview the actual retargeted arrival and selected reverse, then verify
+ * each phase through the opposite platform before changing the live plan. */
+function turnbackCandidateProblem(sim: Sim, tr: Train, tasks: Task[]): string | undefined {
+  let point: TrackPoint = { link: tr.link, off: tr.off, dir: tr.dir };
+  let history: readonly RouteStep[] = tr.hist;
+  let first = true, reversed = false, previousTurn: { berth: number; station: number } | undefined;
+  for (const task of tasks) {
+    if (task.k === 'rescue') return '救援任务无法作为折返接续';
+    let berth = task.k === 'stop' ? task.berth : task.k === 'reverse' ? task.chosen
+      : task.k === 'depot' ? depotBerth(sim.topo, task) : task.berth;
+    if (berth < 0 || !sim.topo.berths[berth]) return '接续泊位尚未确定';
+    if (task.k === 'stop' && previousTurn?.station === task.station)
+      berth = departureBerthAfterReverse(sim.topo, previousTurn.berth, berth);
+    previousTurn = undefined;
+    const reached = turnbackPath(sim, point, berth, history, first ? turnbackSelectedRoute(sim, tr) : undefined);
+    first = false;
+    if (!reached) return `无法到达 ${sim.topo.berths[berth].name}`;
+    point = reached.point; history = reached.history;
+    if (task.k === 'reverse') {
+      const changed = reversedBerthPoint(sim.topo, berth, tr.len, [...history]);
+      if (!changed) return `${sim.topo.berths[berth].name} 无法容纳全列换端`;
+      point = changed;
+      history = [...history].reverse().map(s => ({ link: s.link, dir: -s.dir as Dir }));
+      reversed = true; previousTurn = { berth, station: task.station };
+    }
+  }
+  return reversed ? undefined : '没有可用的换端任务';
+}
+
+/** A skipped or overrun call never reaches this completion path. */
+function rememberCompletedCall(sim: Sim, tr: Train, stop: StopTask) {
+  if (stop.trip < 0 || (stop.stopIndex === undefined && !stop.revenue && stop.arr === null)) return;
+  if (stop.stopIndex === undefined)
+    sim.log('B', '运营', `列车 ${trainLabel(tr)} 的已完成停站索引缺失，车次按无已完成停站处理`);
+  tr.lastCompletedCall = { trip: stop.trip, stopIndex: stop.stopIndex ?? -1 };
+}
+
+/** Index of the next planned call; old checkpoints can use its unique time. */
+export function remainingStart(trip: Trip, tr: Train): number | undefined {
+  // Depot/turnback positioning stops can share the trip id but are not
+  // calls in its service. Older checkpoints lack stopIndex on real calls.
+  const pending = tr.tasks.find(t => t.k === 'stop' && t.trip === trip.id && (t.revenue || t.stopIndex !== undefined));
+  if (!pending || pending.k !== 'stop') return undefined;
+  if (pending.stopIndex !== undefined && trip.stops[pending.stopIndex]?.st === pending.station) return pending.stopIndex;
+  const sameStation = trip.stops.map((s, i) => ({ s, i })).filter(({s}) => s.st === pending.station);
+  const timed = sameStation.filter(({s}) => pending.arr !== null && s.arr === pending.arr
+    || pending.dep !== null && s.dep === pending.dep);
+  const matches = timed.length ? timed : sameStation;
+  return matches.length === 1 ? matches[0].i : undefined;
+}
+
+/** Resolve the first remaining occurrence of a station in this trip. */
+function candidateCut(trip: Trip, tr: Train, station: number, cause: NonNullable<Trip['cut']>['cause']): Trip['cut'] | undefined {
+  const pending = remainingStart(trip, tr);
+  if (pending === undefined) return undefined;
+  const last = tr.lastCompletedCall;
+  // The next stopping task can be beyond planned pass-through or skipped
+  // calls. Include those calls; route preflight still checks their physical
+  // reachability from the train's actual position.
+  let start = pending;
+  if (last?.trip === trip.id && last.stopIndex >= -1 && last.stopIndex < pending)
+    start = last.stopIndex + 1;
+  else {
+    // Old checkpoints lack a completed-call index. Only a contiguous run of
+    // explicitly planned pass calls can be recovered without guessing.
+    while (start > 0 && !trip.stops[start - 1].stop) start--;
+  }
+  const stopIndex = trip.stops.findIndex((s, i) => i >= start && s.st === station);
+  if (stopIndex < 0 || (trip.cut && stopIndex > trip.cut.stopIndex)) return undefined;
+  return { station, stopIndex, cause };
+}
+
 /** 人工折返 */
 export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   const { topo, plan } = sim;
   const d = dirOf(tr, topo);
+  if (existingTurnbackSatisfied(sim, tr, station))
+    return { ok: true, msg: `列车 ${trainLabel(tr)} 已在 ${STATIONS[station].name} 完成或正在执行所需折返`, reasonCode: 'TURNBACK_ALREADY_SATISFIED' };
   const tb = turnbackAt(topo, station, d);
-  if (!tb) return { ok: false, msg: `${STATIONS[station].name} 无该方向折返条件` };
-  if (tb.kind === 'front' && tr.level === 'TBTC') return { ok: false, msg: 'TBTC不能自动反向区间折返（P3 §2.4.2）；须恢复CBTC或安排其他折返站' };
-  if (!stationsAhead(sim, tr).includes(station)) return { ok: false, msg: '折返站须在列车运行前方' };
+  if (!tb) return { ok: false, msg: `${STATIONS[station].name} 无该方向折返条件`, reasonCode: 'TURNBACK_UNAVAILABLE' };
+  if (tb.kind === 'front' && tr.level === 'TBTC') return { ok: false, msg: 'TBTC不能自动反向区间折返（P3 §2.4.2）；须恢复CBTC或安排其他折返站', reasonCode: 'TURNBACK_TBTC_UNAVAILABLE' };
   // keep stops up to the turnback station
   const keep: Task[] = [];
   for (const t of tr.tasks) {
     if (t.k === 'stop' && t.depotWork) break;
     if (t.k === 'stop' && (t.station === station || ahead(d, station, t.station))) break;
     if (t.k !== 'stop') break;
-    keep.push(t);
+    keep.push({ ...t });
   }
   const est = sim.t + estimateRun(sim, tr, station);
   const arrStop: StopTask = { k: 'stop', berth: platformBerth(topo, station, d), station, trip: tr.tripId, arr: est, dep: null, doors: tr.inService, revenue: tr.inService, note: '人工折返' };
   const tasks: Task[] = [...keep, arrStop];
-  // cancel rest of current trip and find the trip to resume
+  const back: TrackDir = d === 'DN' ? 'UP' : 'DN';
+  const fake: Trip = { id: -1, no: '', dir: d, kind: 'adj', from: station, to: station, stops: [], revenue: true, block: -1 };
+  addTurnback(topo, fake, tasks);
+  const commandReverse = tasks.at(-1);
+  // Build the entire continuation on a shallow plan copy: all modified trips
+  // and the affected block have their own objects. No live plan or task is
+  // changed until the actual retargeted route has passed every phase.
   const block = tr.block >= 0 ? plan.blocks[tr.block] : null;
   const curTrip = tr.tripId >= 0 ? plan.trips[tr.tripId] : null;
-  const back: TrackDir = d === 'DN' ? 'UP' : 'DN';
+  const cut = block && curTrip ? candidateCut(curTrip, tr, station, 'turnback') : undefined;
+  if (block && curTrip && !cut)
+    return { ok: false, msg: '折返站不在当前车次可截短的剩余站序中', reasonCode: 'TURNBACK_UNREACHABLE' };
+  if (cut) arrStop.stopIndex = cut.stopIndex;
+  const candidatePlan = { ...plan, trips: [...plan.trips], blocks: [...plan.blocks] };
+  if (curTrip && cut) candidatePlan.trips[curTrip.id] = { ...curTrip, cut };
+  const candidateBlock = block ? { ...block, trips: [...block.trips] } : null;
+  if (candidateBlock) candidatePlan.blocks[candidateBlock.id] = candidateBlock;
   let adj: Trip | null = null;
+  let replaced: Trip | undefined;
   if (block && curTrip) {
     const idx = block.trips.indexOf(curTrip.id);
     const nextTrip = block.trips.slice(idx + 1).map((i) => plan.trips[i]).find((t) => !t.cancelled);
-    if (nextTrip && nextTrip.dir === back && ahead(back, station, nextTrip.to)) {
+    const nextEnd = nextTrip && effectiveEnd(nextTrip);
+    if (nextTrip && nextEnd !== undefined && nextTrip.dir === back && ahead(back, station, nextEnd)) {
       // adjusted trip: from turnback station to the next trip's destination
       // depart as soon as the turnback allows (a station-front turnback occupies the opposite platform)
       const depAt = est + 240;
-      const originalStops = new Map(nextTrip.stops.map(s => [s.st, s]));
-      const stops = buildStops(sim.planCtx, back, station, nextTrip.to, depAt, nextTrip.revenue, 1,
+      const originalStops = new Map(effectiveStops(nextTrip).map(s => [s.st, s]));
+      const stops = buildStops(sim.planCtx, back, station, nextEnd, depAt, nextTrip.revenue, 1,
         st => originalStops.get(st)?.stop ?? nextTrip.revenue);
       for (const stop of stops) {
         const original = originalStops.get(stop.st);
@@ -1761,25 +1961,50 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
           if (original.noBoard !== undefined) stop.noBoard = original.noBoard;
         }
       }
-      adj = { id: plan.trips.length, no: `6${nextTrip.no.slice(1)}`, dir: back, kind: 'adj', from: station, to: nextTrip.to, stops, revenue: nextTrip.revenue, block: block.id };
-      plan.trips.push(adj);
-      cancelTrip(nextTrip, `人工折返：${STATIONS[station].name}折返，改开调整车次${adj.no}`);
-      block.trips.splice(block.trips.indexOf(nextTrip.id), 0, adj.id);
+      adj = { id: plan.trips.length, no: `6${nextTrip.no.slice(1)}`, dir: back, kind: 'adj', from: station, to: nextEnd, stops, revenue: nextTrip.revenue, block: block.id };
+      candidatePlan.trips.push(adj);
+      replaced = nextTrip;
+      candidatePlan.trips[nextTrip.id] = { ...nextTrip };
+      cancelTrip(candidatePlan.trips[nextTrip.id], `人工折返：${STATIONS[station].name}折返，改开调整车次${adj.no}`);
+      candidateBlock!.trips.splice(candidateBlock!.trips.indexOf(nextTrip.id), 0, adj.id);
     }
-    curTrip.cancelled = curTrip.cancelled || false;
-    sim.truncatedTrips.set(curTrip.id, station);
   }
-  const fake: Trip = { id: -1, no: '', dir: d, kind: 'adj', from: station, to: station, stops: [], revenue: true, block: -1 };
-  addTurnback(topo, fake, tasks);
-  if (adj && block) {
+  if (adj && candidateBlock) {
     // The existing block builder owns direction changes and the final depot
     // move. A same-direction empty continuation must not change ends again.
-    tasks.push(...blockTasks(topo, plan, block, block.trips.indexOf(adj.id)));
+    tasks.push(...blockTasks(topo, candidatePlan, candidateBlock, candidateBlock.trips.indexOf(adj.id)));
   } else {
     // no follow-on service: withdraw to depot after turning back
     depotTasks(topo, nearestDepot(sim, station, back), back, tasks);
   }
+  // A block continuation must include the actual terminal operation in the
+  // same task list being checked. If the builder cannot represent its end,
+  // accepting a passenger-only prefix would strand the train after service.
+  const end = adj && candidateBlock?.end;
+  const lastTask = tasks.at(-1);
+  const missingEnd = end?.kind === 'depot' ? lastTask?.k !== 'depot' || lastTask.depot !== end.depot
+    : end?.kind === 'stable' ? lastTask?.k !== 'stable'
+      || (end.berth !== undefined && lastTask.berth !== end.berth)
+      || (lastTask.berth >= 0 && topo.berths[lastTask.berth]?.station !== end.station) : false;
+  const problem = missingEnd ? '车底终点作业未生成' : turnbackCandidateProblem(sim, tr, tasks);
+  if (problem)
+    return { ok: false, msg: `列车 ${trainLabel(tr)} 无法完成 ${STATIONS[station].name} 折返：${problem}`, reasonCode: 'TURNBACK_UNREACHABLE' };
+  // Only the commanded turn is fixed to its checked track. Later normal
+  // duties retain their existing dynamic alternative-berth arbitration.
+  if (commandReverse?.k === 'reverse') commandReverse.berths = [commandReverse.chosen];
+  if (adj && block && replaced) {
+    plan.trips.push(adj);
+    cancelTrip(replaced, `人工折返：${STATIONS[station].name}折返，改开调整车次${adj.no}`);
+    block.trips.splice(block.trips.indexOf(replaced.id), 0, adj.id);
+  }
+  if (block && curTrip) {
+    curTrip.cancelled = curTrip.cancelled || false;
+    curTrip.cut = cut;
+    sim.planRev++;
+  }
+  settleDroppedCalls(sim, ...[curTrip, replaced].filter((t): t is Trip => !!t));
   tr.tasks = tasks;
+  setTripFromTasks(sim, tr);
   sim.planDirty = true;
   return { ok: true, msg: `列车 ${trainLabel(tr)} 人工折返于 ${STATIONS[station].name}${adj ? `，折返后担当 ${adj.no}` : '，折返后回段'}` };
 }
@@ -1928,7 +2153,6 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     const tail = liveTail(sim, b, idx);
     for (const tid of b.trips.slice(idx + 1)) cancelTrip(plan.trips[tid], `列车${tr.svc}退出服务（${reason}）`);
     if (tr.tripId >= 0) {
-      sim.truncatedTrips.set(tr.tripId, next ?? tr.lastStation);
       if (!plan.trips[tr.tripId].completed) cancelTrip(plan.trips[tr.tripId], `列车${tr.svc}退出服务（${reason}）`);
     }
     sim.planDirty = true;
@@ -1968,48 +2192,33 @@ function liveTail(sim: Sim, b: Block, idx: number): number[] {
 export const SEVERE_DELAY = 600;
 
 /**
- * Recovery regulation (D44). Explicit rules, each decided on the state of
- * this one train — never on time elapsed since an incident. A late train is
- * first relieved by a standby (D45, `cmdStandbyRelief`); these rules are the
- * fallback when no standby can take over:
- *  R1 severe delay: at the terminal of a completed trip, its next departure
- *     predicted more than SEVERE_DELAY late, the train runs empty to its next
- *     reachable ORIGINAL departure; with none reachable it returns to depot
- *     (and a standby may then take over its duty, R3).
- *  R2 missed cycle (headway restoration): at the terminal of a completed trip
- *     whose next departure was missed by more than 2 min, the missed whole
- *     cycle is cancelled and the train takes its own near-term original slot.
+ * Recovery regulation (D44, D147). Explicit rules, each decided on the state
+ * of this one train — never on time elapsed since an incident. A late train
+ * keeps carrying passengers: there is no clearing and empty positioning to
+ * chase an original slot (D147, 用户决定). A late train is first relieved by
+ * the terminal hot standby, which it then replaces (`cmdStandbyRelief`);
+ * at an intermediate station it takes the slot due now by a duty exchange
+ * (R4, `cmdExchangeDuty`). This command is the terminal fallback:
+ *  R2 missed cycle: at the terminal of a completed trip whose next departure
+ *     was missed by more than 2 min, the missed whole cycle is cancelled and
+ *     the train takes its own next departure from this terminal.
+ *  Otherwise the train keeps its plan and runs it late; it returns to the
+ *  depot only when its duty has no departure left.
  */
 export function cmdRecoverService(sim: Sim, tr: Train) {
   if (tr.tasks[0]?.k === 'depot' || tr.depotStage === 'in')
     return { ok: false, msg: '已在回段，不能改接载客始发时隙' };
   if (tr.tasks[0]?.k === 'reverse') return { ok: false, msg: '列车正在进入折返线，换端完成后再办理' };
   const current = curStop(tr);
-  // R5: the same at an intermediate station of the trip, for a train more
-  // than SEVERE_DELAY late on it that no duty exchange (R4) could place. A
-  // relieved train has no origin left to position for and is withdrawn:
-  // running out its trip that late keeps the line late for up to a whole trip.
-  if (!tr.failed && !tr.manual && tr.coupledLen === 0 && tr.phase === 'dwell' && tr.inService && tr.block >= 0
-    && current && current.trip >= 0 && current.arr !== null && current.dep !== null) {
-    const lateness = sim.t - current.dep;
-    if (lateness <= SEVERE_DELAY) return { ok: false, msg: `本车次晚点${Math.round(lateness)}s，未超过${SEVERE_DELAY}s` };
-    const late = `本车次晚点${Math.round(lateness / 60)}分钟`;
-    const target = reachableFutureOrigin(sim, tr);
-    if (target < 0) return cmdWithdraw(sim, tr, `故障恢复：${late}，车底剩余始发时隙全部不可达，清客回段`);
-    return positionForOriginalSlot(sim, tr, target, late);
-  }
   if (tr.failed || tr.manual || tr.coupledLen > 0 || tr.phase !== 'dwell' || !current
     || current.dep !== null || current.trip < 0 || !sim.plan.trips[current.trip].completed || tr.block < 0)
-    return { ok: false, msg: '须在已完成车次的终点停站办理恢复调度' };
-  // R2 first: it cancels only the missed cycle.
+    return { ok: false, msg: '须在已完成车次的终点停站办理恢复调度；中途大晚点照常载客，不清客空驶（D147）' };
   const skip = skipMissedCycle(sim, tr, current);
   if (skip.ok) return skip;
-  const lateness = predictedLateness(sim, tr);
-  if (!tr.inService || lateness <= SEVERE_DELAY) return skip;
-  const late = `预计晚点${Math.round(lateness / 60)}分钟`;
-  const target = reachableFutureOrigin(sim, tr);
-  if (target < 0) return cmdWithdraw(sim, tr, `故障恢复：${late}，车底剩余始发时隙全部不可达，清客回段`);
-  return positionForOriginalSlot(sim, tr, target, late);
+  const departure = tr.tasks.some((t, i) => i > 0 && t.k === 'stop' && t.revenue && t.dep !== null && t.trip >= 0
+    && !sim.plan.trips[t.trip].cancelled);
+  if (!departure) return cmdWithdraw(sim, tr, '故障恢复：车底已无后续始发，回段');
+  return { ok: false, msg: `${skip.msg}；按原计划晚点载客运行（D147）` };
 }
 
 /** How far from now the departure of the trip a late train takes over by
@@ -2022,8 +2231,8 @@ const exchangeable = (sim: Sim, tr: Train) => !tr.failed && !tr.manual && tr.cou
 
 /** the two trips call at the same stations, the same way, from `from` to the end */
 function sameRoute(a: Trip, b: Trip, from: number): boolean {
-  if (a.dir !== b.dir || a.to !== b.to || !a.revenue || !b.revenue) return false;
-  const rest = (t: Trip) => t.stops.slice(t.stops.findIndex(p => p.st === from));
+  if (a.dir !== b.dir || effectiveEnd(a) !== effectiveEnd(b) || !a.revenue || !b.revenue) return false;
+  const rest = (t: Trip) => { const stops = effectiveStops(t); return stops.slice(stops.findIndex(p => p.st === from)); };
   const ra = rest(a), rb = rest(b);
   return ra.length > 0 && ra.length === rb.length && ra[0].st === from && rb[0].st === from
     && ra.every((p, i) => p.st === rb[i].st && p.stop === rb[i].stop);
@@ -2096,7 +2305,7 @@ export function cmdExchangeDuty(sim: Sim, tr: Train, other: number) {
         x.k === 'stop' && x.trip === cur.trip ? { ...x, trip: head.trip } : x), ...tasks];
     }
     // a train at the platform keeps its stop; it now leaves to the new timetable
-    tasks[0] = t.phase === 'dwell' ? { ...cur, trip: head.trip, arr: head.arr, dep: head.dep } : { ...head, berth: cur.berth };
+    tasks[0] = t.phase === 'dwell' ? { ...cur, trip: head.trip, stopIndex: head.stopIndex, arr: head.arr, dep: head.dep } : { ...head, berth: cur.berth };
     return tasks;
   };
   const serviceStation = (t: Train) => {
@@ -2152,90 +2361,7 @@ function skipMissedCycle(sim: Sim, tr: Train, current: StopTask) {
   return { ok: true, msg: `取消${cancelled.size}趟未开行车次，按原图接续${sim.plan.trips[(tr.tasks[2] as StopTask).trip].no}；已完成车次及原始晚点记录保留` };
 }
 
-function reachableFutureOrigin(sim: Sim, tr: Train): number {
-  let chain = sim.trainChain(tr);
-  let earliest = sim.t;
-  let stopped = tr.v < .01;
-  let previousStation: number | undefined;
-  const travel = (distance: number) => {
-    const vmax = LINE_INFO.maxSpeedKmh / 3.6;
-    const inverseRates = 1 / PERF.aMax + 1 / PERF.bService;
-    const fullSpeedDistance = .5 * vmax * vmax * inverseRates;
-    return stopped ? (distance >= fullSpeedDistance
-      ? distance / vmax + .5 * vmax * inverseRates
-      : Math.sqrt(2 * distance * inverseRates)) : distance / vmax;
-  };
-  for (let i = 0; i < tr.tasks.length; i++) {
-    const task = tr.tasks[i];
-    if (task.k === 'reverse') {
-      // Travel into the turnback berth before changing ends; afterwards the
-      // leading end is the former rear, not the last platform stop mark.
-      const berths = task.chosen >= 0 ? [task.chosen] : task.berths;
-      const berth = berths.map(id => sim.topo.berths[id]).sort((a,b) => {
-        const at = sim.topo.links[a.link].chainA + (sim.topo.links[a.link].chainB-sim.topo.links[a.link].chainA)*a.offset/sim.topo.links[a.link].len;
-        const bt = sim.topo.links[b.link].chainA + (sim.topo.links[b.link].chainB-sim.topo.links[b.link].chainA)*b.offset/sim.topo.links[b.link].len;
-        return Math.abs(at-chain)-Math.abs(bt-chain);
-      })[0];
-      if (!berth) return -1;
-      const link = sim.topo.links[berth.link];
-      const at = link.chainA + (link.chainB-link.chainA)*berth.offset/link.len;
-      earliest += travel(Math.abs(at-chain)) + task.minTime;
-      chain = at - berth.dir * tr.len * (link.chainB >= link.chainA ? 1 : -1);
-      previousStation = undefined;
-      stopped = true;
-      continue;
-    }
-    if (task.k !== 'stop') continue;
-    const berth = sim.topo.berths[task.berth];
-    const link = sim.topo.links[berth.link];
-    const destination = link.chainA + (link.chainB - link.chainA) * berth.offset / link.len;
-    const distance = Math.abs(destination - chain);
-    const section = previousStation === undefined ? -1 : Math.min(previousStation, task.station);
-    const modelMinimum = previousStation !== undefined && Math.abs(previousStation-task.station) === 1
-      ? (task.station > previousStation ? sim.rt.dn[section] : sim.rt.up[section]) / 1.05 : 0;
-    earliest += Math.max(travel(distance), modelMinimum);
-    stopped = true;
-    chain = destination;
-    if (task.arr === null && task.dep !== null && task.revenue && task.trip >= 0
-      && !sim.plan.trips[task.trip].cancelled && task.dep >= earliest - 120) return i;
-    if (task.doors && !(i === 0 && tr.phase === 'dwell')) earliest += 15;
-    previousStation = task.station;
-  }
-  return -1;
-}
 
-/** Clear passengers at the next normal stop, then position over the existing
- * physical path for a reachable ORIGINAL departure. This cancels unfinished
- * service explicitly; completed trips and all recorded lateness are retained. */
-function positionForOriginalSlot(sim: Sim, tr: Train, target: number, late: string) {
-  const first = tr.tasks[0];
-  if (first?.k !== 'stop' || target <= 0 || tr.block < 0)
-    return {ok:false,msg:'接续定位须保留当前正常站台接近路径'};
-  const origin = tr.tasks[target] as StopTask;
-  const cancelled = new Set<number>();
-  for (const task of tr.tasks.slice(0,target)) if (task.k==='stop' && task.trip>=0
-    && !sim.plan.trips[task.trip].completed) cancelled.add(task.trip);
-  if (!cancelled.size) return {ok:false,msg:'无未完成服务需要取消'};
-  const reason = `故障恢复：${late}，清客空驶定位，接续原图${sim.plan.trips[origin.trip].no}`;
-  const tasks: Task[] = [{...first,trip:-1,arr:null,dep:null,doors:false,revenue:false,minDwell:60,note:'恢复清客'}];
-  for (let i=1;i<target;i++) {
-    const task=tr.tasks[i];
-    if(task.k==='reverse') tasks.push({...task});
-    // Keep section-sized physical goals, including all normal approaches and
-    // turnback entries. A single far-away goal can exceed the authority walk.
-    else if(task.k==='stop')
-      tasks.push({...task,trip:-1,arr:null,dep:null,doors:false,revenue:false,minDwell:10,note:'空驶定位'});
-  }
-  tasks.push(...tr.tasks.slice(target));
-  for(const id of cancelled)cancelTrip(sim.plan.trips[id],reason);
-  if(tr.phase==='dwell'){
-    sim.passengersCleared+=tr.load;sim.metrics.cleared+=tr.load;tr.load=0;
-    tr.dwellUntil=Math.max(tr.dwellUntil,sim.t+60);tr.depReadyAt=tr.dwellUntil;
-  }
-  tr.tasks=tasks;tr.inService=false;tr.tripNo='定位';tr.destText=STATIONS[origin.station].name;
-  sim.planDirty=true;
-  return {ok:true,msg:`${reason}；取消${cancelled.size}趟未完成车次，保留原始记录`};
-}
 
 /**
  * Dispatcher RM authorisation: bound to one signal (default: the next signal
@@ -2370,7 +2496,6 @@ export function cmdRescue(sim: Sim, failed: Train, rescuer: Train) {
     const tail = liveTail(sim, b, idx);
     for (const tid of b.trips.slice(idx + 1)) cancelTrip(sim.plan.trips[tid], why);
     if (rescuer.tripId >= 0) {
-      sim.truncatedTrips.set(rescuer.tripId, nextSt ?? rescuer.lastStation);
       if (!sim.plan.trips[rescuer.tripId].completed) cancelTrip(sim.plan.trips[rescuer.tripId], why);
     }
     const unfinished = rescuer.tripId >= 0 && !sim.plan.trips[rescuer.tripId].completed ? [rescuer.tripId] : [];
@@ -2477,7 +2602,6 @@ function completeCoupling(sim: Sim, tr: Train) {
     const tail = liveTail(sim, b, idx);
     for (const tid of b.trips.slice(idx + 1)) cancelTrip(sim.plan.trips[tid], why);
     if (f.tripId >= 0) {
-      sim.truncatedTrips.set(f.tripId, f.lastStation);
       if (!sim.plan.trips[f.tripId].completed) cancelTrip(sim.plan.trips[f.tripId], why);
     }
     const unfinished = f.tripId >= 0 && !sim.plan.trips[f.tripId].completed ? [f.tripId] : [];

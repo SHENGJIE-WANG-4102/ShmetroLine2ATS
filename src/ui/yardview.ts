@@ -9,6 +9,7 @@ import type { Store } from './store';
 import { STATIONS } from '../data/current';
 import { fmtTime } from './theme';
 import { chooseVehicle, dayNumber } from '../sim/yard';
+import { effectiveEnd } from '../sim/timetable';
 import { vehicleOperationLabel } from './utoControls';
 import type { VehicleRecord } from '../sim/model';
 
@@ -70,7 +71,8 @@ export function openYard(store: Store, root: HTMLElement, depot: number, onAddTr
     if (!next.length) tb.append(h('tr', {}, h('td', { class: 'hint' }, '近期无出段计划')));
     for (const b of next) {
       const tr0 = plan.trips[b.trips[0]];
-      tb.append(h('tr', {}, h('td', { class: 'mono' }, fmtTime((b.start as { time: number }).time, false)), h('td', { class: 'mono' }, `表号 ${b.svc}`), h('td', {}, tr0 ? `→ ${STATIONS[tr0.to].name}` : '')));
+      const end = tr0 && effectiveEnd(tr0);
+      tb.append(h('tr', {}, h('td', { class: 'mono' }, fmtTime((b.start as { time: number }).time, false)), h('td', { class: 'mono' }, `表号 ${b.svc}`), h('td', {}, end !== undefined && STATIONS[end] ? `→ ${STATIONS[end].name}` : '')));
     }
     const tb2 = h('tbody');
     if (!inbound.length) tb2.append(h('tr', {}, h('td', { class: 'hint' }, '无')));

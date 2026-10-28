@@ -7,6 +7,7 @@ import type { Possession } from './model';
 import { EXPOSED, WEATHER_RULES, POSSESSIONS, STATIONS } from '../data/current';
 import { openCall, possReqSpec, possRelSpec } from './radio';
 import { DRY_AFTER, railWet, scatterSlick } from './adhesion';
+import { effectiveStops } from './timetable';
 
 /** per section: 0 = tunnel, 1 = elevated, 2 = at grade */
 export function exposureOf(sim: Pick<Sim,'topo'>): Uint8Array {
@@ -189,8 +190,10 @@ function possessionClear(sim: Sim, p: Possession): boolean {
     if(block.train!==undefined||sim.blockDone.has(block.id)||block.start.kind!=='depot'||block.start.time>=p.to) continue;
     let from=topo.depots[block.start.depot].junctionChain;
     for(const trip of block.trips.map(id=>sim.plan.trips[id]).filter(t=>!t.cancelled&&!t.completed)) {
-      if(trip.stops[0].dep>=p.to) break;
-      for(const stop of trip.stops) {
+      const stops=effectiveStops(trip);
+      if(!stops.length) continue;
+      if(stops[0].dep>=p.to) break;
+      for(const stop of stops) {
         const to=topo.stations[stop.st].chain;
         if(crosses(from,to)) return false;
         from=to;

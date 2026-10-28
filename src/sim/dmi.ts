@@ -8,7 +8,7 @@ import type { DmiData, DmiMsg, Level, Mode, Train, StopTask } from './model';
 import { LINE, STATIONS, fleetEntry } from '../data/current';
 import { stopError } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
-import { serviceEnd } from './timetable';
+import { effectiveStops, serviceEnd } from './timetable';
 import { signalAheadFrom, platformSide, dwellDepartureAt } from './ats';
 import { trainLevel } from './energy';
 
@@ -183,7 +183,8 @@ function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
   // the train is not yet in passenger service (用户确认): both fields show
   // that platform's station until it stands there.
   const firstStop = tr.tasks.find((t): t is StopTask => t.k === 'stop' && t.doors);
-  const origin = firstStop && sim.plan.trips[firstStop.trip]?.stops.find(x => x.stop)?.st;
+  const firstTrip = firstStop && sim.plan.trips[firstStop.trip];
+  const origin = firstTrip && effectiveStops(firstTrip).find(x => x.stop)?.st;
   const pi = sim.topo.links[tr.link].platform;
   const atOrigin = firstStop !== undefined && pi >= 0 && sim.topo.platforms[pi].station === firstStop.station && tr.v < 0.05;
   if (firstStop && !atOrigin && (origin === firstStop.station
@@ -194,7 +195,7 @@ function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
   const stops = tr.tasks.filter((t): t is StopTask => t.k === 'stop' && t.doors);
   const nextWorking = reverse && tr.phase === 'reversing' ? after[0] : undefined;
   const trip = nextWorking ? sim.plan.trips[nextWorking.trip] : undefined;
-  let dest = trip ? name(serviceEnd(sim.plan, trip)) : tr.destStation >= 0 ? name(tr.destStation) : tr.destText || '—';
+  let dest = trip ? name(serviceEnd(sim.plan, trip) ?? -1) : tr.destStation >= 0 ? name(tr.destStation) : tr.destText || '—';
   if (nextWorking && !trip) dest = name(after.at(-1)?.station ?? tr.destStation);
   // A platform-only reversal changes at once to the next working: its next
   // call and real terminus (用户确认).

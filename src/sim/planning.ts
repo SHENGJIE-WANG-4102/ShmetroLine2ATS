@@ -1,6 +1,6 @@
 import type { Sim } from './engine';
 import { type Command, type Plan } from './model';
-import { addExtraTrain, applyOverlay, OVERLAY_PRESETS, validatePlan, fleetPeak, depotMoves, sortDepotMoves, type PlanIssue } from './timetable';
+import { addExtraTrain, applyOverlay, effectiveEnd, effectiveStops, OVERLAY_PRESETS, validatePlan, fleetPeak, depotMoves, sortDepotMoves, type PlanIssue } from './timetable';
 import { validateCommand } from './commands';
 
 export type PlanCommand = Extract<Command, { c: 'overlay' | 'addTrain' }>;
@@ -55,8 +55,9 @@ export function possessionIssues(sim: Sim, plan: Plan): PlanIssue[] {
     }
   };
   for (const trip of plan.trips) if (!trip.cancelled && !trip.completed) {
-    for (let i = 1; i < trip.stops.length; i++) {
-      const a = trip.stops[i-1], b = trip.stops[i];
+    const stops = effectiveStops(trip);
+    for (let i = 1; i < stops.length; i++) {
+      const a = stops[i-1], b = stops[i];
       check(sim.topo.stations[a.st].chain,sim.topo.stations[b.st].chain,a.dep,b.arr,`车次 ${trip.no}`,trip.dir);
     }
   }
@@ -65,7 +66,9 @@ export function possessionIssues(sim: Sim, plan: Plan): PlanIssue[] {
     const block = plan.blocks[move.block], trips = block.trips.map(id=>plan.trips[id]).filter(t=>!t.cancelled);
     const trip = move.delta < 0 ? trips[0] : trips.at(-1);
     if (!trip) continue;
-    const station = sim.topo.stations[move.delta < 0 ? trip.from : trip.to].chain;
+    const stationId = move.delta < 0 ? trip.from : effectiveEnd(trip);
+    if (stationId === undefined || stationId < 0) continue;
+    const station = sim.topo.stations[stationId].chain;
     const yard = sim.topo.depots[move.depot].junctionChain;
     const from = move.delta < 0 ? yard : station, to = move.delta < 0 ? station : yard;
     check(from,to,move.window?.[0]??move.time,move.window?.[1]??move.time,`表号 ${block.svc} 出入段`,to>from?'DN':'UP');

@@ -36,7 +36,9 @@ describe('line 14 dispatcher turnback continuation',()=>{
     const next:Trip={id:currentId+1,no:'0020',dir:'UP',kind:nextDestination===30?'empty':'big',from:currentTo,to:nextDestination,
       stops:timetable.buildStops(sim.planCtx,'UP',currentTo,nextDestination,sim.t+1200,nextDestination!==30,1),revenue:nextDestination!==30,block:blockId};
     sim.plan.trips.push(current,next);
-    sim.plan.blocks.push({id:blockId,svc:'035',start:{kind:'depot',depot:1,time:sim.t-300},end:{kind:'depot',depot:1},trips:[current.id,next.id]});
+    // A continuation ending at the western terminal must return to its
+    // western depot; reaching the eastern depot needs another real turn.
+    sim.plan.blocks.push({id:blockId,svc:'035',start:{kind:'depot',depot:1,time:sim.t-300},end:{kind:'depot',depot:nextDestination===0?0:1},trips:[current.id,next.id]});
     sim.blockDone.add(blockId);
     const tr=ats.newTrain(sim,null,berth.link,berth.offset,berth.dir,[{link:berth.link,dir:berth.dir}],vehicle);
     Object.assign(tr,{block:blockId,svc:'035',tripId:current.id,tripNo:current.no,inService:true,phase:'dwell',phaseSince:sim.t,
@@ -86,6 +88,41 @@ describe('line 14 dispatcher turnback continuation',()=>{
     expect(continuation.map(t=>t.station)).toEqual(adjusted.stops.filter(s=>s.stop).map(s=>s.st));
     expect(continuation.find(t=>t.station===9)?.noBoard).toBe(true);
     expect(continuation.every(t=>t.k==='stop'&&t.revenue&&sim.topo.berths[t.berth].dir===sim.topo.berths[timetable.platformBerth(sim.topo,t.station,'UP')].dir)).toBe(true);
+  });
+
+  it('changes ends at the west terminal before positioning to a depot beyond the other end (D145)',()=>{
+    const {tr}=fixture(0),block=sim.plan.blocks[tr.block];
+    // The adjusted passenger run terminates west; the east depot is reached
+    // after another change of ends and an eastbound positioning run.
+    block.end={kind:'depot',depot:1};
+    const result=sim.command({c:'turnback',train:tr.id,station:25});
+    expect(result.ok,result.msg).toBe(true);
+    const adjusted=sim.plan.trips.at(-1)!;
+    const arrival=tr.tasks.findIndex(t=>t.k==='stop'&&t.trip===adjusted.id&&t.station===adjusted.to);
+    expect(tr.tasks.findIndex((t,i)=>i>arrival&&t.k==='reverse')).toBeGreaterThan(arrival);
+    expect(tr.tasks.at(-1)).toMatchObject({k:'depot',depot:1});
+  });
+
+  it('preserves normal berth alternatives at a later planned turn',()=>{
+    const {tr}=fixture(0),block=sim.plan.blocks[tr.block];
+    const empty:Trip={id:sim.plan.trips.length,no:'0098',dir:'DN',kind:'empty',from:0,to:30,
+      stops:timetable.buildStops(sim.planCtx,'DN',0,30,sim.t+8000,false,1),revenue:false,block:block.id};
+    sim.plan.trips.push(empty);block.trips.push(empty.id);block.end={kind:'depot',depot:1};
+    const result=sim.command({c:'turnback',train:tr.id,station:25});
+    expect(result.ok,result.msg).toBe(true);
+    const turns=tr.tasks.filter(t=>t.k==='reverse');
+    const requested=turns.find(t=>t.station===25)!;
+    const later=turns.find(t=>t.station===0)!;
+    expect(requested.berths).toEqual([requested.chosen]);
+    // Compare to the block's ordinary builder, which remains the source of
+    // truth for future choices once the immediate intervention is complete.
+    const adjusted=sim.plan.trips.at(-1)!;
+    const ordinary=timetable.blockTasks(sim.topo,sim.plan,block,block.trips.indexOf(adjusted.id))
+      .find(t=>t.k==='reverse'&&t.station===0);
+    expect(ordinary?.k).toBe('reverse');
+    if(ordinary?.k!=='reverse')throw Error('missing later turn');
+    expect(ordinary.berths.length).toBeGreaterThan(1);
+    expect(later.berths).toEqual(ordinary.berths);
   });
 
   function remainder(direction:'DN'|'UP') {

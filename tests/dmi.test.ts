@@ -73,7 +73,9 @@ describe('Line 2 photographed cab content',()=>{
   // standing at the departure platform: the real terminus
   t.link=s.topo.berths[depBerth].link;t.phase='dwell';t.tbStage='none';
   expect(computeDmi(s,t.id)?.next).toBe(STATIONS[departure.to].dmiName??STATIONS[departure.to].name);
-  expect(computeDmi(s,t.id)?.dest).toBe(STATIONS[serviceEnd(s.plan,departure)].dmiName??STATIONS[serviceEnd(s.plan,departure)].name);
+  const end=serviceEnd(s.plan,departure);
+  expect(end).toBeDefined();
+  expect(computeDmi(s,t.id)?.dest).toBe(STATIONS[end!].dmiName??STATIONS[end!].name);
   // stabled overnight in the tail: turned back there, the same until it stands at the platform
   t.link=s.topo.berths[turn.berths[0]].link;t.phase='run';t.tbStage='none';t.v=0;
   t.tasks=[{k:'stop',station:airport,berth:depBerth,trip:departure.id,arr:null,dep:s.t+3600,doors:true,revenue:true,stabledOut:true},

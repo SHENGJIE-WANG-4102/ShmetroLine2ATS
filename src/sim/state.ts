@@ -35,7 +35,7 @@ export interface Checkpoint {
 
 export const CLONED = [
   'sw', 'sec', 'sig', 'plat', 'zoneState', 'routes', 'routeUnlockedSw', 'berthRes', 'resourceTransit', 'depotStock', 'depotShortLogged', 'blockDone',
-  'faults', 'alarms', 'noRouteLogged', 'truncatedTrips', 'yards', 'vehicles', 'stabledPool', 'calls', 'pendingCalls', 'env', 'possessions',
+  'faults', 'alarms', 'noRouteLogged', 'yards', 'vehicles', 'stabledPool', 'calls', 'pendingCalls', 'env', 'possessions',
   'instructorSchedule', 'instructorOccurred', 'randomSchedule', 'randomFaultVehicles', 'ridership', 'metrics', 'scenario', 'dispatcher', 'integrity', 'bookmarks', 'incidents', 'connections', 'vehicleResets', 'energy',
 ] as const;
 
@@ -64,7 +64,6 @@ export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number
   faults: 'carry',
   alarms: 'carry',
   noRouteLogged: 'daily',
-  truncatedTrips: 'daily',
   yards: 'carry',
   vehicles: 'carry', // VehicleRecord.uto work and daily selection follow the real vehicle; carryWorld shifts its clock.
   stabledPool: 'carry',
@@ -114,6 +113,7 @@ export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number
 function cloneTrain(tr: Train): Train {
   return {
     ...tr,
+    ...(tr.lastCompletedCall ? { lastCompletedCall: { ...tr.lastCompletedCall } } : {}),
     uto: tr.uto && {...tr.uto},
     dmiAcknowledged: tr.dmiAcknowledged?.slice(),
     hist: tr.hist.slice(),
@@ -160,7 +160,7 @@ export function capture(sim: Sim): Checkpoint {
     data,
     trains: sim.trainList.map(cloneTrain),
     // Stop arrays are immutable; cancellation and block assignment live on trip objects.
-    plan: { ...plan, trips: plan.trips.map(t => ({ ...t })), blocks: structuredClone(plan.blocks),
+    plan: { ...plan, trips: plan.trips.map(t => ({ ...t, ...(t.cut ? { cut: { ...t.cut } } : {}) })), blocks: structuredClone(plan.blocks),
       periods: plan.periods.slice(), overlays: plan.overlays.slice() },
     events: sim.events.slice(),
     depLog: sim.depLog.slice(),
@@ -190,7 +190,7 @@ export function restore(sim: Sim, cp: Checkpoint) {
   for (const tr of sim.trainList) sim.trains.set(tr.id, tr);
   indexBodies(sim);
   // plan
-  sim.plan = { ...cp.plan, trips: cp.plan.trips.map(t => ({ ...t })), blocks: structuredClone(cp.plan.blocks),
+  sim.plan = { ...cp.plan, trips: cp.plan.trips.map(t => ({ ...t, ...(t.cut ? { cut: { ...t.cut } } : {}) })), blocks: structuredClone(cp.plan.blocks),
     periods: cp.plan.periods.slice(), overlays: cp.plan.overlays.slice() };
   sim.planDirty = true;
   // logs

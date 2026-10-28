@@ -18,7 +18,7 @@ export function swPos(sim: Sim, sw: number): 'N' | 'R' | null {
   return s.pos;
 }
 
-export interface CmdResult { ok: boolean; msg: string }
+export interface CmdResult { ok: boolean; msg: string; reasonCode?: string }
 
 /** Reclaim the released approach behind a failed route owner before an
  * assigned rescue enters it. Points retain their existing lock/position. */
