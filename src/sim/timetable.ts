@@ -1764,13 +1764,12 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
       return !(start < clear && exitEnd > approach);
     })());
   const entryClear = (depot: number, last: Pick<Trip,'dir'|'to'|'stops'>) => {
-    if (!reuse) return true;
     const [approach, clear] = inboundWindow(topo, depot, last);
+    const firsts = reuse ? reuse.blocks.filter(b => baseLive(b) && b.start.kind === 'depot' && b.start.depot === depot)
+      .map(b => trips[b.trips.find(id=>!trips[id].cancelled)!])
+      : [...startOf.entries()].filter(([,start]) => start.kind === 'depot' && start.depot === depot).map(([id]) => trips[id]);
     const exits = [...exitsPlanned.filter(x => x.depot === depot && depotLeadsConflict(topo, depot, last.dir, x.dir)).map(x => [x.at,x.clear]),
-      ...reuse.blocks.filter(b => baseLive(b) && b.start.kind === 'depot' && b.start.depot === depot)
-        .map(b => trips[b.trips.find(id=>!trips[id].cancelled)!])
-        .filter(first => depotLeadsConflict(topo, depot, last.dir, first.dir))
-        .map(first => outboundWindow(ctx,depot,first))];
+      ...firsts.filter(first => depotLeadsConflict(topo, depot, last.dir, first.dir)).map(first => outboundWindow(ctx,depot,first))];
     return exits.every(([start,end]) => !(start < clear && end > approach));
   };
   const intermediate = (st: number) => st > 0 && st < topo.stations.length - 1;
@@ -2268,7 +2267,8 @@ function circulate(ctx: PlanContext, trips: GenTrip[], terminals: number[], peri
     if (turn && !turnbackAt(topo, trip.to, trip.dir)) return null;
     const earliest = arr + (turn ? minTurn(trip.to) : 45);
     return fitAfter(dir, earliest, t0 => buildStops(ctx, dir, trip.to, entryStation(topo, depot, dir), t0, true, factorAt),
-      path => outerQuiet(path) && (!turn || frontTurnClear(ctx, allForGaps(), trip, path[0].dep, new Set([trip.id]))
+      path => outerQuiet(path) && entryClear(depot,{dir,to:entryStation(topo,depot,dir),stops:path})
+        && (!turn || frontTurnClear(ctx, allForGaps(), trip, path[0].dep, new Set([trip.id]))
         && placeFree(trip.to, arr, path[0].dep, -1) && orderOk(trip.to, arr, path[0].dep, -1)),
       earliest + (turn ? intermediate(trip.to) ? 450 : MAX_LAYOVER : 2400));
   };
@@ -2608,6 +2608,11 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
   const { topo } = ctx;
   const arrival = (trip: Trip) => trip.stops.at(-1)!.arr;
   const retainedHomes = new Map<number, number>();
+  const assignHomeReturn = (trip: GenTrip, depot: number, stops: PlanStop[]) => {
+    const dir: TrackDir = ahead('DN',topo.stations[trip.to].chain,topo.depots[depot].junctionChain) ? 'DN' : 'UP';
+    const move = addTo(trips,dir,'empty',trip.to,entryStation(topo,depot,dir),stops,false);
+    trip.next=move.id; move.prev=trip.id; ends.set(move.id,{kind:'depot',depot});
+  };
   const rules: { depot: number; dir: TrackDir; station: number; berth?: number; after?: number; preserveService?: boolean; service?: { terminal: number; intervalMultiplier: number } }[] = OPERATIONS.depotReturns.map(rule => ({ depot: depotIndex(topo, rule.depot),
     dir: rule.dir, station: STATIONS.findIndex(st => st.id === rule.station),
     service: rule.service && { ...rule.service, terminal: STATIONS.findIndex(st => st.id === rule.service!.terminal) } }));
@@ -2618,15 +2623,37 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
   const coverage = new Map(rules.filter(rule => rule.service).map(rule => [rule.depot,
     services.filter(trip => trip.revenue && trip.dir === rule.dir && trip.to === rule.service!.terminal)
       .map(trip => ({ trip, at: arrival(trip) })).sort((a,b) => a.at - b.at)]));
+  const gapWithout = (requested: { trip: GenTrip; at: number }[], trip: GenTrip, end: number) => {
+    const current = requested.filter(call => call.trip !== trip && call.trip.to === end);
+    const at = arrival(trip), before = current.filter(call => call.at < at).at(-1), after = current.find(call => call.at > at);
+    return before && after ? { before, after, span: requested.filter(call => call.at >= before.at && call.at <= after.at) } : undefined;
+  };
   const needsThrough = (trip: GenTrip, rule: typeof rules[number]) => {
     if (!rule.service || trip.to !== rule.service.terminal || !turnbackAt(topo, trip.to, trip.dir)) return false;
     const requested = coverage.get(rule.depot)!;
-    const current = requested.filter(call => call.trip !== trip && call.trip.to === rule.service!.terminal);
-    const at = arrival(trip), before = current.filter(call => call.at < at).at(-1), after = current.find(call => call.at > at);
-    if (!before || !after) return false;
-    const span = requested.filter(call => call.at >= before.at && call.at <= after.at);
-    const interval = Math.max(...span.slice(1).map((call,i) => call.at - span[i].at));
-    return after.at - before.at > interval * rule.service.intervalMultiplier + .001;
+    const gap = gapWithout(requested,trip,rule.service.terminal);
+    if (!gap) return false;
+    const interval = Math.max(...gap.span.slice(1).map((call,i) => call.at - gap.span[i].at));
+    return gap.after.at - gap.before.at > interval * rule.service.intervalMultiplier + .001;
+  };
+  // Preserve the requested outer peak stream when a direct home would leave
+  // a wider gap than the largest interval in the declared service pattern.
+  const outerCoverage = new Map((['DN','UP'] as const).map(dir => [dir, services.filter(trip => trip.revenue && trip.dir === dir
+    && trip.to === (dir === 'DN' ? topo.stations.length-1 : 0)).map(trip => ({trip,at:arrival(trip)})).sort((a,b) => a.at-b.at)]));
+  const needsOuterCoverage = (trip: GenTrip, rule: typeof rules[number]) => {
+    const end=trip.dir === 'DN' ? topo.stations.length-1 : 0;
+    if (!trip.revenue || trip.to !== end || !ahead(trip.dir,rule.station,end)) return false;
+    const core=trip.dir === 'DN' ? CORE_E : CORE_W;
+    const coreCall=trip.stops.find(stop => stop.st === core);
+    if (!coreCall) return false;
+    const period=periodAt(dayPeriods(ctx.dayType),coreCall.dep), template=TEMPLATES[period.template];
+    if (!template.peak) return false;
+    const full=template.pattern.flatMap((kind,i) => kind==='big' ? [i] : []);
+    if (!full.length) return false;
+    const longest=Math.max(...full.map((i,n) => ((full[(n+1)%full.length]-i+template.pattern.length-1)%template.pattern.length)+1));
+    const gap=gapWithout(outerCoverage.get(trip.dir)!,trip,end);
+    const headway=period.headway ?? template.directionalHeadway?.[trip.dir] ?? template.headway;
+    return !!gap && gap.after.at-gap.before.at > headway*longest + MAX_DIAGRAM_SHIFT_S;
   };
   for (const place of overnightPlaces(topo).filter(place => place.kind === 'origin' || place.kind === 'feeder')) {
     const berth = topo.berths[place.arrivalBerth], link = topo.links[berth.link];
@@ -2681,10 +2708,7 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
         if (excess <= 0) break;
         const stops = fitHomeReturn(trip, rule.depot);
         if (!stops) continue;
-        const dir: TrackDir = ahead('DN', topo.stations[trip.to].chain, topo.depots[rule.depot].junctionChain) ? 'DN' : 'UP';
-        const move = addTo(trips, dir, 'empty', trip.to, entryStation(topo, rule.depot, dir), stops, false);
-        trip.next = move.id; move.prev = trip.id;
-        ends.set(move.id, { kind: 'depot', depot: rule.depot });
+        assignHomeReturn(trip,rule.depot,stops);
         quota[rule.depot]--; excess--;
       }
     }
@@ -2743,7 +2767,16 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
       const left = group.reduce((sum,r) => sum + quota[r.depot],0);
       return target * seen[rule.depot] / counts.get(rule.depot)! - (target-left);
     };
-    const home = eligible.filter(rule => quota[rule.depot] > 0).sort((a, b) => deficit(b) - deficit(a)
+    // When several yards can take this car, keep its core peak service if a
+    // different available home can accept it beyond the core. Yard quotas
+    // and the original evenly distributed preference still break ties.
+    const cutsPeakCore = (rule: typeof rules[number]) => {
+      const boundary = trip.dir === 'DN' ? CORE_E : CORE_W;
+      const call = trip.stops.find(stop => stop.st === boundary);
+      return !!call && ahead(trip.dir, rule.station, boundary)
+        && !!TEMPLATES[periodAt(dayPeriods(ctx.dayType), call.arr).template].peak;
+    };
+    const home = eligible.filter(rule => quota[rule.depot] > 0).sort((a, b) => Number(cutsPeakCore(a)) - Number(cutsPeakCore(b)) || deficit(b) - deficit(a)
       || Math.abs(topo.stations[a.station].chain - topo.stations[trip.to].chain)
         - Math.abs(topo.stations[b.station].chain - topo.stations[trip.to].chain))[0];
     if (!home) continue; // An infeasible daily balance remains a validation error.
@@ -2764,6 +2797,15 @@ function allocateDepotHomes(ctx: PlanContext, trips: GenTrip[], services: GenTri
       ends.set(move.id, { kind: 'stable', station: home.station, berth });
       quota[home.depot]--;
       continue;
+    }
+    if (needsOuterCoverage(trip,home) && home.berth === undefined) {
+      const stops=fitHomeReturn(trip,home.depot);
+      if (stops) {
+        assignHomeReturn(trip,home.depot,stops); quota[home.depot]--; continue;
+      }
+      // Keep the requested service even when no return was fitted here. The
+      // existing sink allocation must handle it and expose any conflict.
+      retainedHomes.set(trip.id,home.depot); quota[home.depot]--; continue;
     }
     quota[home.depot]--;
     if (SIMULATION.timetable.preserveRevenueRoutes || needsThrough(trip, home)) {
@@ -2831,7 +2873,7 @@ function reuseTerminalReturns(ctx: PlanContext, blocks: Block[], trips: GenTrip[
             trips: [...incoming.trips.slice(0, index + 1), ...block.trips.slice(feeder ? 1 : 0)] };
           const proposed = { trips, blocks: blocks.filter(b => b !== block).map(b => b === incoming ? continued : b) } as Plan;
           const berths = dutyTurnBerths(ctx.topo, proposed, continued, arrival, departure);
-          if (!connectionSafe(ctx.topo, ctx.dayType, arrival, departure, berths)) return false;
+          if (!connectionSafe(ctx.topo, ctx.dayType, arrival, departure, berths.length ? berths : undefined)) return false;
           const berth = berths[0];
           const conflicts = berth === undefined ? [] : depotMoves(proposed.blocks, trips, ctx).filter(move => move.block !== incoming.id
             && turnLeadConflict(ctx.topo, move, trips, arrival, departure, berth));

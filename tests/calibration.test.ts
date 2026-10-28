@@ -268,9 +268,16 @@ describe('calibrated plan structure',()=>{
    const firstAirport=s.plan.trips.find(t=>t.dir==='UP'&&t.from===30&&Math.abs(t.stops[0].dep-6*3600)<1)!;
    const openingEnd=Math.max(...s.plan.trips.filter(t=>!t.cancelled&&t.dir==='UP'&&t.kind==='ins'&&t.from===22&&t.to===0&&t.stops[0].dep<7*3600).map(t=>t.stops.at(-1)!.arr));
    const start=dir==='UP'&&peak.template==='weekdayAM'?Math.max(8.75*3600,firstAirport.stops.at(-1)!.arr+2*hw,openingEnd+2*hw):peak.template==='weekdayAM'?8.75*3600:peak.from+OUTER_BAND_MARGIN;
-   const times=all.filter(t=>t>=start&&t<peak.to-OUTER_BAND_MARGIN);
+   const end=peak.to-OUTER_BAND_MARGIN;
+   const times=all.filter(t=>t>=start&&t<end);
    const gaps=times.slice(1).map((t,i)=>t-times[i]);
-   expect(gaps.length).toBeGreaterThan(peak.template === 'weekdayAM' ? 10 : 6);
+   // Outer service runs only on the full-route slots. Its count depends on
+   // the phase of the pattern, so use the minimum whole cycles in the window.
+   const pattern=TEMPLATES[peak.template].pattern;
+   const fullRoutes=pattern.filter(kind=>kind==='big').length;
+   const minimumTrains=Math.floor((end-start)/(hw*pattern.length/fullRoutes));
+   const minimumGaps=Math.max(peak.template==='weekdayAM'?11:0,minimumTrains-1);
+   expect(gaps.length).toBeGreaterThanOrEqual(minimumGaps);
    for(let i=0;i<gaps.length;i++){
     intervals++;
     const where=`${dir} station ${st} at ${(times[i+1]/3600).toFixed(3)}: ${gaps[i]}`;

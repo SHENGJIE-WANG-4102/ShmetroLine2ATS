@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { LINE_INFO } from '../src/data/current';
 import { plannedDwell } from '../src/sim/calibration';
+import { Sim } from '../src/sim/engine';
 import type { Plan, TrackDir, Trip } from '../src/sim/model';
 import { plannedWaiting } from '../src/sim/plannedWaiting';
 import { dwellFactorAt, minTurn, platformBerth, turnbackAt } from '../src/sim/timetable';
@@ -38,6 +39,11 @@ function findTurn(topo: Topology, accepts: (berths: number[]) => boolean) {
 }
 
 describe('pure planned waiting evidence', () => {
+  it.each(['weekday', 'weekend'] as const)('%s allocation only connects duties at safe waiting points', dayType => {
+    const sim = new Sim({ dayType, dateLabel: 'planned waiting allocation', startTime: 14400, seed: 1 });
+    expect(plannedWaiting(sim.planCtx, sim.plan).issues).toEqual([]);
+  });
+
   it('rejects a long connection on actual shared transfer choices', () => {
     const topo = buildTopology(), turn = findTurn(topo, berths => berths.every(b => sharedTransferLink(topo, topo.berths[b].link)));
     const plan = pair(topo, turn.station, turn.dir, minTurn(turn.station) + 600), before = JSON.stringify(plan);
