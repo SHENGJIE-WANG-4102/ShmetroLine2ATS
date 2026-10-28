@@ -4,6 +4,8 @@
 
 A TypeScript/Vite simulation of the Line 2 OCC overview, station interlocking and train operation. The Simplified Chinese interface covers 31 stations from 蟠祥路·国家会计学院 to 浦东1号2号航站楼, with a browser version and a Tauri desktop application.
 
+Line 2 is the default and only released line. Development builds also offer Line 14 (fully automatic UTO operation) and a fictional test line, selected with `?line=14` / `?line=test` in the browser or `ATS_LINE` / `--line` for Node scripts. Line-specific data lives in `src/data/lines/<line>/`; simulation and UI code are shared (D140).
+
 ## Run
 
 ```bash
@@ -28,11 +30,11 @@ powershell -ExecutionPolicy Bypass -File scripts/app-shortcut.ps1
 ## Dispatch and drive
 
 - The overview and station views show trains, routes, signals, switches, occupied sections, platforms and yards. Select an object for its commands; use the train list, actual/planned graph and alarm list to locate it.
-- Weekday/weekend diagrams include through and short workings, depot moves, turnbacks, overnight stock and hot spares. Dispatch actions include holding, skipping, withdrawals, extra trains and recovery, with radio procedures, fault injection, weather, instructor scenarios and scoring.
+- Weekday/weekend diagrams include through and short workings, depot moves, turnbacks, overnight stock and hot spares. A late train at a line end hands its next departure to a hot spare or to the first train ready there, including one that arrived to stable (D148, D156). Dispatch actions include holding, skipping, withdrawals, extra trains and recovery, with radio procedures, fault injection, weather, instructor scenarios and scoring.
 - CBTC is the primary train-control model with TBTC backup. Follow a train for its DMI. DTO/AM run automatically; AM can be taken over for ATO driving, and CM/RM for manual driving.
 - The selected train gets the platform close-up, stopping indication and departure countdown in every mode. DEP and the countdown use the same ATS departure clock; H indicates a hold. See D128 in [design decisions](docs/design-decisions.md).
 - CM displays a yellow recommended-speed marker and actual/recommended/permitted values. The advice uses the same ATO target, section budget, running level, limits and braking calculation; the driver's handle still controls traction. AM/DTO/RM do not show this advice.
-- Manual overruns use the train's recently travelled path. Returns up to 5 m can be driven back; longer returns require dispatch consent. A refused return states the actual reason and offers the existing dispatch procedure. Mode changes after a completed stop clear the obsolete retreat state.
+- Manual overruns use the train's recently travelled path. Returns up to 5 m can be driven back; longer returns require dispatch consent. A refused return states the actual reason and offers the existing dispatch procedure. Mode changes after a completed stop clear the obsolete retreat state. After a completed return, select forward with the reverser to depart.
 - Section regulation uses the full stop-task distance (D126) and the path's static speed profile for ETA (D127). Train protection still uses its safety scan; temporary restrictions, weather, leading trains and authority remain active.
 
 | Control | Action |
@@ -66,11 +68,18 @@ Use [the audio entry guide](scripts/audio/README-field.md) for a new recording a
 
 Timetable evidence follows D125:
 
-1. [Official first/last trains, fixed late services and headways](src/data/firstlast.ts).
+1. [Official first/last trains, fixed late services and headways](src/data/lines/line2/firstlast.ts).
 2. [User field recordings and photographed PIS](docs/field/README.md) for running/dwell times and speed observations. PIS countdowns are predictions, not actual arrivals.
 3. [Gaode captures](reference/line2/timetable-gaode.md), only for train counts per 15 minutes in the accepted columns. Minute readings do not define section timing, dwell or running level.
 
-Topology, gradients, vehicle performance, demand and operating procedures contain documented approximations; they do not constitute an operational railway system. Current random runs still expose depot-related waiting cycles. D128 found no new wait-cycle type in its small comparison batch, which stopped at existing cycles before day two; this is not a claim of a clean full-day safety regression.
+Topology, gradients, vehicle performance, demand and operating procedures contain documented approximations; they do not constitute an operational railway system.
+
+Known open issues (October 2026):
+
+- Duty allocation (greedy circulation and depot homes in `timetable.ts`) and the runtime recovery rules (R1/R3, D148, D156, D157) are local fixes layered on each other. A global rework is planned; the offline attempt D144 did not reach a usable solve and is shelved.
+- Two random runs still fail after heavy day-two delays (D158). In one, an overnight train on the 广兰路 down platform blocks a late through train. In the other, trains are still running at 27:45. The integrity checks are unchanged and these runs are not exempted.
+- Two published first/last times remain out of tolerance: the first westbound train at 静安寺 is 138 s late, and the last train arrives at the airport 86 s late. Fixing them needs a separate run-time calibration (D139, D155).
+- The Gaode comparison has 10 failing bins, accepted after the D148/D149 hot-spare change (D153).
 
 The [bottom-up timing analysis](docs/field/bottom-up-runtime-2026-10.md) has complete door-based candidates for 40/60 directional sections, with stronger evidence for 22. Its margins and dwell rules are proposals only; current timetable parameters remain unchanged. See [modelling decisions](docs/design-decisions.md), [layout](docs/layout-pdf.md), [signalling](docs/signalling-model.md) and [line/vehicle research](reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md).
 
