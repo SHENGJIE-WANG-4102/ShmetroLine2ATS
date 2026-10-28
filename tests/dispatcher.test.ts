@@ -112,14 +112,15 @@ describe('dispatcher commands', () => {
     const ov = sim.command({ c: 'overlay', id: 'ciie', ...preset });
     expect(ov.ok, ov.msg).toBe(true);
     const added = sim.plan.trips.slice(before).filter(t => t.revenue && t.overlay?.startsWith('ciie'));
-    // D79 keeps the base peak until 10:00. Only one candidate pair fits
-    // this opening request; its return lacks a depot slot and is reported.
+    // D79 keeps the base peak until 10:00. The opening request yields two
+    // eastbound sections and, on the D154 base plan, one westbound return;
+    // one eastbound section lacks the notice or a clear route and is reported.
     // An unavailable origin tail may move out to the next rear turnback;
     // compare the requested section, which keeps its published calls.
     const service = added.filter(t => t.dir==='DN'
       ? t.stops.some(s=>s.st===1)&&t.to===22
       : t.from>=22&&t.stops.some(s=>s.st===22)&&t.to===1);
-    expect(service.length).toBe(2);
+    expect(service.length).toBe(3);
     const omitted = service.filter(t => t.cancelled);
     expect(omitted).toHaveLength(1);
     expect(omitted.every(t => t.cancelReason === '加开：通知时间或沿途进路不足，后续班次继续尝试')).toBe(true);

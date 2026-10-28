@@ -529,24 +529,28 @@ function spawnStabled(sim: Sim, b: Block) {
 }
 
 /** A running train keeps its tasks up to the end of trip `last` and then
- * follows its circulation, which an added service extended (延长运用, D47). */
-export function extendTrainTasks(sim: Sim, tr: Train, last: number) {
+ * follows its circulation, which an added service extended (延长运用, D47).
+ * `ending`: the steps after `last` when the circulation now ends there, taken
+ * over from the train that was to stable there (D156). */
+export function extendTrainTasks(sim: Sim, tr: Train, last: number, ending?: Task[]) {
   const { topo, plan } = sim;
   const cut = tr.tasks.findIndex(t => t.k === 'stop' && t.trip === last && t.dep === null);
   const block = plan.blocks[tr.block];
   const next = block.trips.slice(block.trips.indexOf(last) + 1).map(id => plan.trips[id]).find(t => !t.cancelled);
-  if (cut < 0 || !next) return;
+  if (cut < 0 || !next && !ending) return;
   const tasks = tr.tasks.slice(0, cut + 1);
-  const trip = plan.trips[last];
-  const actualTrip = effectiveTrip(trip);
-  if (!actualTrip) return;
-  if (next.dir !== trip.dir) {
-    // keep a turnback the train already had planned (its berth may be reserved)
-    const own = tr.tasks[cut + 1];
-    if (own?.k === 'reverse') tasks.push(own);
-    else addTurnback(topo, actualTrip, tasks);
-  }
-  tasks.push(...blockTasks(topo, plan, block, block.trips.indexOf(next.id)));
+  if (next) {
+    const trip = plan.trips[last];
+    const actualTrip = effectiveTrip(trip);
+    if (!actualTrip) return;
+    if (next.dir !== trip.dir) {
+      // keep a turnback the train already had planned (its berth may be reserved)
+      const own = tr.tasks[cut + 1];
+      if (own?.k === 'reverse') tasks.push(own);
+      else addTurnback(topo, actualTrip, tasks);
+    }
+    tasks.push(...blockTasks(topo, plan, block, block.trips.indexOf(next.id)));
+  } else tasks.push(...ending!);
   const keep = new Set(tasks.flatMap(t => t.k === 'stop' ? [t.berth] : []));
   for (const [berth, train] of sim.berthRes) if (train === tr.id && !keep.has(berth)) sim.berthRes.delete(berth);
   tr.tasks = tasks;

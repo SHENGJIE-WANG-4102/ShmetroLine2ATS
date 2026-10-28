@@ -26,7 +26,7 @@
  * the order trains are ready, and nobody chases the original duty.
  */
 import type { Sim } from './engine';
-import type { Block, Plan, StopTask, Train } from './model';
+import type { Block, Plan, StopTask, TrackDir, Train } from './model';
 import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, effectiveStops, effectiveEnd, type StandbyPlan } from './timetable';
 import { noWorse } from './planning';
 import { extendTrainTasks, remainingStart, setTripFromTasks } from './ats';
@@ -322,32 +322,75 @@ function hotSwap(sim: Sim, tr: Train, tail: number[], minK: number, late: number
   return null;
 }
 
+/** The train on its way into, or standing at, terminal T at the end of its
+ * duty to stable there; it could leave again in direction `dir` after a
+ * turnback. */
+function stablesAt(sim: Sim, r: Train, T: number, dir: TrackDir): boolean {
+  const b = sim.plan.blocks[r.block], arrival = r.tasks[0], trip = sim.plan.trips[r.tripId];
+  if (!b || !trip || b.end.kind !== 'stable' || b.end.station !== T || arrival?.k !== 'stop' || arrival.station !== T
+    || arrival.trip !== r.tripId || arrival.dep !== null || trip.to !== T || trip.dir === dir) return false;
+  return from(sim.plan, b, r.tripId).every(id => id === r.tripId)
+    && r.tasks.slice(1).every(t => t.k === 'stable' || (t.k === 'stop' || t.k === 'reverse') && t.station === T);
+}
+
+/** D156: the train most late (beyond R1's threshold) for its next departure
+ * from first-ready terminal T, where `r` now arrives to stable; R1 for it may
+ * let `r` take that departure (firstReadySwap). */
+export function lateForStabler(sim: Sim, r: Train): Train | null {
+  const T = r.tasks[0]?.k === 'stop' ? r.tasks[0].station : -1;
+  if (!hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady)) return null;
+  let worst: { tr: Train; late: number } | null = null;
+  for (const tr of sim.trainList) {
+    if (tr === r || tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn || tr.relievedBy) continue;
+    const next = sim.plan.trips[dutyTail(sim, tr)[0]];
+    if (!next || next.from !== T || !stablesAt(sim, r, T, next.dir)) continue;
+    const late = predictedLateness(sim, tr);
+    if (late > RELIEF_DELAY && (!worst || late > worst.late)) worst = { tr, late };
+  }
+  return worst?.tr ?? null;
+}
+
 /** D148 first-ready departure at a terminal whose hot standby is out: the
  * train standing there with the next own departure takes the late train's
- * due one, and the late train takes that later one. */
+ * due one, and the late train takes that later one. A train arriving there
+ * to stable ranks after every such departure: it takes the late train's
+ * duty, and the late train stables in its place (D156). Otherwise both
+ * trains are left for the turnback tracks, and a stabler that took the last
+ * one locks out the late train's turnback. */
 function firstReadySwap(sim: Sim, tr: Train, tail: number[], minK: number, late: number): { ok: boolean; msg: string } | null {
   const keeps = (id: number) => tr.tasks.findIndex(t => t.k === 'stop' && t.trip === id && t.dep === null);
   for (let k = minK; k < tail.length; k++) {
     const D = sim.plan.trips[tail[k]];
-    if (!D.revenue || D.completed || D.cancelled) continue;
+    if (D.completed || D.cancelled) continue;
     const T = D.from, due = D.stops[0].dep;
-    if (!hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady)) return null;
     const lastKept = k ? tail[k - 1] : tr.tripId;
-    if (keeps(lastKept) < 0) return null;
+    // A non-revenue departure (an empty move on to a later duty) passes only
+    // to a stabler; otherwise the next departure is looked at as before.
+    if (!hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady) || keeps(lastKept) < 0) {
+      if (!D.revenue) continue;
+      return null;
+    }
     let best: { r: Train; index: number; trip: number; dep: number } | undefined;
     for (const r of sim.trainList) {
       if (r === tr || r.block < 0 || r.block === tr.block || r.failed || r.manual || r.withdrawn || r.relievedBy || r.coupledLen > 0) continue;
       const index = r.tasks.findIndex(t => t.k === 'stop' && t.station === T && t.arr === null && t.dep !== null && t.trip >= 0);
-      if (index < 0) continue;
+      if (index < 0) {
+        if (!best && stablesAt(sim, r, T, D.dir)) best = { r, index: 0, trip: -1, dep: Infinity };
+        continue;
+      }
+      if (!D.revenue) continue;
       const own = r.tasks[index] as StopTask, trip = sim.plan.trips[own.trip];
       // standing at this terminal now: only its arrival, turnback and departure there
       if (trip.from !== T || trip.dir !== D.dir || own.dep! <= due) continue;
       if (!r.tasks.slice(0, index).every(t => (t.k === 'stop' || t.k === 'reverse') && t.station === T)) continue;
       if (!best || own.dep! < best.dep) best = { r, index, trip: own.trip, dep: own.dep! };
     }
-    if (!best) return null;
+    if (!best) {
+      if (!D.revenue) continue;
+      return null;
+    }
     const { r, index } = best;
-    const own = from(sim.plan, sim.plan.blocks[r.block], best.trip);
+    const own = best.trip < 0 ? [] : from(sim.plan, sim.plan.blocks[r.block], best.trip);
     const swap = (plan: Plan) => {
       const taken = tail.slice(k);
       const bx = plan.blocks[tr.block], br = plan.blocks[r.block];
@@ -364,14 +407,22 @@ function firstReadySwap(sim: Sim, tr: Train, tail: number[], minK: number, late:
     if (!noWorse(sim, plan)) continue;
     swap(sim.plan);
     const br = sim.plan.blocks[r.block];
-    r.tasks = [...r.tasks.slice(0, index), ...blockTasks(sim.topo, sim.plan, br, br.trips.indexOf(tail[k]))];
+    if (best.trip < 0) {
+      // its stabling steps there pass to the late train
+      const ending = r.tasks.slice(1);
+      extendTrainTasks(sim, r, r.tripId);
+      extendTrainTasks(sim, tr, lastKept, ending);
+    } else {
+      r.tasks = [...r.tasks.slice(0, index), ...blockTasks(sim.topo, sim.plan, br, br.trips.indexOf(tail[k]))];
+      extendTrainTasks(sim, tr, lastKept);
+    }
     setTripFromTasks(sim, r);
-    extendTrainTasks(sim, tr, lastKept);
     setTripFromTasks(sim, tr);
     sim.planRev++;
     sim.planDirty = true;
     const name = sim.topo.stations[T].name;
-    const msg = `${name}先到先发：列车${r.svc}（${r.vehicle}）接${D.no}；列车${tr.svc}（${tr.vehicle}）预计晚点${Math.round(late / 60)}分钟，改接${sim.plan.trips[best.trip].no}`;
+    const then = best.trip < 0 ? `到达后在${name}存车` : `改接${sim.plan.trips[best.trip].no}`;
+    const msg = `${name}先到先发：列车${r.svc}（${r.vehicle}）接${D.no}；列车${tr.svc}（${tr.vehicle}）预计晚点${Math.round(late / 60)}分钟，${then}`;
     sim.log('C', '运营', `终点站换车：${msg}`, { key: `firstready-${r.id}-${D.id}` });
     return { ok: true, msg };
   }
