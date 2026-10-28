@@ -275,6 +275,12 @@ describe('driver controls and physical enable',()=>{
   expect(t.phase).toBe('run');expect(s.command({c:'manual',train:t.id,mode:'CM'}).ok).toBe(true);
   s.drive(t.id,4);for(let n=0;n<30;n++)s.step();expect(t.v).toBeGreaterThan(0);
  });
+ it('after a completed return the reverser left in reverse is the stated reason, not the dispatcher',()=>{
+  const {s,t}=driveOverrun();
+  expect(reverseToMark(s,t)).toBeGreaterThanOrEqual(-1);
+  expect(t.phase).toBe('dwell');expect(t.retreat).toBeUndefined();expect(t.reverser).toBe(-1);
+  expect(reversePermission(s,t)).toMatchObject({ok:false,detail:'换向器在后位',code:'MANUAL'});
+ });
  it.each(['DTO','AM'] as const)('%s → CM and CM → automatic → CM can depart before/after door completion',mode=>{
   for(const locked of [false,true]) {
    const {s,t,side,b}=fixture();t.mode=mode;t.manual=false;t.doorsAwait=false;t.dwellUntil=s.t+10;

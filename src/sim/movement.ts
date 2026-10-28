@@ -724,7 +724,10 @@ export function retreatRouteBlocker(sim: Sim, rid: number, self = -1, occupied =
 /** Full swept footprint on the train's actual recent path, never a new route.
  * Check the whole return before permitting traction; repeat while reversing. */
 export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -stopError(sim, tr))): { ok: boolean; detail: string; train: number; code: HaltCode } {
-  if (!tr.retreat?.authorised)
+  // reverser left in reverse after the return (or never asked for one): the
+  // driver only has to select forward, nobody is waiting for the dispatcher
+  if (!tr.retreat) return { ok: false, detail: '换向器在后位', train: -1, code: 'MANUAL' };
+  if (!tr.retreat.authorised)
     return { ok: false, detail: '等待调度同意退行', train: -1, code: 'DISPATCHER' };
   if (tr.tasks[0]?.k !== 'stop') return { ok: false, detail: '退行缺少停车对标任务', train: -1, code: 'ROUTE_CONFLICT' };
   if (!Number.isFinite(distance)) return { ok: false, detail: '退行停车点不在本车已走路径内', train: -1, code: 'ROUTE_CONFLICT' };
@@ -1089,6 +1092,7 @@ export function manualTractionHold(sim: Sim, tr: Train): string {
   if (tr.doorsOpen || tr.doorSide) return '等待车门关闭';
   if (sim.t < (tr.doorLockedAt ?? 0)) return '等待车门锁闭';
   if (tr.reverser === 0) return '换向器在零位';
+  if (tr.reverser === -1 && !tr.retreat) return '换向器在后位';
   if (tr.retreat) {
     const permit = reversePermission(sim, tr);
     return permit.ok ? '过标停车，换向器打后退行对标' : permit.detail;

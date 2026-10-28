@@ -202,12 +202,16 @@ export class SidePanel {
     // a selected platform hears its own station
     const heardStation = sel?.kind === 'station' ? sel.id : sel?.kind === 'platform' ? this.store.topo.platforms[sel.id]?.station ?? null : null;
     const platformFrame = stationFrame(snap, heardStation, this.store.topo);
+    // On board, the platform the train stands at: once a manual train's doors
+    // have closed its stop is done and nextStation already names the next one,
+    // but reopening and closing again at this platform still sounds.
+    const standing = heard && this.store.topo.platforms[this.store.topo.links[heard.link]?.platform ?? -1]?.station;
     this.audio.setStationAudio(platformFrame);
     this.audio.setOnboardAudio(onboardFrame(snap, heard ?? null, this.store.topo, this.store.plan));
     this.audio.setDoorAudio({ t: snap.t, rate: snap.speed, paused: snap.paused,
       perspective: heard ? 'onboard' : 'platform', station: heardStation,
       selectionKey: heard ? `train|${heard.id}` : heardStation === null ? '' : `station|${heardStation}`,
-      trains: heard ? [audioTrain(heard, heard.nextStation, this.store.topo)] : platformFrame.trains.filter(tr => tr.atStation) });
+      trains: heard ? [audioTrain(heard, standing ?? heard.nextStation, this.store.topo)] : platformFrame.trains.filter(tr => tr.atStation) });
     const key = calls.map((c) => `${c.id}:${c.state}:${Math.ceil((c.deadline - snap.t) / 5)}`).join(',') + snap.autoRadio;
     if (key === this.callsKey) return;
     this.callsKey = key;
