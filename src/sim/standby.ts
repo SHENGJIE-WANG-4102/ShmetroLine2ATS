@@ -113,7 +113,11 @@ function remainingCalls(trip: Plan['trips'][number], current?: Train): number | 
   const last = current.lastCompletedCall?.trip === trip.id ? current.lastCompletedCall.stopIndex : undefined;
   const next = remainingStart(trip, current);
   const pending = current.tasks.find(t => t.k === 'stop' && t.trip === trip.id);
-  if (last === undefined && next === undefined && !(pending?.k === 'stop' && pending.standby)) return;
+  const standing = pending?.k === 'stop' && !!pending.standby;
+  if (last === undefined && next === undefined && !standing) return;
+  // A spare standing for this trip has not left its origin (a storage track
+  // is passed, not a stop task): nothing of it has been served.
+  if ((last ?? -1) < 0 && standing) return 0;
   return Math.max((last ?? -1) + 1, next ?? 0);
 }
 
