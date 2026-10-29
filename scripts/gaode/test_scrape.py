@@ -1,5 +1,6 @@
 """离线解析、校验和翻页测试；不连接手机，不使用真实位置 XML。"""
 import contextlib
+import json
 from datetime import datetime, timezone, timedelta
 import io
 from pathlib import Path
@@ -41,6 +42,21 @@ class FakeDevice:
 
 
 class ScrapeTest(unittest.TestCase):
+    def test_selected_line_uses_its_official_data(self):
+        rows = [dict(station=name, firstE="05:30", firstW="06:30", lastE="22:30", lastW="23:30", lastG="")
+                for name in ("甲", "乙", "丙")]
+        response = type("Result", (), {"stdout": json.dumps({"name": "14号线", "firstLast": rows})})()
+        with patch.multiple(scrape, LINE_ID="2", LINE_TITLE="地铁2号线", LINE_ROWS=None,
+                            ENDS=scrape.ENDS, OUT=scrape.OUT, PRIORITY=scrape.PRIORITY), \
+             patch.object(scrape.shutil, "which", return_value="npx"), \
+             patch.object(scrape.subprocess, "run", return_value=response) as run:
+            scrape.configure_line("14")
+            self.assertEqual(scrape.ENDS, {"UP": "甲", "DN": "丙"})
+            self.assertEqual(scrape.LINE_TITLE, "地铁14号线")
+            self.assertEqual(scrape.validate("乙", "DN", ["05:30", "22:30"]), ([], []))
+            self.assertEqual(run.call_args.kwargs["env"]["ATS_LINE"], "14")
+            self.assertEqual(scrape.OUT, scrape.ROOT / "reference/line14/timetable-gaode")
+
     def test_only_arrivals_not_group_or_official_times(self):
         root = screen(["05:00-06:00", "首05:55 末23:49", "05:55到站", "05:55到站", "00:05到站"])
         self.assertEqual(scrape.arrivals(root), {"05:55", "24:05"})
@@ -165,6 +181,55 @@ class ScrapeTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             path = scrape.capture(device, "北新泾", "UP", "weekday")
             self.assertEqual(scrape.read_table(path)[3], ["05:55", "06:05"])
+
+    def test_offscreen_zero_bounds_tail_is_not_treated_as_top(self):
+        edge = screen(["21:00-22:00", "21:57到站", "22:00-23:00"])
+        next(n for n in edge.iter("node") if n.get("text") == "22:00-23:00").set("bounds", "[0,0][0,0]")
+        opened = screen(["21:00-22:00", "21:57到站", "22:00-23:00", "22:00到站", "22:59到站"])
+
+        class EdgeDevice(FakeDevice):
+            def swipe(self, node, **kwargs):
+                self.asserted_reverse = kwargs.get("reverse")
+                super().swipe(node, **kwargs)
+
+        device = EdgeDevice([edge, opened])
+        with patch.object(scrape.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            groups, _ = scrape.expand_groups(device, "北新泾", "UP", 20)
+        self.assertFalse(device.asserted_reverse)
+        self.assertEqual(groups, {"21:00-22:00", "22:00-23:00"})
+
+    def test_offscreen_zero_bounds_head_moves_back(self):
+        edge = screen(["21:00-22:00", "22:00-23:00", "22:00到站"])
+        next(n for n in edge.iter("node") if n.get("text") == "21:00-22:00").set("bounds", "[0,0][0,0]")
+        opened = screen(["21:00-22:00", "21:57到站", "22:00-23:00", "22:00到站"])
+
+        class EdgeDevice(FakeDevice):
+            def swipe(self, node, **kwargs):
+                if self.index == 0:
+                    self.asserted_reverse = kwargs.get("reverse")
+                super().swipe(node, **kwargs)
+
+        device = EdgeDevice([edge, opened])
+        with patch.object(scrape.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            scrape.expand_groups(device, "北新泾", "UP", 20)
+        self.assertTrue(device.asserted_reverse)
+
+    def test_zero_bounds_final_header_uses_visible_row(self):
+        edge = screen(["21:00-22:00", "21:57到站"])
+        scroll = next(n for n in edge.iter("node") if n.get("scrollable") == "true")
+        row = ET.SubElement(scroll, "node", clickable="true", bounds="[0,1970][1000,2000]")
+        ET.SubElement(row, "node", text="22:00-23:00", bounds="[0,0][0,0]")
+        opened = screen(["21:00-22:00", "21:57到站", "22:00-23:00", "22:00到站"])
+
+        class EdgeDevice(FakeDevice):
+            def tap(self, node):
+                self.tapped = node
+                super().tap(node)
+
+        device = EdgeDevice([edge, opened])
+        with patch.object(scrape.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+            scrape.expand_groups(device, "北新泾", "UP", 20)
+        self.assertIs(device.tapped, row)
 
     def test_tail_header_opens_without_spare_space_below(self):
         initial = screen(["上车站：北新泾", "05:00-06:00"])

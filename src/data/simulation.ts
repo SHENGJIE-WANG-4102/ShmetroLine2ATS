@@ -1,5 +1,5 @@
 /** Line-owned service tables and instructor fixtures; empty optional tables mean no such service. */
-import type { DayType, TrackDir } from '../sim/model';
+import type { DayType, TrackDir, TripKind } from '../sim/model';
 import type { Template, Period, OverlayPreset } from '../sim/timetable';
 import type { ScenarioDef } from '../sim/scenario';
 import type { SimulationExtras } from './simulationExtras';
@@ -26,7 +26,10 @@ export interface TimetableData {
   } };
   diagnostics?: {
     firstLastLabels?: [string, string, string];
-    gaode?: { directory: string; checks: [string, TrackDir][]; windows: [number, number][]; reference: { stations: string[]; from: number; to: number } };
+    gaode?: { directory: string; checks: [string, TrackDir][]; windows: [number, number][];
+      /** Where the evidence covers only part of the plan, report the excluded kinds explicitly. */
+      excludeKinds?: { station: string; dir: TrackDir; from: number; to: number; kinds: TripKind[] }[];
+      reference?: { stations: string[]; from: number; to: number } };
   };
   /** Common timing reference inside the core; absence retains terminal references. */
   reference?: Partial<Record<TrackDir, string>>;

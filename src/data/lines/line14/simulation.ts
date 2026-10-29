@@ -71,6 +71,16 @@ export const LINE14_SIMULATION: SimulationData = {
   },
   topology: { wrapAfter: 'YY' }, instructor: { previousIds: {}, events: [], scenarios: [] },
   timetable: {
+    diagnostics: {
+      gaode: {
+        directory: 'reference/line14/timetable-gaode',
+        checks: [['嘉怡路', 'UP'], ['嘉怡路', 'DN'], ['云山路', 'UP'], ['云山路', 'DN'], ['黄杨路', 'UP'], ['黄杨路', 'DN']],
+        windows: [[300, 1440]],
+        // 【假设】这一时段云山路 UP 的 18 条均能分别与两端外段对上，
+        // 按大交路比较；分钟配对没有车号，不能证明逐车身份。见高德汇总页。
+        excludeKinds: [{ station: '云山路', dir: 'UP', from: 1035, to: 1185, kinds: ['small'] }],
+      },
+    },
     reference: { DN: 'DSJ', UP: 'DSJ' }, positioningRevenue: false, preserveRevenueRoutes: true,
     templates, dayPeriods, shownPeriods: dayPeriods,
     dwellBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },

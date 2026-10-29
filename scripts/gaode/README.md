@@ -1,6 +1,6 @@
 # 高德到站时刻表采集
 
-依赖 Python 3.10+（仅标准库）、Android SDK Platform Tools 的 `adb`。
+依赖 Python 3.10+（仅标准库）、Node.js / `npx tsx`（读取线路数据）、Android SDK Platform Tools 的 `adb`。
 安装来源：[Android 官方下载页](https://developer.android.com/tools/releases/platform-tools)。
 `adb` 可放 PATH，或用 `--adb 路径` 指定；也识别本仓库忽略目录
 `work/gaode-tools/platform-tools/adb.exe`。
@@ -8,6 +8,12 @@
 手机启用 USB 调试并允许这台电脑，打开高德的地铁 2 号线详情页。脚本只操作高德，
 不会主动打开其他应用。导航坐标来自 UI XML 的 bounds；半屏详情页先拖动标题展开，
 避免站名被底栏遮挡。时刻表方向按每行的「开往」文字复核。
+
+采集器支持 `--line 14` 或环境变量 `ATS_LINE=14`，读取所选线路已有的官方首末班与端点；
+其他线路批量采集时须用 `--station` 指定车站。当前日期仍须与 `--day` 的日型一致。
+14 号线工作日车数对照运行 `$env:ATS_LINE='14'; npx tsx scripts/gaode-compare.ts`；
+加 `--all-trips` 可查看不排除计划小交路的敏感性结果。具体证据、假设和局限见
+`reference/line14/timetable-gaode.md`。
 
 ```powershell
 # 检查连接；多设备时脚本加 --serial 设备序号

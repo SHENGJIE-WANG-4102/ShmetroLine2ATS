@@ -4285,3 +4285,19 @@ D157 后（`61f044c`）重跑 D157 针对的两例，原因已经不同，均未
 用户决定（2026-10-29）：现在收尾合并。现有排图（逐车贪心的 `circulate`、`allocateDepotHomes`）和运行时的换车规则（R1/R3/D148/D156/D157）都是逐处打补丁；这两例留到以后整体重做车底运用和夜间收车时一起解决，不再加新的局部规则。
 
 同一源码上的其余验证：2 号线工作日、双休日 `validate-plan` 0 error（685/474 趟，峰值 79/50 车）；14 号线两日 0 error（工作日原有 1 条蓝天路热备提醒）；首末班与 D154 一致；高德 10 格（D153 用户接受）。压测种子 103、116、134 在 `f309e9d` 上通过，0 完整性违例；D157 只在第二天存车位无车时起作用，这三例未重跑。
+
+
+## D159 14 号线高德工作日到站表和车数对照（2026-10-29）
+
+从已授权手机抓取嘉怡路、云山路、黄杨路双向工作日到站表，分别覆盖西外段、小交路中段、东外段。六表均从线路页独立重入两次、逐分钟一致，`validate` 六表 PASS；首末班与官方均相差 0 分钟。行数依次为嘉怡路 UP/DN 140/142、云山路 UP/DN 171/198、黄杨路 UP/DN 156/170。逐屏 XML 与两遍结果放 `work/gaode-scrape/runs/`，正式表及复核口径见 `reference/line14/timetable-gaode.md`；不将工作日数据冒充双休日。
+
+高德行内端点标签仅标方向，不证明实际交路。云山路 UP 17:15–19:45 的 18 条可在假设两段分别为 6/45 分钟、容差 ±1 分钟时，分别与两侧外段作保序一对一配对；【假设】该窗口主要列出大交路，比较时该列该窗口不计计划 `small`。分钟匹配不证明逐车身份，小交路是否全部未刊载仍不能确定；`--all-trips` 给出不排除的敏感性结果。黄杨路 UP 06 点 18 行、黄杨路 DN 09 点 20 行与官方外段间隔不一致，原样保留并提示复查，不据此改图，相关格的比较也不当作现实开行的认证。
+
+14 号线工作日 05:00–24:00 每 15 分钟、三站双向，按上述口径 |计划−高德|≥2 的格为 40、总绝对差 255；各列嘉怡路 UP/DN 3/2、云山路 UP/DN 5/7、黄杨路 UP/DN 10/13。不排除计划小交路时为 49 格、绝对差 271，新增 9 格均在云山路 UP 晚峰。比较结果只作调查，官方间隔优先。明细和候选配对分别在 `work/gaode-line14-compare.txt`、`work/gaode-line14-compare-all.txt`、`work/gaode-line14-scope-evidence.json`。
+
+采集器通过 `src/data/current.ts` 导出所选线路的名称、端点和首末班，按线路选择输出路径；修复手机把底部小时标题文字返回零坐标时的展开，以可见标题容器点击并保留逐屏重叠与双遍校验。手机没有 SIM 卡、无法开启 USB 调试安全设置，本次用 Android 虚拟触屏临时驱动采集器，仍只操作高德。公共文件：`scripts/gaode/scrape.py`、`scripts/gaode/line-data.ts`、`scripts/gaode/plan-scope.ts`、`scripts/gaode-compare.ts`、`src/data/simulation.ts`；线路数据：`src/data/lines/line14/simulation.ts`；测试：`scripts/gaode/test_scrape.py`、`tests/gaode-plan-scope.test.ts`。没有改运行图、时分、停站或首末班常量。
+
+验证：`python -m unittest discover -s scripts/gaode -p 'test_*.py'` 69 项通过；`tests/gaode-plan-scope.test.ts` 1 项通过；`tests/test-line.test.ts` 3 项通过；`npx tsc --noEmit` 通过；`ATS_LINE=2 npx tsx scripts/gaode-compare.ts` 输出与改前逐字一致。未跑全量测试、soak 或 fuzz。
+
+
+D159 补抓（2026-10-29，用户要求）：真新新村两侧定边路、真光路双向各两次独立重入，逐分钟一致；定边路 UP/DN 143/139 行、真光路 UP/DN 205/149 行，四表首末班均与官方相差 0 分钟，十张工作日表 `validate` 均 PASS。按同终点官方末班差平移下游窗口，真新新村早/晚高峰中段−外段分别为 UP +27/+24、DN +4/+2；蓝天路两侧为 UP +16/0、DN +13/+21。晚高峰两座中段站相隔 40 分钟对齐后，上游到下游的行数 UP 29→49、DN 28→50；外段定边路→嘉怡路 UP 09:30–10:00 按 3 分钟对齐为 9→7。这些差额不自动等于实际小交路，可能涉及途中始终发、时分变化或源表不一致；时差 ±2 分钟敏感性、方向、窗口、逐车候选与 SHA-256 见 `reference/line14/timetable-gaode.md` 和 `work/gaode-line14-boundaries.json`。既有六列计划高德对照输出逐字一致，仍为 40 格；新增四表用于边界研究，不改计划或诊断规则。

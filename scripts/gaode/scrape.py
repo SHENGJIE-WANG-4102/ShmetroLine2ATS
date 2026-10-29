@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""高德 2 号线到站表。依赖 Python >=3.10 标准库、Android SDK adb。
+"""高德到站表。依赖 Python >=3.10 标准库、Android SDK adb。
 
-只在高德内操作；原始 XML 放 work/，不保存截图。先在手机打开 2 号线页面。
+只在高德内操作；原始 XML 放 work/，不保存截图。先在手机打开所选线路页面。
 用法见同目录 README.md。UP=往西，DN=往东，与 src/data/current.ts 一致。
 """
 from __future__ import annotations
@@ -20,12 +20,42 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 WORK = ROOT / "work" / "gaode-scrape"
-OUT = ROOT / "reference" / "timetable-gaode"
+OUT = None
 PACKAGE = "com.autonavi.minimap"
 HOUR = re.compile(r"^(\d{2}):00[-–](\d{2}):00$")
 ARRIVAL = re.compile(r"^(\d{2}:\d{2})\s*到站$")
-ENDS = {"UP": "蟠祥路·国家会计学院", "DN": "浦东1号2号航站楼"}
-PRIORITY = ["北新泾", "虹桥2号航站楼", "唐镇", "张江高科", "世纪公园", "世纪大道", "海天三路"]
+ENDS = {}
+DEFAULT_PRIORITY = ["北新泾", "虹桥2号航站楼", "唐镇", "张江高科", "世纪公园", "世纪大道", "海天三路"]
+PRIORITY = DEFAULT_PRIORITY.copy()
+LINE_ID = "2"
+LINE_TITLE = ""
+LINE_ROWS = None
+
+
+def configure_line(line):
+    """Read the selected line's canonical TypeScript data once per process."""
+    global LINE_ID, LINE_TITLE, LINE_ROWS, ENDS, OUT, PRIORITY
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", line):
+        raise ValueError("非法线路标识")
+    npx = shutil.which("npx")
+    if not npx:
+        raise RuntimeError("找不到 npx，无法读取线路数据")
+    env = dict(os.environ, ATS_LINE=line)
+    result = subprocess.run([npx, "tsx", "scripts/gaode/line-data.ts"], cwd=ROOT,
+                            env=env, capture_output=True, text=True, encoding="utf-8", check=True)
+    data = json.loads(result.stdout)
+    rows = data["firstLast"]
+    if len(rows) < 2:
+        raise ValueError("首末班表不足以确定线路端点")
+    LINE_ID = line
+    LINE_TITLE = "地铁" + data["name"]
+    LINE_ROWS = {r["station"]: tuple(r[k] for k in ("firstE", "firstW", "lastE", "lastW", "lastG")) for r in rows}
+    ENDS = {"UP": rows[0]["station"], "DN": rows[-1]["station"]}
+    OUT = ROOT / (data.get("directory") or f"reference/line{line}/timetable-gaode")
+    PRIORITY = DEFAULT_PRIORITY.copy() if line == "2" else []  # Other lines select evidence stations explicitly.
+
+
+configure_line(os.environ.get("ATS_LINE", "2"))
 
 
 def local_now():
@@ -64,11 +94,9 @@ def arrivals(root):
 
 
 def official_rows():
-    source = (ROOT / "src/data/lines/line2/firstlast.ts").read_text(encoding="utf-8")
-    rows = re.findall(r"\['([^']+)', '([^']*)', '([^']*)', '([^']*)', '([^']*)', '([^']*)'\]", source)
-    if not rows:
-        raise ValueError("读不到 firstlast.ts 表，不允许跳过首末班校验")
-    return {r[0]: r[1:] for r in rows}
+    if LINE_ROWS is None:
+        configure_line(os.environ.get("ATS_LINE", "2"))
+    return LINE_ROWS
 
 
 def validate(station, direction, values):
@@ -99,7 +127,7 @@ def read_table(path):
 
 
 def manual_difference(station, direction, values):
-    if direction != "UP" or station not in ("虹桥2号航站楼", "张江高科"):
+    if LINE_ID != "2" or direction != "UP" or station not in ("虹桥2号航站楼", "张江高科"):
         return []
     source = (ROOT / "reference/line2/timetable-gaode.md").read_text(encoding="utf-8")
     section = re.search(r"^## " + re.escape(station) + r" 往西[^\n]*\n(.*?)(?=^## |\Z)", source, re.M | re.S)
@@ -257,13 +285,14 @@ def report(paths):
 
 def update_summary():
     """只替换带标记的自动汇总区，原手录内容保留供差异复核。"""
-    target = ROOT / "reference/line2/timetable-gaode.md"
-    source = target.read_text(encoding="utf-8")
+    target = ROOT / f"reference/line{LINE_ID}/timetable-gaode.md"
+    source = target.read_text(encoding="utf-8") if target.exists() else f"# {LINE_TITLE}高德到站时刻表\n"
     if not list(OUT.glob("*.txt")):
         raise RuntimeError("没有正式采集文本，保留现有汇总")
     begin, end = "<!-- gaode-scrape:start -->", "<!-- gaode-scrape:end -->"
     rows = [begin, "## 手机自动采集汇总", "",
-            "正式时刻以以下文本为准；本页下方原手录保留用于追溯，有覆盖的站点不再以手录缺口为准。",
+            ("正式时刻以以下文本为准；本页下方原手录保留用于追溯，有覆盖的站点不再以手录缺口为准。"
+             if LINE_ID == "2" else "正式时刻以以下文本为准。"),
             "UP 往西、DN 往东；时刻来自 UI XML，非 OCR。方向终点标签不能用来区分交路。", "",
             "| 车站 | 方向 | 日类型 | 行数 | 首班 | 末班 | 首末班校验 |", "|---|---|---|---:|---|---|---|"]
     tables, differences = [], []
@@ -369,7 +398,7 @@ class Device:
         time.sleep(.3)
 
     def expand_panel(self, root):
-        titles = [n for n in root.iter("node") if n.get("text") == "地铁2号线"]
+        titles = [n for n in root.iter("node") if n.get("text") == LINE_TITLE]
         if titles:
             x1, y1, x2, y2 = bounds(titles[0])
             if y1 > 700:
@@ -595,7 +624,38 @@ def expand_groups(device, station, direction, max_pages):
         partial = [n for n in headers if bounds(n)[3]-bounds(n)[1] < 35 and
                    service_time(n.get("text")[:5])[:2] not in seen_hours]
         if partial:
-            near_top = bounds(partial[0])[1] < bounds(scroll)[1]+20
+            # A clipped final header can have zero text bounds while its own
+            # clickable row is visible at the bottom. Open that row, then
+            # scroll to its contents instead of endlessly trying to scroll past
+            # the collapsed end of the list.
+            node = partial[0]
+            if bounds(node) == [0, 0, 0, 0] and lines[-1] == node.get("text"):
+                parents = {child: parent for parent in scroll.iter() for child in parent}
+                target = node
+                while target in parents and target is not scroll:
+                    target = parents[target]
+                    x1, y1, x2, y2 = bounds(target)
+                    if (target.get("clickable") == "true" and texts(target) == [node.get("text")]
+                            and x2 > x1 and y2-y1 >= 20 and y2 == bounds(scroll)[3]):
+                        device.tap(target)
+                        time.sleep(.5)
+                        device.swipe(scroll)
+                        previous, stationary = None, 0
+                        break
+                else:
+                    target = None
+                if target is not None and target is not scroll:
+                    continue
+            # Some Android UI trees retain offscreen titles with zero bounds.
+            # Infer their side from their order relative to visible table rows.
+            x1, y1, x2, y2 = bounds(partial[0])
+            if x2 > x1 and y2 > y1:
+                near_top = y1 < bounds(scroll)[1]+20
+            else:
+                visible = [lines.index(n.get("text")) for n in scroll.iter("node")
+                           if n.get("text") and (HOUR.fullmatch(n.get("text")) or ARRIVAL.fullmatch(n.get("text")))
+                           and bounds(n)[2] > bounds(n)[0] and bounds(n)[3] > bounds(n)[1]]
+                near_top = bool(visible) and lines.index(partial[0].get("text")) < min(visible)
             device.swipe(scroll, reverse=near_top, fraction=.12)
             continue
         signature = [(n.get("text"), n.get("bounds")) for n in scroll.iter("node") if n.get("text")]
@@ -722,7 +782,7 @@ def select_station(device, station):
         carousels = [n for n in root.iter("node") if n.get("scrollable") == "true" and
                      "Horizontal" in n.get("class", "")]
         if not carousels:
-            raise RuntimeError("找不到 2 号线站点横向列表")
+            raise RuntimeError(f"找不到 {LINE_TITLE}站点横向列表")
         carousel = carousels[-1]
         nodes = [n for n in carousel.iter("node") if n.get("text") == station]
         if nodes:
@@ -768,13 +828,20 @@ def main():
     parser.add_argument("command", choices=["inspect", "capture", "batch", "validate", "summary", "diff"])
     parser.add_argument("--adb")
     parser.add_argument("--serial")
-    parser.add_argument("--station", choices=list(official_rows()))
+    parser.add_argument("--line", default=os.environ.get("ATS_LINE", "2"))
+    parser.add_argument("--station")
     parser.add_argument("--direction", choices=list(ENDS))
     parser.add_argument("--day", choices=["weekday", "weekend"], default="weekday")
     parser.add_argument("--optional", action="store_true")
     parser.add_argument("--resume", action="store_true", help="跳过今天已保存且校验通过的表")
     parser.add_argument("--baseline", type=Path, help="diff 使用的旧文本目录；须在重抓前复制保留")
     args = parser.parse_args()
+    if args.line != LINE_ID:
+        configure_line(args.line)
+    if args.station and args.station not in official_rows():
+        parser.error(f"不属于 {LINE_TITLE} 的车站：{args.station}")
+    if args.command == "batch" and not args.station and not PRIORITY:
+        parser.error("请用 --station 指定采集站")
     if args.command == "diff":
         if not args.baseline:
             parser.error("diff 要求 --baseline 旧文本目录")

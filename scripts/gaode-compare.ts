@@ -4,6 +4,7 @@
  *
  *   npx tsx scripts/gaode-compare.ts                  # check stations, summary
  *   npx tsx scripts/gaode-compare.ts --table 北新泾,淞虹路   # per-bin table
+ *   npx tsx scripts/gaode-compare.ts --all-trips      # sensitivity: no evidence-scope exclusions
  *
  * The check set leaves out the Gaode readings known to disagree with their
  * neighbours (虹桥2号航站楼 UP midday, 北新泾 DN 18–21, the inconsistent eastern cells;
@@ -12,12 +13,14 @@
 import { readFileSync } from 'node:fs';
 import { Sim } from '../src/sim/engine';
 import { SIMULATION, LINE_INFO } from '../src/data/current';
+import { includedInComparison } from './gaode/plan-scope';
 const evidence = SIMULATION.timetable.diagnostics?.gaode;
 if (!evidence) { console.log(`${LINE_INFO.shortName}：没有高德原始数据，跳过对比。`); process.exit(0); }
 
 const BIN = 15;
 const CHECK = evidence.checks;
 const WINDOWS = evidence.windows;
+const SCOPE = process.argv.includes('--all-trips') ? [] : (evidence.excludeKinds ?? []);
 
 const arg = process.argv.indexOf('--table');
 const table = arg > 0 ? process.argv[arg + 1].split(',') : null;
@@ -29,15 +32,20 @@ const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${Stri
 const gaode = (st: string, dir: string) => readFileSync(`${evidence.directory}/${st}-${dir}-weekday.txt`, 'utf8')
   .split(/\r?\n/).filter((l) => /^\d\d:\d\d/.test(l)).map((l) => +l.slice(0, 2) * 60 + +l.slice(3, 5));
 /** minutes of the revenue calls where passengers can board */
-const plan = (st: string, dir: string, arrivals = false) => {
+const plan = (st: string, dir: import('../src/sim/model').TrackDir, arrivals = false) => {
   const i = names.indexOf(st);
   return (baseline??s.plan).trips.filter((t: import('../src/sim/model').Trip) => t.revenue && !t.cancelled && t.dir === dir)
-    .flatMap((t) => t.stops.filter((p, k) => p.st === i && p.stop && !p.noBoard && (arrivals || k < t.stops.length - 1)).map((p) => Math.floor(p.arr / 60)));
+    .flatMap((t) => t.stops.filter((p, k) => p.st === i && p.stop && !p.noBoard && (arrivals || k < t.stops.length - 1) &&
+      includedInComparison(SCOPE, st, dir, t.kind, Math.floor(p.arr / 60))).map((p) => Math.floor(p.arr / 60)));
 };
 const count = (ts: number[], b: number) => ts.filter((t) => t >= b && t < b + BIN).length;
 
+if (process.argv.includes('--all-trips') && evidence.excludeKinds?.length)
+  console.log('全车次敏感性对照：不应用线路数据中的比较范围排除。');
+for (const rule of SCOPE) console.log(`比较范围 ${rule.station} ${rule.dir} ${hm(rule.from)}–${hm(rule.to)}：计划不计 ${rule.kinds.join('/')}；其他时段仍计入`);
+
 if (table) {
-  for (const dir of ['UP', 'DN']) {
+  for (const dir of ['UP', 'DN'] as const) {
     const cols = table.map((n) => ({ n, g: gaode(n, dir), m: plan(n, dir) }));
     console.log(`\n${dir}    ` + cols.map((c) => `${c.n.slice(0, 4).padStart(5)} G/P`).join('  '));
     for (let b = 5 * 60; b < 24 * 60; b += BIN) console.log(`${hm(b)}  ` + cols.map((c) => `${String(count(c.g, b)).padStart(5)}/${String(count(c.m, b)).padEnd(3)}`).join('  '));
@@ -61,7 +69,7 @@ if (table) {
 // Eastern tables are inconsistent with the middle section and are reference
 // only. Do not count their differences as failures or acceptance criteria.
 const EAST = evidence.reference;
-if (!table) {
+if (!table && EAST) {
   console.log('东段仅作参考（整体不可信，不计入不合格或验收；小时格为高德/计划到站数）');
   for (const station of EAST.stations) {
     const g = gaode(station,'DN'), m = plan(station,'DN',true);
