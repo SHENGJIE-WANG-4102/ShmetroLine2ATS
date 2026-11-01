@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { includedInComparison } from '../scripts/gaode/plan-scope';
+import { includedInComparison, rulesForDay } from '../scripts/gaode/plan-scope';
 
 describe('高德比较范围', () => {
+  it('只在指定日型应用采集范围', () => {
+    const rules = [{ days: ['weekday' as const] }, {}];
+    expect(rulesForDay(rules, 'weekday')).toHaveLength(2);
+    expect(rulesForDay(rules, 'weekend')).toEqual([{}]);
+  });
   it('only excludes the specified trip kind at the specified station, direction and time', () => {
     const rules = [{ station: '甲', dir: 'UP' as const, from: 100, to: 200, kinds: ['small' as const] }];
     expect(includedInComparison(rules, '甲', 'UP', 'small', 100)).toBe(false);

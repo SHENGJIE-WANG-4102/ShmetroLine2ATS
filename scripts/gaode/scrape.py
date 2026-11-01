@@ -64,6 +64,11 @@ def local_now():
     return datetime.now(timezone(timedelta(hours=8)))
 
 
+def require_capture_date(expected):
+    if local_now().date() != expected:
+        raise RuntimeError("采集跨过自然日，保留已读取证据，不发布时刻表")
+
+
 def bounds(node):
     values = list(map(int, re.findall(r"\d+", node.get("bounds", ""))))
     if len(values) != 4:
@@ -261,7 +266,7 @@ def report(paths):
         print("  小时班次数 " + " ".join(f"{h}:{counts[h]}" for h in sorted(counts)), flush=True)
         for item in errors + warnings:
             print("  " + item, flush=True)
-        for item in manual_difference(station, direction, values):
+        for item in (manual_difference(station, direction, values) if day == "weekday" else []):
             print("  " + item, flush=True)
         failed |= bool(errors)
         tables.append((station, direction, day, counts))
@@ -300,9 +305,11 @@ def update_summary():
         station, direction, day, values = read_table(path)
         errors, warnings = validate(station, direction, values)
         status = "；".join(errors + warnings) or "一致"
-        rows.append(f"| [{station}](timetable-gaode/{path.name}) | {direction} | {day} | {len(values)} | {values[0]} | {values[-1]} | {status} |")
+        link = Path(os.path.relpath(path, target.parent)).as_posix()
+        rows.append(f"| [{station}]({link}) | {direction} | {day} | {len(values)} | {values[0]} | {values[-1]} | {status} |")
         tables.append((station, direction, day, Counter(v[:2] for v in values)))
-        differences += [f"{station} {direction} {day}：{s}" for s in manual_difference(station, direction, values)]
+        if day == "weekday":
+            differences += [f"{station} {direction} {day}：{s}" for s in manual_difference(station, direction, values)]
     rows += ["", "每小时班次数及站间差异：运行 `python scripts/gaode/scrape.py validate`。",
              "相邻采样站的小时差异可能来自跨小时行车或区间始终发，不能直接当成漏抓或补造车次。", "",
              "**小时差异复查提示**（前后数字对应站名顺序，非漏行判定）：", ""]
@@ -362,6 +369,8 @@ class Device:
             raise RuntimeError(f"USB 调试尚未就绪：{result}")
 
     def dump(self):
+        if getattr(self, "capture_date", None) is not None:
+            require_capture_date(self.capture_date)
         for attempt in range(4):
             try:
                 result = self.run("shell", "uiautomator", "dump", "/sdcard/window-gaode.xml", timeout=20)
@@ -683,6 +692,7 @@ def capture(device, station, direction, day, max_pages=500, publish=True):
         raise RuntimeError("高德此页面未提供日期选择；不能把今天的数据标成另一日类型")
     audit_dir = WORK / "runs" / f"{station}-{direction}-{day}-{now:%Y%m%d-%H%M%S-%f}"
     audit_dir.mkdir(parents=True, exist_ok=True)
+    device.capture_date = now.date()
     device.audit_dir, device.audit_page = audit_dir, 0
     root = rewind(device)
     if f"上车站：{station}" not in texts(root):
@@ -692,6 +702,7 @@ def capture(device, station, direction, day, max_pages=500, publish=True):
     # 这是本次独立读取；另一遍仍须退出页面重新进入，不能拿展开阶段拼接。
     ordered, read_groups, labels, pages = read_expanded(
         device, station, direction, max_pages, reverse=True, rewind_first=False)
+    require_capture_date(now.date())
     if groups != read_groups:
         raise RuntimeError(f"展开遍与独立读取的小时分组不一致：{sorted(groups ^ read_groups)}")
     errors, warnings = validate(station, direction, ordered)
@@ -711,6 +722,7 @@ def capture(device, station, direction, day, max_pages=500, publish=True):
     if errors:
         raise RuntimeError("采集保留在 work/，未覆盖正式文本：" + "; ".join(errors))
     device.audit_dir = None
+    device.capture_date = None
     if publish:
         (WORK / f"{station}-{direction}-{day}.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return publish_capture(data)
@@ -720,11 +732,14 @@ def capture(device, station, direction, day, max_pages=500, publish=True):
 def verified_capture(device, station, direction, day):
     """两次均重新进入；不一致时两遍证据留 work/，正式文件不变。"""
     runs = []
+    capture_date = local_now().date()
     for attempt in (1, 2):
+        require_capture_date(capture_date)
         print(f"{station} {direction}: 从线路页重新进入，第{attempt}/2次", flush=True)
         select_station(device, station)
         select_direction(device, direction)
         runs.append(capture(device, station, direction, day, publish=False))
+        require_capture_date(capture_date)
     a, b = (set(r["values"]) for r in runs)
     if a != b or runs[0]["groups"] != runs[1]["groups"]:
         raise RuntimeError("两次重新进入结果不一致，不覆盖正式文本："

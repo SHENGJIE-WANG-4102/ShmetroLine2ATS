@@ -19,6 +19,7 @@ UP 往西、DN 往东；时刻来自 UI XML，非 OCR。方向终点标签不能
 | [定边路](timetable-gaode/定边路-UP-weekday.txt) | UP | weekday | 143 | 06:27 | 23:27 | 一致 |
 | [真光路](timetable-gaode/真光路-UP-weekday.txt) | UP | weekday | 205 | 06:23 | 23:23 | 一致 |
 | [黄杨路](timetable-gaode/黄杨路-UP-weekday.txt) | UP | weekday | 156 | 05:38 | 22:38 | 一致 |
+| [云山路](timetable-gaode/云山路-UP-weekend.txt) | UP | weekend | 147 | 05:43 | 22:43 | 一致 |
 
 每小时班次数及站间差异：运行 `python scripts/gaode/scrape.py validate`。
 相邻采样站的小时差异可能来自跨小时行车或区间始终发，不能直接当成漏抓或补造车次。

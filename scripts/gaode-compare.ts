@@ -1,35 +1,40 @@
 /**
- * Compare the generated weekday plan with the Gaode station tables
+ * Compare the generated plan with the Gaode station tables
  * (reference/timetable-gaode/), as boarding calls per 15 minutes.
  *
  *   npx tsx scripts/gaode-compare.ts                  # check stations, summary
  *   npx tsx scripts/gaode-compare.ts --table 北新泾,淞虹路   # per-bin table
  *   npx tsx scripts/gaode-compare.ts --all-trips      # sensitivity: no evidence-scope exclusions
+ *   npx tsx scripts/gaode-compare.ts --day weekend    # weekend observations and plan
  *
  * The check set leaves out the Gaode readings known to disagree with their
  * neighbours (虹桥2号航站楼 UP midday, 北新泾 DN 18–21, the inconsistent eastern cells;
  * reference/line2/timetable-gaode.md). A bin fails when |Gaode − plan| ≥ 2.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { Sim } from '../src/sim/engine';
 import { SIMULATION, LINE_INFO } from '../src/data/current';
-import { includedInComparison } from './gaode/plan-scope';
+import { includedInComparison, rulesForDay } from './gaode/plan-scope';
+import { comparisonDay, comparisonTablePath } from './gaode/compare-day';
 const evidence = SIMULATION.timetable.diagnostics?.gaode;
 if (!evidence) { console.log(`${LINE_INFO.shortName}：没有高德原始数据，跳过对比。`); process.exit(0); }
 
+const day = comparisonDay(process.argv);
 const BIN = 15;
 const CHECK = evidence.checks;
 const WINDOWS = evidence.windows;
-const SCOPE = process.argv.includes('--all-trips') ? [] : (evidence.excludeKinds ?? []);
+const dayScope = rulesForDay(evidence.excludeKinds ?? [], day);
+const SCOPE = process.argv.includes('--all-trips') ? [] : dayScope;
 
 const arg = process.argv.indexOf('--table');
 const table = arg > 0 ? process.argv[arg + 1].split(',') : null;
 const baselineAt=process.argv.indexOf('--baseline');
 const baseline=baselineAt>0?JSON.parse(readFileSync(process.argv[baselineAt+1],'utf8')):null;
-const s = new Sim({ dayType: 'weekday', dateLabel: 'gaode-compare', startTime: 4 * 3600, seed: 1 });
+const s = new Sim({ dayType: day, dateLabel: 'gaode-compare', startTime: 4 * 3600, seed: 1 });
 const names = s.topo.stations.map((x) => x.name);
 const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-const gaode = (st: string, dir: string) => readFileSync(`${evidence.directory}/${st}-${dir}-weekday.txt`, 'utf8')
+const gaodePath = (st: string, dir: string) => comparisonTablePath(evidence.directory, st, dir, day);
+const gaode = (st: string, dir: string) => readFileSync(gaodePath(st, dir), 'utf8')
   .split(/\r?\n/).filter((l) => /^\d\d:\d\d/.test(l)).map((l) => +l.slice(0, 2) * 60 + +l.slice(3, 5));
 /** minutes of the revenue calls where passengers can board */
 const plan = (st: string, dir: import('../src/sim/model').TrackDir, arrivals = false) => {
@@ -40,7 +45,8 @@ const plan = (st: string, dir: import('../src/sim/model').TrackDir, arrivals = f
 };
 const count = (ts: number[], b: number) => ts.filter((t) => t >= b && t < b + BIN).length;
 
-if (process.argv.includes('--all-trips') && evidence.excludeKinds?.length)
+if (day === 'weekend') console.log('日型：weekend；使用双休日高德表和双休日计划。');
+if (process.argv.includes('--all-trips') && dayScope.length)
   console.log('全车次敏感性对照：不应用线路数据中的比较范围排除。');
 for (const rule of SCOPE) console.log(`比较范围 ${rule.station} ${rule.dir} ${hm(rule.from)}–${hm(rule.to)}：计划不计 ${rule.kinds.join('/')}；其他时段仍计入`);
 
@@ -70,8 +76,14 @@ if (table) {
 // only. Do not count their differences as failures or acceptance criteria.
 const EAST = evidence.reference;
 if (!table && EAST) {
-  console.log('东段仅作参考（整体不可信，不计入不合格或验收；小时格为高德/计划到站数）');
+  console.log(day === 'weekday'
+    ? '东段仅作参考（整体不可信，不计入不合格或验收；小时格为高德/计划到站数）'
+    : '东段仅作参考（不计入不合格；小时格为高德/计划到站数）');
   for (const station of EAST.stations) {
+    if (day === 'weekend' && !existsSync(gaodePath(station, 'DN'))) {
+      console.log(`参考 ${station} DN: 无双休日采集表，未比较`);
+      continue;
+    }
     const g = gaode(station,'DN'), m = plan(station,'DN',true);
     const hours = Array.from({length:EAST.to-EAST.from},(_,i)=>EAST.from+i);
     console.log(`参考 ${station} DN: ` + hours.map(hour=>{

@@ -4303,6 +4303,16 @@ D157 后（`61f044c`）重跑 D157 针对的两例，原因已经不同，均未
 D159 补抓（2026-10-29，用户要求）：真新新村两侧定边路、真光路双向各两次独立重入，逐分钟一致；定边路 UP/DN 143/139 行、真光路 UP/DN 205/149 行，四表首末班均与官方相差 0 分钟，十张工作日表 `validate` 均 PASS。按同终点官方末班差平移下游窗口，真新新村早/晚高峰中段−外段分别为 UP +27/+24、DN +4/+2；蓝天路两侧为 UP +16/0、DN +13/+21。晚高峰两座中段站相隔 40 分钟对齐后，上游到下游的行数 UP 29→49、DN 28→50；外段定边路→嘉怡路 UP 09:30–10:00 按 3 分钟对齐为 9→7。这些差额不自动等于实际小交路，可能涉及途中始终发、时分变化或源表不一致；时差 ±2 分钟敏感性、方向、窗口、逐车候选与 SHA-256 见 `reference/line14/timetable-gaode.md` 和 `work/gaode-line14-boundaries.json`。既有六列计划高德对照输出逐字一致，仍为 40 格；新增四表用于边界研究，不改计划或诊断规则。
 
 
+## D160 双休日高德到站表（2026-11-01，部分完成）
+
+按用户要求先采 2 号线；北新泾 UP/DN 242/197 行、世纪公园 UP/DN 205/249 行、张江高科 UP/DN 212/230 行，均为周日 UI XML，分别从线路页两次独立重入、逐分钟一致；六表 `validate --day weekend` 全部 PASS，首末班与当前官方表相差 0 分钟。文件为 `reference/timetable-gaode/*-weekend.txt`，抓取时间、原始标签和完整性分别写在文件头。双休日计划对照原五列、06:00–11:00 与 16:00–23:30 的 15 分钟窗口，差绝对值 ≥2 的格为 **20**，总绝对差 **181**；五列不合格格数分别为北新泾 UP 7、世纪公园 UP/DN 3/5、张江高科 UP/DN 2/3。东段无周末参考表，程序明确提示未比较；高德仅作车数参考，不改运行图。明细 `work/gaode-weekend-line2-compare.txt`。
+
+`gaode-compare.ts --day weekend` 使用双休日表和双休日计划；不传 `--day` 的两线工作日输出与改前逐字一致。14 号线原仅凭工作日观察设定的小交路排除规则限定为工作日，不将它套用于双休日。双休日汇总不再错误比较工作日手录；汇总表链接相对于实际表目录计算，修复 2 号线原有汇总路径。任意一遍或两次重入跨自然日时停止，保留原始证据，不发布混日表。
+
+验证：`python -m unittest discover -s scripts/gaode -p 'test_*.py'` 72 项通过；`tests/gaode-plan-scope.test.ts`、`tests/gaode-compare-day.test.ts`、`tests/gaode-compare-weekend.test.ts` 共 4 项通过；`npx tsc --noEmit` 通过；两线工作日对照输出与基线逐字一致。公共文件：`scripts/gaode-compare.ts`、`scripts/gaode/compare-day.ts`、`scripts/gaode/plan-scope.ts`、`scripts/gaode/scrape.py`、`src/data/simulation.ts`；14 号线数据标注 `src/data/lines/line14/simulation.ts`；测试见 `tests/gaode-*` 和 `scripts/gaode/test_scrape.py`。未改运行图、时分、停站和首末班；未运行全量测试、soak、fuzz。
+
+14 号线云山路 UP 双遍一致，147 行（05:43–22:43），`validate --day weekend` PASS，首末班与官方相差 0 分钟；汇总已加该表。云山路 DN 第一遍跨到 11 月 2 日，日期守卫停止并保留 `work/gaode-scrape/runs/云山路-DN-weekend-20261101-235713-504033/`，未发布该表。其余待抓 9 表：云山路 DN、嘉怡路/定边路/真光路/黄杨路 UP 和 DN；因此 14 号线双休日车数对照未形成，须在双休日补齐并逐表双遍核验后再比较。
+
 ## D161 DMI 消息栏只留有依据的字样（2026-11-01）
 
 用户决定：DMI 上自己加的提示清理掉，不知道的不要加。

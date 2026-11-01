@@ -42,6 +42,45 @@ class FakeDevice:
 
 
 class ScrapeTest(unittest.TestCase):
+    def test_capture_crossing_midnight_cannot_be_published(self):
+        before = datetime(2026, 11, 1, 23, 59, tzinfo=timezone(timedelta(hours=8)))
+        after = before + timedelta(minutes=2)
+        with patch.object(scrape, 'local_now', return_value=after):
+            with self.assertRaisesRegex(RuntimeError, '跨过自然日'):
+                scrape.require_capture_date(before.date())
+
+        with patch.object(scrape, 'local_now', side_effect=[before, before, after]), \
+             patch.object(scrape, 'select_station'), patch.object(scrape, 'select_direction'), \
+             patch.object(scrape, 'capture', return_value={}), patch.object(scrape, 'publish_capture') as publish, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, '跨过自然日'):
+                scrape.verified_capture(object(), '北新泾', 'UP', 'weekend')
+            publish.assert_not_called()
+
+    def test_weekend_report_does_not_compare_weekday_manual_notes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / '北新泾-UP-weekend.txt'
+            path.write_text('05:55\n23:49\n', encoding='utf-8')
+            with patch.object(scrape, 'manual_difference', side_effect=AssertionError('工作日手录不可用于双休日')), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(scrape.report([path]))
+
+    def test_weekend_summary_does_not_compare_weekday_manual_notes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            out = root / 'reference/timetable-gaode'
+            out.mkdir(parents=True)
+            target = root / 'reference/line2/timetable-gaode.md'
+            target.parent.mkdir(parents=True)
+            target.write_text('# 汇总\n', encoding='utf-8')
+            (out / '北新泾-UP-weekend.txt').write_text('05:55\n23:49\n', encoding='utf-8')
+            with patch.object(scrape, 'ROOT', root), patch.object(scrape, 'OUT', out), \
+                 patch.object(scrape, 'manual_difference', side_effect=AssertionError('工作日手录不可用于双休日')):
+                scrape.update_summary()
+            summary = target.read_text(encoding='utf-8')
+            self.assertIn('weekend | 2 | 05:55 | 23:49 | 一致', summary)
+            self.assertIn('(../timetable-gaode/北新泾-UP-weekend.txt)', summary)
+
     def test_selected_line_uses_its_official_data(self):
         rows = [dict(station=name, firstE="05:30", firstW="06:30", lastE="22:30", lastW="23:30", lastG="")
                 for name in ("甲", "乙", "丙")]
@@ -254,7 +293,8 @@ class ScrapeTest(unittest.TestCase):
 
     def test_wrong_direction_never_published(self):
         root = screen(["上车站：北新泾", "05:00-06:00", "05:55到站", "开往浦东1号2号航站楼"])
-        with patch.object(scrape, "rewind", return_value=root):
+        now = datetime(2026, 10, 15, 12, tzinfo=timezone(timedelta(hours=8)))
+        with patch.object(scrape, "rewind", return_value=root), patch.object(scrape, "local_now", return_value=now):
             with self.assertRaisesRegex(RuntimeError, "方向不符"):
                 scrape.capture(FakeDevice([root]), "北新泾", "UP", "weekday")
 

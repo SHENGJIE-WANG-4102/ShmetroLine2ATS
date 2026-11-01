@@ -28,7 +28,7 @@ export interface TimetableData {
     firstLastLabels?: [string, string, string];
     gaode?: { directory: string; checks: [string, TrackDir][]; windows: [number, number][];
       /** Where the evidence covers only part of the plan, report the excluded kinds explicitly. */
-      excludeKinds?: { station: string; dir: TrackDir; from: number; to: number; kinds: TripKind[] }[];
+      excludeKinds?: { station: string; dir: TrackDir; from: number; to: number; kinds: TripKind[]; days?: DayType[] }[];
       reference?: { stations: string[]; from: number; to: number } };
   };
   /** Common timing reference inside the core; absence retains terminal references. */
