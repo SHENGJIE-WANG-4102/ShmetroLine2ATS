@@ -20,7 +20,6 @@ import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
 import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/current';
 import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
-import { dmiNote } from './dmi';
 import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRange } from './calibration';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, rootCause, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
@@ -1215,7 +1214,6 @@ export function atoOverrun(sim: Sim, tr: Train, task: StopTask, err: number, ref
   tr.overrun = -err;
   tr.stopUntil = sim.t + 86400;
   tr.stopReason = refusal ? `退行受阻：${refusal}` : '过标停车';
-  if (refusal) dmiNote(sim, tr, `退行受阻：${refusal}，请调度指示`, 'warn');
   const st = STATIONS[task.station].name;
   const m = (-err).toFixed(1);
   sim.log('B', '列车', `列车 ${trainLabel(tr)} ${st} 制动停车过标 ${m} m`, { key: `overrun-${tr.id}`, train: tr.id });
@@ -1293,7 +1291,7 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
   const d = tr.drv;
   if (err > 1.0) {
     // short of the mark: move up (二次对标)
-    if (err < 30 && !d.restop) { d.restop = true; dmiNote(sim, tr, '欠标停车，二次对标', 'warn'); }
+    if (err < 30 && !d.restop) d.restop = true;
     return;
   }
   const rec = (score: number, note: string) => {
@@ -1316,7 +1314,6 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
   if (!tr.retreat) {
     tr.retreat = { distance: -err, authorised: -err <= 5 };
     if (-err > 5) atoOverrun(sim, tr, task, err);
-    else dmiNote(sim, tr, '过标停车，司机退行对标', 'warn');
   }
   if (!tr.overrun && !tr.retreat.reported) {
     const permit = reversePermission(sim, tr);

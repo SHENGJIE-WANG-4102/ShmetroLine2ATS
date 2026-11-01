@@ -11,6 +11,8 @@ export const LINE14_UI: LineUiData = {
   // 横向屏依据浦东大道照片、真如视频（2026-10-25）；歇浦路是立柱屏（STATIONS 里单独标注）。
   // 其余车站未实拍，按横向屏处理【假设】（用户决定，2026-10-25）。
   dmiStyle: 'statusGrid', pisStyle: 'banner', dmiSpeedWarning: 'target',
+  // 告警栏两条字样依据 2025-09-05 驾驶室照片（reference/line14/line14-field-cab-2025-09-05.md）。
+  dmiAlarms: { speedWarning: '速度警告', emergencyBrake: '列车施加紧急制动' },
   // 横向屏线路图上换乘圈在站名条左侧/右侧，按两处实拍逐站记录；浦东南路实拍无换乘圈。
   // 未列出的车站（曹杨路）按交替规则摆放【假设】。
   pisRouteBadges: {

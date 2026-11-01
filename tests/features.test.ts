@@ -552,7 +552,7 @@ describe('DMI logic: movement authority, permitted speed, fleet, message log', (
     expect(dmiTrainNo('02086')).toBe('T2086');
   });
 
-  it('DMI log records link loss, emergency brake and availability; snapshot carries it', () => {
+  it('DMI log keeps only confirmed wording (no link-loss / EB notes on Line 2); snapshot carries it', () => {
     const sim = makeSim('weekday', H);
     const tr = sim.trainList.find((t) => t.inService && t.phase === 'run' && t.v > 5 && sim.trainChain(t) > 9000 && sim.trainChain(t) < 30000)!;
     runFor(sim, 2);
@@ -560,8 +560,8 @@ describe('DMI logic: movement authority, permitted speed, fleet, message log', (
     sim.command({ c: 'fault', kind: 'trainComm', target: tr.id, duration: 3000 });
     runFor(sim, 5, check);
     const msgs = tr.dmiLog.map((m) => m.m);
-    expect(msgs).toContain('连接丢失');
-    expect(msgs.some((m) => m.startsWith('紧急制动'))).toBe(true);
+    expect(msgs).not.toContain('连接丢失');
+    expect(msgs.some((m) => m.startsWith('紧急制动'))).toBe(false);
     expect(msgs).toContain('ATPM模式可用');
     expect(msgs).toContain('定位已确认');
     sim.dmiTrain = tr.id;

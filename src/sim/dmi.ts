@@ -30,10 +30,6 @@ export function availableMode(sim: Sim, tr: Train): { mode: Mode; level: Level }
   return { mode: 'AM', level: 'TBTC' };
 }
 
-/** on-screen wording of the driving mode */
-export function modeWord(m: Mode): string {
-  return m;
-}
 
 export function dmiNote(sim: Sim, tr: Train, m: string, k: DmiMsg['k'] = 'info') {
   tr.dmiLog.push({ t: sim.t, m, k });
@@ -72,26 +68,17 @@ export function dmiTick(sim: Sim) {
       tr.dmiLog.push({ t: next.at, m, k: next.message === 'available' && av.mode === 'RM' ? 'warn' : 'info' });
       if (tr.dmiLog.length > LOG_MAX) tr.dmiLog.shift();
     }
-    const cur = {
-      avail: `${av.mode}-${av.level}`, comm: tr.comm, mode: `${tr.mode}-${tr.level}`, eb: tr.eb, hold: tr.hold,
-      stop: tr.stopUntil > sim.t, failed: tr.failed, over: dmiSpeedWarning(tr),
-    };
+    // Only photographed / user-confirmed wording is logged; other state changes show nowhere in the log.
+    const cur = { avail: `${av.mode}-${av.level}`, eb: tr.eb, over: dmiSpeedWarning(tr) };
     const p = tr.dmiPrev;
     tr.dmiPrev = cur;
     if (!p) continue;
-    if (p.comm && !cur.comm) dmiNote(sim, tr, '连接丢失', 'warn');
-    if (!p.comm && cur.comm) dmiNote(sim, tr, '连接恢复');
     if (p.avail !== cur.avail) {
       dmiNote(sim, tr, availMsg(av), av.mode === 'RM' ? 'warn' : 'info');
     }
-    if (p.mode !== cur.mode) dmiNote(sim, tr, `${modeWord(tr.mode)} ${tr.level}模式`, tr.mode === 'RM' ? 'warn' : 'info');
-    if (!p.eb && cur.eb) dmiNote(sim, tr, `紧急制动 ${tr.ebReason}`, 'alarm');
-    if (p.eb && !cur.eb) dmiNote(sim, tr, '紧急制动缓解');
-    if (!p.over && cur.over) dmiNote(sim, tr, LINE.ui.dmiSpeedWarning === 'target' ? '速度警告' : '超速报警', 'warn');
-    if (!p.hold && cur.hold) dmiNote(sim, tr, '扣车', 'warn');
-    if (p.hold && !cur.hold) dmiNote(sim, tr, '扣车取消');
-    if (!p.stop && cur.stop) dmiNote(sim, tr, `区间停车 ${tr.stopReason}`, 'warn');
-    if (!p.failed && cur.failed) dmiNote(sim, tr, '列车故障', 'alarm');
+    const alarms = LINE.ui.dmiAlarms;
+    if (alarms?.emergencyBrake && !p.eb && cur.eb) dmiNote(sim, tr, alarms.emergencyBrake, 'alarm');
+    if (alarms?.speedWarning && !p.over && cur.over) dmiNote(sim, tr, alarms.speedWarning, 'warn');
   }
 }
 

@@ -147,7 +147,6 @@ describe('driver controls and physical enable',()=>{
   else {const end=s.topo.links[t.link].len;s.linkBodies.get(t.link)!.push({train:999,from:end-1,to:end});}
   updateTrainTasks(s,t);
   const permit=reversePermission(s,t);expect(permit.ok).toBe(false);
-  expect(t.dmiLog.at(-1)?.m).toContain(permit.detail);
   const call=s.calls.find(c=>c.kind==='overrun'&&c.state==='ringing')!;
   expect(call.text).toContain(permit.detail);expect(call.options.map(x=>x.key)).toContain('skip');
   s.command({c:'reverser',train:t.id,position:1});s.drive(t.id,4);updateTrainMotion(s,t,.1);expect(t.v).toBe(0);

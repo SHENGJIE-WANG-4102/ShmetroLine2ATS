@@ -9,6 +9,8 @@ export interface LineUiData {
   /** banner route map: transfer circles left / right of each station's pill, as photographed */
   pisRouteBadges?: Record<string, [string[], string[]]>;
   dmiSpeedWarning?: 'permitted' | 'target';
+  /** DMI log wording seen on this line's real screen; an absent entry logs nothing. */
+  dmiAlarms?: { speedWarning?: string; emergencyBrake?: string };
   tripNumber?: { prefix: string; source: 'duty'; digits: number };
   faultProcedures?: Record<string, string>;
   environmentTitle?: string;

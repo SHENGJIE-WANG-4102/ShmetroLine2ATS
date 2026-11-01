@@ -392,7 +392,7 @@ export interface Train {
 }
 
 export interface DmiMsg { t: number; m: string; k: 'info' | 'warn' | 'alarm' }
-export interface DmiPrev { avail: string; comm: boolean; mode: string; eb: boolean; hold: boolean; stop: boolean; failed: boolean; over: boolean }
+export interface DmiPrev { avail: string; eb: boolean; over: boolean }
 
 /** what the cab DMI needs beyond the train snapshot */
 export interface DmiData {
