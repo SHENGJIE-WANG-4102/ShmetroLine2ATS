@@ -50,11 +50,9 @@ export interface TimetableData {
     core: [string, string]; insertOrigin?: string; overflowWithdrawal?: string; circulate: string[];
     depot: Record<string, string>; capacity: Record<string, number>; maxPresent: Record<string, number>;
   };
-  firstOrigins: { dir: TrackDir; from: string; to: string; dep: number; checkpoint?: { station: string; dep: number }; runAdjustS?: number }[];
+  firstOrigins: { dir: TrackDir; from: string; to: string; dep: number }[];
   openingGuards: { station: string; dir: TrackDir; until: number }[];
   closingDepotMoves: { station: string; dir: TrackDir; depot: string }[];
-  /** Public calibration diagnostic, retained for existing tooling. */
-  firstTrainRunAdjust: Record<string, number>;
 }
 
 export type TrainWindow = { from: string; to: string; fromOffset?: number; toOffset?: number };

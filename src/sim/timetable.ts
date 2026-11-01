@@ -185,10 +185,33 @@ export function overnightPlaces(topo: Topology) {
   });
 }
 
-/** 【假设】图定，非物理规则：official opening propagation is direction-asymmetric.
- * Uniform early level 3 makes the PXL opener several minutes late. Keep
- * normal dwell/level 1, and state the two remaining diagram budgets (D74). */
-export const FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S = SIMULATION.timetable.firstTrainRunAdjust;
+const FIRST_LAST_COLUMNS = [['firstE', 'DN'], ['firstW', 'UP'], ['lastE', 'DN'], ['lastW', 'UP'], ['lastG', 'DN']] as const;
+const officialClock = (s: string) => { const [h, m] = s.split(':').map(Number); return h * 3600 + m * 60; };
+
+/** D162 用户决定: a published first / last train keeps the official departure
+ * minute at every station it is the published train for. A trip is that train
+ * when it leaves the start of an official column at its minute; the column
+ * runs on while its minutes do not decrease (a decrease is another train). */
+export function officialTimingPoints(dir: TrackDir, from: number, to: number, originDep: number): Map<number, number> {
+  const points = new Map<number, number>();
+  const sts = seq(from, to);
+  const row = (st: number) => FIRST_LAST.find(r => r.station === STATIONS[st]?.name);
+  for (const [key, d] of FIRST_LAST_COLUMNS) {
+    if (d !== dir) continue;
+    const own = row(from)?.[key];
+    if (!own || Math.abs(officialClock(own) - originDep) >= 60) continue;
+    const upstream = row(dir === 'DN' ? from - 1 : from + 1)?.[key];
+    if (upstream && officialClock(upstream) <= officialClock(own)) continue;
+    let prev = -Infinity;
+    for (const st of sts) {
+      const v = row(st)?.[key];
+      if (!v || officialClock(v) < prev) break;
+      prev = officialClock(v);
+      points.set(st, prev);
+    }
+  }
+  return points;
+}
 
 /** stations visited from a to b inclusive */
 function seq(a: number, b: number): number[] {
@@ -199,9 +222,15 @@ function seq(a: number, b: number): number[] {
 }
 
 /** dwellFactor: a constant, or the factor in force at each stop's arrival time. */
-export function buildStops(ctx: PlanContext, dir: TrackDir, from: number, to: number, originDep: number, revenue: boolean, dwellFactor: number | ((t: number) => number), stopsAt?: (st: number) => boolean, diagramRunAdjustmentS = 0): PlanStop[] {
+export function buildStops(ctx: PlanContext, dir: TrackDir, from: number, to: number, originDep: number, revenue: boolean, dwellFactor: number | ((t: number) => number), stopsAt?: (st: number) => boolean, timingPoints = true): PlanStop[] {
   const sts = seq(from, to);
   const stops: PlanStop[] = [];
+  const points = revenue && timingPoints ? officialTimingPoints(dir, from, to, originDep) : new Map<number, number>();
+  // run supplement per stop since the last timing point (allowance and the
+  // level slow-down over the level-1 physical run): the only time a late
+  // published train may give back; physical runs and dwells are kept
+  const slack: number[] = [], allowance: number[] = [];
+  let pointAt = 0;
   let t = originDep;
   // pass times already include the platform pass limit (any train, 跨站 or empty)
   for (let k = 0; k < sts.length; k++) {
@@ -219,14 +248,37 @@ export function buildStops(ctx: PlanContext, dir: TrackDir, from: number, to: nu
     let run: number;
     if (prevStops && stopHere) run = dir === 'DN' ? rt.dn[idx] : rt.up[idx];
     else run = pass[idx] + (prevStops ? 10 : 0) + (stopHere ? 12 : 0);
-    if (diagramRunAdjustmentS) {
-      run += diagramRunAdjustmentS;
-      stops[k - 1].diagramRunAdjustmentS = diagramRunAdjustmentS;
-    }
+    const level1 = dir === 'DN' ? ctx.rt.dn[idx] : ctx.rt.up[idx];
+    slack[k] = prevStops && stopHere ? Math.max(0, run - level1 + OPERATIONS.sectionRunAllowanceS) : 0;
+    allowance[k] = prevStops && stopHere ? OPERATIONS.sectionRunAllowanceS : 0;
     const arr = t + run;
     const dw = stopHere && !isLast ? plannedDwell(ctx.dayType, st, dir, arr, typeof dwellFactor === 'function' ? dwellFactor(arr) : dwellFactor) : 0;
     stops.push({ st, arr, dep: arr + dw, stop: stopHere });
     t = arr + dw;
+    const point = points.get(st);
+    if (point === undefined || !stopHere) continue;
+    // late: give back run allowance since the last point, evenly, up to the
+    // published minute; early: wait at the platform for it (等点)
+    const late = (isLast ? arr : t) - point;
+    if (late >= 60) {
+      let total = 0;
+      for (let j = pointAt + 1; j <= k; j++) total += slack[j];
+      const f = total > 0 ? Math.min(1, late / total) : 0;
+      let shift = 0;
+      for (let j = pointAt + 1; j <= k; j++) {
+        const given = slack[j] * f;
+        shift += given;
+        stops[j].arr -= shift;
+        stops[j].dep -= shift;
+        // giving back more than the allowance needs the level-1 profile
+        if (given > allowance[j] + 1e-6) stops[j - 1].runLevel = 1;
+        slack[j] -= given;
+        allowance[j] = Math.max(0, allowance[j] - given);
+      }
+      t = stops[k].dep;
+    }
+    if (!isLast && t < point) { stops[k].dep = point; t = point; }
+    pointAt = k;
   }
   return stops;
 }
@@ -453,7 +505,7 @@ function layoutService(ctx: PlanContext) {
     return [p, Math.ceil(lead / hw) * hw] as const;
   }));
   if (peaks.length) {
-    const first = buildStops(ctx, 'UP', E, W, OPERATIONS.firstEastTerminusDep, true, factorAt).find(s => s.st === CORE_E)!.dep;
+    const first = buildStops(ctx, 'UP', E, W, OPERATIONS.firstEastTerminusDep, true, factorAt, undefined, false).find(s => s.st === CORE_E)!.dep;
     const anchor = peaks[0].from - coreLead.get(peaks[0])!;
     const hw = peakHw(peaks[0]);
     // Keep the official 06:00 origin on the AM core grid, instead of adding
@@ -496,18 +548,19 @@ function layoutService(ctx: PlanContext) {
   // slot, with the demand at its actual stop times. Intermediate holds are
   // never used to achieve phasing.
   const atReference = (dir: TrackDir, from: number, to: number, ref: number, departure: number) => {
+    // slots are placed on unheld run times; a published train then keeps its minutes
     let origin = departure;
-    let stops = buildStops(ctx, dir, from, to, origin, true, factorAt);
+    let stops = buildStops(ctx, dir, from, to, origin, true, factorAt, undefined, false);
     for (let i = 0; i < 8; i++) {
       const error = stops.find(x => x.st === ref)!.dep - departure;
       if (Math.abs(error) < .001) break;
       origin -= error;
-      stops = buildStops(ctx, dir, from, to, origin, true, factorAt);
+      stops = buildStops(ctx, dir, from, to, origin, true, factorAt, undefined, false);
     }
-    return stops;
+    return buildStops(ctx, dir, from, to, stops[0].dep, true, factorAt);
   };
   const firstReference = (dir: TrackDir, from: number, to: number, ref: number, first: number) =>
-    buildStops(ctx, dir, from, to, first, true, factorAt).find(x => x.st === ref)!.dep;
+    buildStops(ctx, dir, from, to, first, true, factorAt, undefined, false).find(x => x.st === ref)!.dep;
   const nextSlot = (t: number, dir: TrackDir) => {
     const p = streamAt(t, dir);
     const candidate = t + headwayAt(p.steady ? t : t + headwayAt(t, dir) / 2, dir);
@@ -631,15 +684,12 @@ function layoutService(ctx: PlanContext) {
   }
 
   // Official origin first trains, shared by both day types. Intermediate
-  // station timing is calibrated separately; no run or dwell time is changed.
+  // stations keep the published minutes through officialTimingPoints (D162).
   // (淞虹路 05:58 westbound and 远东大道 06:24 eastbound are not origins: they
   // are the 龙阳路 and 广兰路 first trains passing.)
   for (const origin of SIMULATION.timetable.firstOrigins) {
     const { dir } = origin, from = stationIndex(origin.from), to = stationIndex(origin.to);
-    const checkpoint = origin.checkpoint;
-    const dep = checkpoint ? Math.max(origin.dep, checkpoint.dep
-      - buildStops(ctx, dir, from, to, origin.dep, true, factorAt).find(stop => stop.st === stationIndex(checkpoint.station))!.dep + origin.dep) : origin.dep;
-    firstService.push(addTrip(dir, 'ins', from, to, buildStops(ctx, dir, from, to, dep, true, factorAt, undefined, origin.runAdjustS ?? 0), true));
+    firstService.push(addTrip(dir, 'ins', from, to, buildStops(ctx, dir, from, to, origin.dep, true, factorAt), true));
   }
 
   {

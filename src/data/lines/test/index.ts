@@ -66,7 +66,7 @@ const simulation: SimulationData = {
     opening: { outerAlternation: 0, defaultStableDeparture: 21600, stockUntil: 36000, redirectFrom: 25200, emptyFeedersFrom: 72000, feederUntil: 93600, stableUntil: 36000, dayStart: 14400 },
     outerBandMargin: 1200, overlays: [],
     terminals: { core: ['T01', 'T06'], circulate: [], depot: { T01: 'TD', T06: 'TD' }, capacity: { T01: 3, T06: 3 }, maxPresent: { T01: 3, T06: 3 } },
-    firstOrigins: [], openingGuards: [], closingDepotMoves: [], firstTrainRunAdjust: {},
+    firstOrigins: [], openingGuards: [], closingDepotMoves: [],
   },
 };
 

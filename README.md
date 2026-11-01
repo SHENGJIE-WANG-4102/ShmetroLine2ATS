@@ -78,8 +78,8 @@ Known open issues (October 2026):
 
 - Duty allocation (greedy circulation and depot homes in `timetable.ts`) and the runtime recovery rules (R1/R3, D148, D156, D157) are local fixes layered on each other. A global rework is planned; the offline attempt D144 did not reach a usable solve and is shelved.
 - Two random runs still fail after heavy day-two delays (D158). In one, an overnight train on the 广兰路 down platform blocks a late through train. In the other, trains are still running at 27:45. The integrity checks are unchanged and these runs are not exempted.
-- Two published first/last times remain out of tolerance: the first westbound train at 静安寺 is 138 s late, and the last train arrives at the airport 86 s late. Fixing them needs a separate run-time calibration (D139, D155).
-- The Gaode comparison has 10 failing bins, accepted after the D148/D149 hot-spare change (D153).
+- First and last trains keep the published minute at every station (D162): 143 of 147 cells fall inside the minute; the other 4 are first-train sections the official minutes leave physically too short, all within two minutes.
+- The Gaode comparison has 9 failing bins (10 were accepted in D153; 9 after D162).
 
 The [bottom-up timing analysis](docs/field/bottom-up-runtime-2026-10.md) has complete door-based candidates for 40/60 directional sections, with stronger evidence for 22. Its margins and dwell rules are proposals only; current timetable parameters remain unchanged. See [modelling decisions](docs/design-decisions.md), [layout](docs/layout-pdf.md), [signalling](docs/signalling-model.md) and [line/vehicle research](reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md).
 

@@ -102,6 +102,6 @@ export const LINE14_SIMULATION: SimulationData = {
       depot: { FB: 'FBD', GQL: 'GQD', ZXX: 'FBD', LTN: 'GQD' },
       capacity: { FB: 3, GQL: 3, ZXX: 2, LTN: 2 }, maxPresent: { FB: 3, GQL: 3, ZXX: 2, LTN: 2 },
     },
-    firstOrigins: [], openingGuards: [], closingDepotMoves: [], firstTrainRunAdjust: {},
+    firstOrigins: [], openingGuards: [], closingDepotMoves: [],
   },
 };

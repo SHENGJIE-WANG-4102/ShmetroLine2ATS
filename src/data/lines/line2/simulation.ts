@@ -160,8 +160,6 @@ const OVERLAY_PRESETS: OverlayPreset[] = [
   { id: 'hongqiao', label: '虹桥枢纽大客流加开', from: H(20), to: H(22, 30), a: 2, b: 22, headway: 720, desc: '虹桥火车站 ↔ 广兰路 区间加开，夜间每12分钟一列（虹桥火车站无折返条件，加开车延至国家会展中心折返）' },
 ];
 
-const FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S = { guanglanEast: 15, longyangWest: -6 };
-
 
 export const SIMULATION: SimulationData = {
   ...SIMULATION_EXTRAS,
@@ -195,13 +193,12 @@ export const SIMULATION: SimulationData = {
       maxPresent: { PXL: 3, PDA: 3, SHR: 2, GLL: 1, GJH: 3, HQZ: 2 },
     },
     firstOrigins: [
-      { dir: 'UP', from: 'LYL', to: 'PXL', dep: H(5, 20), checkpoint: { station: 'KJG', dep: H(5, 24) }, runAdjustS: FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S.longyangWest },
+      { dir: 'UP', from: 'LYL', to: 'PXL', dep: H(5, 20) },
       { dir: 'UP', from: 'GLL', to: 'PXL', dep: H(5, 28) },
-      { dir: 'DN', from: 'GLL', to: 'PDA', dep: H(6), runAdjustS: FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S.guanglanEast },
+      { dir: 'DN', from: 'GLL', to: 'PDA', dep: H(6) },
     ],
     openingGuards: [{ station: 'GLL', dir: 'DN', until: H(6) }],
     closingDepotMoves: [{ station: 'GLL', dir: 'DN', depot: 'CSD' }],
-    firstTrainRunAdjust: FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S,
   },
   instructor: INSTRUCTOR_DATA,
 };
