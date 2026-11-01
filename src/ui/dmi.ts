@@ -325,7 +325,8 @@ export class Dmi {
     c.fillText(Number.isFinite(t.stopDist) && t.stopDist >= 0 ? `${Math.round(t.stopDist)}m` : '--m', 560, 270, 95);
     c.textAlign = 'left';
     const state = eb ? 'eb' : t.a > 0.05 ? 'traction' : t.a < -0.12 && t.v > 0.05 ? 'brake' : 'coast';
-    trainFront(c, 656, 214, state);
+    // 用户实拍（2026-11-02）：车头图标只在列车静止时显示，动车后消失
+    if (t.v < 0.05) trainFront(c, 656, 214, state);
     // Two distinct symbols: train doors always above AA; PSD only on a platform.
     // 用户确认：photograph shows OPEN leaves; closed leaves meet.
     // Train doors are white, PSD yellow in the reference.
