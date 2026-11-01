@@ -820,7 +820,7 @@ describe('paper-based turnback and depot procedures', () => {
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
-    const berths = sim.topo.stations[station].turnbackBerths;
+    const berths = sim.topo.stations[station].rescueBerths;
     expect(berths.every(id => sim.topo.berths[id].kind === 'tail')).toBe(true);
     const physical = sim.topo.berths[berths[physicalIndex]];
     const other = berths[1 - physicalIndex];

@@ -341,7 +341,8 @@ function resolveChoice(sim: Sim, tr: Train, task0: Task): Task {
     const link = sim.topo.links[tr.link];
     const kind = sim.topo.sections[link.section].kind;
     if (kind === 'tail' || kind === 'siding') {
-      const physical = sim.topo.stations[task.station].turnbackBerths.find(id => {
+      const station = sim.topo.stations[task.station];
+      const physical = (tr.coupledLen > 0 ? station.rescueBerths : station.turnbackBerths).find(id => {
         const berth = sim.topo.berths[id];
         return berth.dir === tr.dir && (berth.link === tr.link
           || kind === 'tail' && berth.kind === 'tail' && sim.topo.links[berth.link].track === link.track);
@@ -2458,7 +2459,7 @@ export function rescueApproach(sim: Sim, failed: Train, rescuer: Train): { goal:
   if (station < 0 || sim.topo.sections[sim.topo.links[failed.link].section].kind !== 'tail'
     && !['manual','depart','arrive'].includes(failed.tbStage)) return null;
   const d = rescuer.dir;
-  const goal = sim.topo.stations[station].turnbackBerths.find(id => {
+  const goal = sim.topo.stations[station].rescueBerths.find(id => {
     const b = sim.topo.berths[id];
     return b.dir === d && sim.topo.links[b.link].track === sim.topo.links[failed.link].track;
   });
@@ -2644,7 +2645,7 @@ function completeCoupling(sim: Sim, tr: Train) {
   const tailStation = sim.trainChain(tr) < topo.stations[0].chain && d === 'UP' ? 0
     : sim.trainChain(tr) > topo.stations.at(-1)!.chain && d === 'DN' ? topo.stations.length - 1 : -1;
   if (tailStation >= 0 && next === undefined) {
-    const berths = topo.stations[tailStation].turnbackBerths.filter(id => topo.berths[id].dir === tr.dir && topo.links[topo.berths[id].link].track === topo.links[tr.link].track);
+    const berths = topo.stations[tailStation].rescueBerths.filter(id => topo.berths[id].dir === tr.dir && topo.links[topo.berths[id].link].track === topo.links[tr.link].track);
     if (berths.length) {
       tasks.push({ k: 'reverse', berths, chosen: berths[0], station: tailStation, minTime: 40 });
       const back = d === 'DN' ? 'UP' : 'DN';
@@ -2680,6 +2681,11 @@ function completeCoupling(sim: Sim, tr: Train) {
     if (terminal !== undefined) {
       if (!tasks.some(t => t.k === 'stop' && t.station === terminal) && !passed(terminal)) tasks.push({ k: 'stop', berth: platformBerth(topo, terminal, d), station: terminal, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 10 });
       addTurnback(topo, { id: -1, no: '', dir: d, kind: 'adj', from: terminal, to: terminal, stops: [], revenue: false, block: -1 }, tasks);
+      const reverse = [...tasks].reverse().find(task => task.k === 'reverse' && task.station === terminal);
+      if (reverse?.k === 'reverse') {
+        const berths = topo.stations[terminal].rescueBerths.filter(id => topo.berths[id].dir === tr.dir);
+        if (berths.length) { reverse.berths = berths; reverse.chosen = berths[0]; }
+      }
       const back = d === 'DN' ? 'UP' : 'DN';
       tasks.push({ k: 'stop', berth: platformBerth(topo, terminal, back), station: terminal, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 10 });
       depotTasks(topo, fittingDepot(sim, terminal, back, tr.len), back, tasks);

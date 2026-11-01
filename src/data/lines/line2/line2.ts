@@ -256,7 +256,8 @@ export const LAYOUT = {
     { station: 0, side: 'west', length: 465, scissors: false, turnback: false },
     // 航站楼: scissors right behind the platform, both mains on to buffers.
     // Assumed usable rescue length: two 186 m consists plus stopping margin.
-    { station: 30, side: 'east', length: 450 },
+    // 【假设】D164 视频标定正常折返；450 m 容量仍供连挂救援。
+    { station: 30, side: 'east', length: 450, bufferFromStation: 785, scissorsApproach: 2, scissorsSpacing: 55, scissorsHalfSpan: 10, turnbackDistance: 193 },
   ] as TailDef[],
   /** two middle tracks behind a double Y (蟠祥路, 国家会展中心, 淞虹路, 上海科技馆) */
   // (PXL: 420 m, model value — holds a coupled rescue pair clear of the throat)

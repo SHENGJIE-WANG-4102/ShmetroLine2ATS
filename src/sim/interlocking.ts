@@ -6,6 +6,7 @@ import type { Sim } from './engine';
 import type { ActiveRoute, Train } from './model';
 import { withdrawAuthority, rescueRouteReady, retreatRouteBlocker } from './movement';
 import { checkArsCancellation } from './invariants';
+import { safeWaitingPoint } from './topology';
 
 export const SWITCH_TIME = 5; // s, point machine throw time (approx)
 export const APPROACH_RELEASE = 30; // s, delayed release when approach-locked
@@ -407,9 +408,21 @@ export function updateInterlocking(sim: Sim) {
     const ownSecs = new Set<number>();
     for (const b of owner.body) ownSecs.add(topo.links[b.link].section);
     for (let i = 0; i < r.sections.length; i++) if (ownSecs.has(r.sections[i])) ar.occSeen[i] = true;
-    // owner came to rest with its head in the last section: the route is complete
+    // A turnback may finish at a berth before the end of a longer route to a
+    // buffer. The train must actually reach its chosen berth and begin its
+    // cab change, or finish stabling at a berth on this route; a mere stop
+    // on the route is not completion.
+    const turn = owner.tasks[0];
+    const goals = owner.phase === 'reversing' && turn?.k === 'reverse' ? [turn.chosen]
+      : owner.phase === 'stabled' ? r.berths : [];
+    const atTurnback = goals.some(id => {
+      const goal = topo.berths[id];
+      return goal?.kind === 'tail' && r.berths.includes(id) && goal.link === owner.link && goal.dir === owner.dir
+        && (goal.offset - owner.off) * owner.dir <= 5 && (goal.offset - owner.off) * owner.dir >= -3;
+    }) && safeWaitingPoint(topo, { link: owner.link, off: owner.off, dir: owner.dir, incoming: owner.hist }, owner.len);
+    // owner came to rest at its actual turnback or in the last section: complete
     const lastSec = r.sections[r.sections.length - 1];
-    if (owner.v < 0.05 && topo.links[owner.link].section === lastSec && owner.phase !== 'run'
+    if (owner.v < 0.05 && (atTurnback || topo.links[owner.link].section === lastSec && owner.phase !== 'run')
       && !(owner.failed && owner.rescueBy >= 0)) {
       releaseRoute(sim, ar.route);
       continue;

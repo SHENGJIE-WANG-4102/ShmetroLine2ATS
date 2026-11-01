@@ -235,6 +235,8 @@ export interface TStation {
   platforms: { DN: number; UP: number };
   /** berths a train can use to reverse here (siding/tail, ordered by preference) */
   turnbackBerths: number[];
+  /** Deeper berths for a coupled rescue consist, falling back to ordinary berths. */
+  rescueBerths: number[];
   /** station-front turnback possible (crossover adjacent) */
   frontTurnback: { DN: boolean; UP: boolean };
   /** storage-only tail berths a stabled train leaves straight for the
@@ -278,6 +280,21 @@ function waitingResourceLinks(topo: Topology) {
     }
     const all = new Set(shared);
     for (const berth of topo.berths) if (berth.kind === 'tail' || berth.kind === 'siding') all.add(berth.link);
+    // An independent tail is one physical track even when signals split it
+    // into links. Traverse only connected, same-track tail sections; switches
+    // and shared conversion tracks are never made into parking resources.
+    const queue = topo.berths.filter(b => b.kind === 'tail').map(b => b.link);
+    const visited = new Set<number>();
+    while (queue.length) {
+      const id = queue.pop()!, link = topo.links[id];
+      if (!link || visited.has(id) || topo.sections[link.section]?.kind !== 'tail') continue;
+      visited.add(id);
+      all.add(id);
+      for (const node of [link.a, link.b]) for (const next of topo.nodes[node].links) {
+        const candidate = topo.links[next];
+        if (candidate.track === link.track && topo.sections[candidate.section]?.kind === 'tail') queue.push(next);
+      }
+    }
     waitingResources.set(topo, cached = { shared, all });
   }
   return cached;
@@ -520,17 +537,17 @@ export function buildTopology(): Topology {
   // crossovers (incl. scissors at terminals and junctions)
   interface XoBuild { kind: CrossoverKind; center: number; station: number; sw: TSwitch; dn: SwBuild; up: SwBuild }
   const xos: XoBuild[] = [];
-  const addCrossover = (center: number, kind: CrossoverKind, station: number, swKind: TSwitch['kind'] = 'crossover'): XoBuild => {
+  const addCrossover = (center: number, kind: CrossoverKind, station: number, swKind: TSwitch['kind'] = 'crossover', halfSpan = XO_HALF): XoBuild => {
     const sw = newSwitch(swKind, station);
     const dn: SwBuild = { sw: sw.id };
     const up: SwBuild = { sw: sw.id };
     if (kind === '/') {
       // DN at west end (toe faces west), UP at east end (toe faces east)
-      addSwitchPt('DN', center - XO_HALF, 'west', dn);
-      addSwitchPt('UP', center + XO_HALF, 'east', up);
+      addSwitchPt('DN', center - halfSpan, 'west', dn);
+      addSwitchPt('UP', center + halfSpan, 'east', up);
     } else {
-      addSwitchPt('UP', center - XO_HALF, 'west', up);
-      addSwitchPt('DN', center + XO_HALF, 'east', dn);
+      addSwitchPt('UP', center - halfSpan, 'west', up);
+      addSwitchPt('DN', center + halfSpan, 'east', dn);
     }
     const xo = { kind, center, station, sw, dn, up };
     xos.push(xo);
@@ -581,17 +598,18 @@ export function buildTopology(): Topology {
   }
 
   // terminal tails: scissors (or just the mains) beyond the platform to buffers
-  const tailInfo: { station: number; side: 'west' | 'east'; signalCh: Record<'DN' | 'UP', number>; turnback: boolean }[] = [];
+  const tailInfo: { station: number; side: 'west' | 'east'; signalCh: Record<'DN' | 'UP', number>; turnback: boolean; turnbackDistance?: number }[] = [];
   for (const t of LAYOUT.tails) {
     const c = chains[t.station];
     const s = t.side === 'west' ? -1 : 1;
     let f: (typeof features)[number] | undefined;
     if (t.scissors ?? true) {
-      const c1 = c + s * (PLAT_HALF + SW_HALF + XO_HALF + 30); // centre of first crossover
-      const c2 = c1 + s * (2 * XO_HALF + 2 * SW_HALF + 10 + 30);
+      const halfSpan = t.scissorsHalfSpan ?? XO_HALF;
+      const c1 = c + s * (PLAT_HALF + SW_HALF + halfSpan + (t.scissorsApproach ?? 30));
+      const c2 = c1 + s * (t.scissorsSpacing ?? (2 * XO_HALF + 2 * SW_HALF + 10 + 30));
       beginFeature(t.station);
-      addCrossover(c1, '/', t.station);
-      addCrossover(c2, '\\', t.station);
+      addCrossover(c1, '/', t.station, 'crossover', halfSpan);
+      addCrossover(c2, '\\', t.station, 'crossover', halfSpan);
       f = features[features.length - 1];
     } else {
       // the mains run on past the station's own switches (a double Y)
@@ -600,10 +618,10 @@ export function buildTopology(): Topology {
     const ext = f ? { DN: featureExtent(f, 'DN')!, UP: featureExtent(f, 'UP')! } : null;
     const plat = { from: c - PLAT_HALF, to: c + PLAT_HALF };
     const signalCh = s < 0 ? { DN: (ext?.DN ?? plat).from, UP: (ext?.UP ?? plat).from } : { DN: (ext?.DN ?? plat).to, UP: (ext?.UP ?? plat).to };
-    tailInfo.push({ station: t.station, side: t.side, signalCh, turnback: t.turnback ?? true });
+    tailInfo.push({ station: t.station, side: t.side, signalCh, turnback: t.turnback ?? true, turnbackDistance: t.turnbackDistance });
     const outer = s < 0 ? Math.min(signalCh.DN, signalCh.UP) : Math.max(signalCh.DN, signalCh.UP);
     // move buffer to the requested tail length
-    const buf = outer + s * t.length;
+    const buf = t.bufferFromStation === undefined ? outer + s * t.length : c + s * t.bufferFromStation;
     for (const tr of ['DN', 'UP'] as const) {
       const e = mainPts[tr].find((p) => p.kind === 'end' && (s < 0 ? p.ch < c : p.ch > c))!;
       e.ch = buf;
@@ -1237,6 +1255,7 @@ export function buildTopology(): Topology {
   const berths: TBerth[] = [];
   const addBerth = (b: Omit<TBerth, 'id'>) => { const id = berths.length; berths.push({ ...b, id }); return id; };
   const stationTurnback: number[][] = chains.map(() => []);
+  const stationRescue: number[][] = chains.map(() => []);
   const stationStorage: number[][] = chains.map(() => []);
   for (const p of platforms) {
     const l = links[p.link];
@@ -1259,11 +1278,20 @@ export function buildTopology(): Topology {
     const dir: Dir = ti.side === 'west' ? -1 : 1;
     for (const t of ['DN', 'UP'] as const) {
       // the buffer-end link
-      const lid = dir === -1 ? mainLinks[t][0] : mainLinks[t][mainLinks[t].length - 1];
+      const stopCh = ti.turnbackDistance === undefined ? undefined : ti.signalCh[t] + dir * ti.turnbackDistance;
+      const lid = stopCh === undefined ? (dir === -1 ? mainLinks[t][0] : mainLinks[t][mainLinks[t].length - 1])
+        : mainLinks[t].find(id => links[id].chainA <= stopCh && stopCh <= links[id].chainB && sections[links[id].section].kind === 'tail');
+      if (lid === undefined) throw new Error(`Invalid tail turnback position at ${STATIONS[ti.station].id}/${t}`);
       const l = links[lid];
-      const offset = dir === -1 ? 15 : l.len - 15;
+      const offset = stopCh === undefined ? (dir === -1 ? 15 : l.len - 15) : stopCh - l.chainA;
       const id = addBerth({ kind: 'tail', link: lid, offset, dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${t === 'DN' ? '下行' : '上行'}尾轨` });
       if (ti.turnback) stationTurnback[ti.station].push(id);
+      if (ti.turnback && stopCh !== undefined) {
+        const deepId = dir === -1 ? mainLinks[t][0] : mainLinks[t][mainLinks[t].length - 1];
+        const deep = links[deepId];
+        stationRescue[ti.station].push(addBerth({ kind: 'tail', link: deepId, offset: dir === -1 ? 15 : deep.len - 15,
+          dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${t === 'DN' ? '下行' : '上行'}尾轨(救援)` }));
+      }
       // A storage-only tail on the track that leaves away from the buffer
       // (蟠祥路 下行) holds two trains, one on each of its links: they go out
       // straight to the departure platform, the inner one first.
@@ -1689,7 +1717,8 @@ export function buildTopology(): Topology {
     const frontUP = front('UP');
     return {
       index: i, id: s.id, name: s.name, chain: chains[i], platforms: stationPlat[i],
-      turnbackBerths: stationTurnback[i], storageBerths: stationStorage[i], frontTurnback: { DN: frontDN, UP: frontUP }, equipped: equipped[i],
+      turnbackBerths: stationTurnback[i], rescueBerths: stationRescue[i].length ? stationRescue[i] : stationTurnback[i],
+      storageBerths: stationStorage[i], frontTurnback: { DN: frontDN, UP: frontUP }, equipped: equipped[i],
       row: r, x: chainToX(chains[i], r),
     };
   });

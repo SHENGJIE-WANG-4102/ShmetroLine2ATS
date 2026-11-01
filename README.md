@@ -78,6 +78,8 @@ Known open issues (October 2026):
 
 - Duty allocation (greedy circulation and depot homes in `timetable.ts`) and the runtime recovery rules (R1/R3, D148, D156, D157) are local fixes layered on each other. A global rework is planned; the offline attempt D144 did not reach a usable solve and is shelved.
 - Two random runs still fail after heavy day-two delays (D158). In one, an overnight train on the 广兰路 down platform blocks a late through train. In the other, trains are still running at 27:45. The integrity checks are unchanged and these runs are not exempted.
+- D165 seed 103 (`--level 2 --wind 2 --density 3:8 --day-type weekday --template ciie`) still reports `CARRIED_UNFINISHED` for train 219/0214 at day two 27:45; its waiting chain ends at stabled train 220/02116 on the 广兰路 middle platform. This remains a D158/P1 overnight storage issue, with no checker exemption.
+- D165 seed 134 with the same settings also reports `CARRIED_UNFINISHED` at day two 27:45; the same failure occurs on the pre-D165 baseline, with the waiting chains ending at train 33/0212 and a G0901 platform-door fault. Fault recovery remains a separate follow-up.
 - First and last trains keep the published minute at every station (D162, D163): 146 of 147 cells fall inside the minute; only the first westbound train at 世纪公园 is 66 s late (the official minute leaves 1 minute, physically too short).
 - Weekday evening timing follows the recordings (D163): level 4 and about 47.5 s dwells from 20:30, level 1 again from 21:40; daytime parameters wait for off-peak recordings.
 - The Gaode comparison has 9 failing bins (10 were accepted in D153).

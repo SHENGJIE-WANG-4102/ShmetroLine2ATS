@@ -81,8 +81,16 @@ export interface TailDef {
     station: number;
     side: 'west' | 'east';
     length: number;
+    /** Optional fixed buffer distance from station centre, independent of throat geometry. */
+    bufferFromStation?: number;
     scissors?: boolean;
     turnback?: boolean;
+    /** Extra distance from the platform to the first crossover, and distance between crossover centres. */
+    scissorsApproach?: number;
+    scissorsSpacing?: number;
+    scissorsHalfSpan?: number;
+    /** Head position beyond the track's outer throat, independent of its buffer. */
+    turnbackDistance?: number;
 }
 export interface DepotDef {
     id: string;
