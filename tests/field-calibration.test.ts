@@ -49,7 +49,8 @@ describe('field section measurement harness', () => {
   it('uses real departure, arrival and door clocks with ATO regulation enabled', () => {
     const sim = createProbeWorld();
     const from = STATIONS.findIndex(s => s.id === 'YDD'), to = STATIONS.findIndex(s => s.id === 'HTS');
-    const row = probeSection(sim, from, to, 'DN', 20 * 3600 + 30 * 60);
+    // 20:00 stays in the level-1 band (D163 starts level 4 at 20:30)
+    const row = probeSection(sim, from, to, 'DN', 20 * 3600);
     expect(row.completed).toBe(true);
     expect(row.violations).toEqual([]);
     expect(row.regulated).toBe(true);

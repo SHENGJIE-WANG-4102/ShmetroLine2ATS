@@ -92,9 +92,9 @@ const DWELL_BANDS: Record<DayType, ClockBand[]> = {
     { from: H(9, 30), to: H(16, 50), value: 1 },
     { from: H(16, 50), to: H(19, 30), value: 0.8 },
     // D138【假设】: existing evening band fitted to the seven ride-east samples.
-    { from: H(19, 30), to: H(21), value: 1.2 },
-    { from: H(21), to: H(21, 40), value: 1.1, valueTo: 0.418 },
-    { from: H(21, 40), to: Infinity, value: 0.418 },
+    { from: H(19, 30), to: H(20, 30), value: 1.2 },
+    // D163【假设】: field dwell after 20:30, median 47.55 s (n=11, D129); factor 1 averages 47.5 s.
+    { from: H(20, 30), to: Infinity, value: 1 },
   ],
   weekend: [
     { from: 0, to: H(6, 40), value: 0.918 },
@@ -106,10 +106,13 @@ const DWELL_BANDS: Record<DayType, ClockBand[]> = {
 
 const RUN_BANDS: Record<DayType, ClockBand[]> = {
   weekday: [
-    { from: 0, to: H(21, 10), value: 1 },
-    { from: H(21, 10), to: H(21, 25), value: 2 },
-    { from: H(21, 25), to: H(21, 40), value: 3 },
-    { from: H(21, 40), to: Infinity, value: 4 },
+    // D163【假设】: field runs 20:30–21:45 are 31.5% over the level-1 physical run
+    // (median, n=11, D129); level 4 budgets 32.6%, level 1 18.2% (evening peak field 18.3%).
+    // The published last trains (from 21:57) fit level 1 with ~45 s dwells (D129), so
+    // level 1 again from 21:40, where the existing level-4 band had no sample.
+    { from: 0, to: H(20, 30), value: 1 },
+    { from: H(20, 30), to: H(21, 40), value: 4 },
+    { from: H(21, 40), to: Infinity, value: 1 },
   ],
   weekend: [
     { from: 0, to: H(21, 40), value: 1 },

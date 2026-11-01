@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
-import {platformBerth,dayPeriods,OUTER_BAND_MARGIN,TEMPLATES,dwellFactorAt,buildStops,tripTasks} from '../src/sim/timetable';
+import {platformBerth,dayPeriods,OUTER_BAND_MARGIN,TEMPLATES,dwellFactorAt,buildStops,tripTasks,officialTimingPoints} from '../src/sim/timetable';
 import {DOOR_CYCLE, DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, PLANNED_DOOR_BUDGET, MIN_DWELL, MAX_DWELL_BUSY, plannedDwell, passengerMinimum, RIDERSHIP_TARGET} from '../src/sim/calibration';
 import {RIDE_LOG} from '../src/data/audio/ridelog';
 import {OPERATIONS,STATIONS} from '../src/data/current';
@@ -17,6 +17,8 @@ const advance=(s:Sim,t:number)=>{const end=s.t+t;while(s.t<end-1e-6)s.step();};
 
 describe('D74 diagram ATO levels',()=>{
  const make=()=>new Sim({dayType:'weekday',dateLabel:'night levels',startTime:14400,seed:1,noPossessions:true});
+ // D163: an airport westbound leaving inside the 20:30–21:40 level-4 band
+ const slowTrip=(s:Sim)=>s.plan.trips.find(t=>t.revenue&&!t.cancelled&&t.from===30&&t.stops[0].dep>=20.6*3600&&t.stops[0].dep<20.9*3600)!;
  it('keeps the recalibrated continuous night-grade tables and unchanged level data',()=>{
   const s=make();
   // D137: each stopping interval adds the same 22.5 s; the airport 60 km/h
@@ -31,20 +33,20 @@ describe('D74 diagram ATO levels',()=>{
   expect(OPERATIONS.sectionRunAllowanceS).toBe(22.5);
  });
  it('chooses levels at interval departure, including a trip crossing into the night band',()=>{
-  const s=make(),departure=21*3600+39*60+55;
+  const s=make(),departure=20*3600+29*60+55;
   expect(buildStops(s.planCtx,'DN',0,2,0,true,.95)[0].runLevel).toBe(1); // elapsed-time solver probe, not night service
   const stops=buildStops(s.planCtx,'DN',22,26,departure,true,.45);
-  expect(stops[0].runLevel).toBe(3);expect(stops[1].runLevel).toBe(4);
-  expect(stops[1].arr-stops[0].dep).toBeCloseTo(s.rt.byLevel![3].dn[22],5);
+  expect(stops[0].runLevel).toBe(1);expect(stops[1].runLevel).toBe(4);
+  expect(stops[1].arr-stops[0].dep).toBeCloseTo(s.rt.dn[22],5);
   expect(stops[2].arr-stops[1].dep).toBeCloseTo(s.rt.byLevel![4].dn[23],5);
   const trip={...s.plan.trips[0],id:s.plan.trips.length,from:22,to:26,stops};s.plan.trips.push(trip);
   const tr=s.trainList[0];tr.tripId=trip.id;tr.delay=0;
   tr.tasks=[];tripTasks(s.topo,trip,tr.tasks,false);tr.tasks.shift();
-  s.t=22*3600;expect(trainLevel(s,tr)).toBe(3); // interval retains its departure grade
+  s.t=21*3600;expect(trainLevel(s,tr)).toBe(1); // interval retains its departure grade
   tr.tasks.shift();expect(trainLevel(s,tr)).toBe(4);
  });
  it('defaults to diagram operation, supports a whole-line manual override and keeps late recovery',()=>{
-  const s=make(),night=s.plan.trips.find(t=>t.from===30&&t.stops[0].dep===22.5*3600)!;
+  const s=make(),night=slowTrip(s);
   expect(s.runLevel).toBe(0);expect(s.snapshot().runLevel).toBe(0);
   for(const level of [NaN,Infinity,-1,1.5,4]){expect(s.command({c:'runLevel',level}).ok).toBe(false);expect(s.runLevel).toBe(0);}
   for(const tr of s.trainList){tr.tripId=night.id;tr.tasks=[];tripTasks(s.topo,night,tr.tasks,false);tr.tasks.shift();tr.delay=0;expect(trainLevel(s,tr)).toBe(4);}
@@ -62,11 +64,12 @@ describe('D74 diagram ATO levels',()=>{
   restore(s,old);expect(s.runLevel).toBe(0);
   restore(s,capture(s));expect(s.runLevel).toBe(0);
  });
- it('plans short night dwells and completes slow whole-line pass timings without truncation',()=>{
-  const s=make(),night=s.plan.trips.find(t=>t.from===30&&t.stops[0].dep===22.5*3600)!;
+ it('plans field night dwells and completes slow whole-line pass timings without truncation',()=>{
+  const s=make(),night=slowTrip(s);
   for(const [i,stop] of night.stops.entries()){
-   if(i<night.stops.length-1)expect(stop.runLevel).toBe(4);
-   if(i>0&&i<night.stops.length-1&&STATIONS[stop.st].demand<1.4){expect(stop.dep-stop.arr).toBeGreaterThanOrEqual(25);expect(stop.dep-stop.arr).toBeLessThanOrEqual(30);}
+   if(i<night.stops.length-1)expect(stop.runLevel).toBe(stop.dep<21*3600+40*60?4:1);
+   // D163: field dwell after 20:30, median 47.55 s
+   if(i>0&&i<night.stops.length-1&&STATIONS[stop.st].demand<1.4){expect(stop.dep-stop.arr).toBeGreaterThanOrEqual(40);expect(stop.dep-stop.arr).toBeLessThanOrEqual(55);}
   }
   expect(s.rt.byLevel![4].passDn[28]).toBeGreaterThan(s.rt.passDn[28]);
   expect(s.rt.byLevel![4].passDn[29]).toBeGreaterThan(100);
@@ -82,8 +85,8 @@ describe('D74 diagram ATO levels',()=>{
   for(const tr of [...s.trainList])s.removeTrain(tr);
   for(const id of [...s.routes.keys()])releaseRoute(s,id);
   for(const block of s.plan.blocks)s.blockDone.add(block.id);
-  s.connections=[];s.t=22.5*3600-60;
-  const full=s.plan.trips.find(t=>t.from===30&&t.stops[0].dep===22.5*3600)!;
+  const full=slowTrip(s);
+  s.connections=[];s.t=full.stops[0].dep-60;
   const trip={...full,to:28,stops:full.stops.slice(0,3)};s.plan.trips[trip.id]=trip;
   const b=s.topo.berths[platformBerth(s.topo,30,'UP')];
   const tr=newTrain(s,s.plan.blocks[trip.block],b.link,b.offset,b.dir,[{link:b.link,dir:b.dir}],'0200');
@@ -201,7 +204,11 @@ describe('automatic dwell and ATO regulation',()=>{
 describe('calibrated plan structure',()=>{
  it.each(['weekday','weekend'] as const)('%s dwells never exceed the planned dwell ceiling',dayType=>{
   const s=new Sim({dayType,dateLabel:'calibration',startTime:14400,seed:1});
-  for(const t of s.plan.trips.filter(t=>t.revenue&&!t.cancelled))for(const p of t.stops)expect(p.dep-p.arr).toBeLessThanOrEqual(MAX_DWELL_BUSY+.001);
+  // D162: a published first/last train waiting for its official minute is exempt
+  for(const t of s.plan.trips.filter(t=>t.revenue&&!t.cancelled)){
+   const points=officialTimingPoints(t.dir,t.from,t.to,t.stops[0].dep);
+   for(const p of t.stops)if(points.get(p.st)!==p.dep)expect(p.dep-p.arr).toBeLessThanOrEqual(MAX_DWELL_BUSY+.001);
+  }
  });
  // Every train counts, including depot moves and non-revenue positioning:
  // passengers on a platform see each one. At the far end of the core the

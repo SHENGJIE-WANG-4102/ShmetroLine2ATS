@@ -78,8 +78,10 @@ Known open issues (October 2026):
 
 - Duty allocation (greedy circulation and depot homes in `timetable.ts`) and the runtime recovery rules (R1/R3, D148, D156, D157) are local fixes layered on each other. A global rework is planned; the offline attempt D144 did not reach a usable solve and is shelved.
 - Two random runs still fail after heavy day-two delays (D158). In one, an overnight train on the 广兰路 down platform blocks a late through train. In the other, trains are still running at 27:45. The integrity checks are unchanged and these runs are not exempted.
-- First and last trains keep the published minute at every station (D162): 143 of 147 cells fall inside the minute; the other 4 are first-train sections the official minutes leave physically too short, all within two minutes.
-- The Gaode comparison has 9 failing bins (10 were accepted in D153; 9 after D162).
+- First and last trains keep the published minute at every station (D162, D163): 146 of 147 cells fall inside the minute; only the first westbound train at 世纪公园 is 66 s late (the official minute leaves 1 minute, physically too short).
+- Weekday evening timing follows the recordings (D163): level 4 and about 47.5 s dwells from 20:30, level 1 again from 21:40; daytime parameters wait for off-peak recordings.
+- The Gaode comparison has 9 failing bins (10 were accepted in D153).
+- Three depot tests in `timetable.test.ts` (two daily depot homes, one shared depot lead turnback) currently fail; they wait for the rolling-stock redesign.
 
 The [bottom-up timing analysis](docs/field/bottom-up-runtime-2026-10.md) has complete door-based candidates for 40/60 directional sections, with stronger evidence for 22. Its margins and dwell rules are proposals only; current timetable parameters remain unchanged. See [modelling decisions](docs/design-decisions.md), [layout](docs/layout-pdf.md), [signalling](docs/signalling-model.md) and [line/vehicle research](reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md).
 

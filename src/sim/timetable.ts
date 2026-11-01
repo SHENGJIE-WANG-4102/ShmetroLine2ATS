@@ -257,10 +257,10 @@ export function buildStops(ctx: PlanContext, dir: TrackDir, from: number, to: nu
     t = arr + dw;
     const point = points.get(st);
     if (point === undefined || !stopHere) continue;
-    // late: give back run allowance since the last point, evenly, up to the
+    // late: give back run supplement since the last point, evenly, up to the
     // published minute; early: wait at the platform for it (等点)
     const late = (isLast ? arr : t) - point;
-    if (late >= 60) {
+    if (late > 0) {
       let total = 0;
       for (let j = pointAt + 1; j <= k; j++) total += slack[j];
       const f = total > 0 ? Math.min(1, late / total) : 0;
