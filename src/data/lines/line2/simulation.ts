@@ -168,6 +168,7 @@ export const SIMULATION: SimulationData = {
   ...SIMULATION_EXTRAS,
   topology: { wrapAfter: 'LJZ' },
   timetable: {
+    carryMainlineMoves: true,
     // 【假设】 Broad preferred windows are soft costs, not restrictions.
     duty: { yardPreferences: {
       exitDirections: [

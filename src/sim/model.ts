@@ -60,6 +60,8 @@ export interface Trip {
   /** after this trip the train stands as hot standby (热备) in a turnback
    *  track at `to` until its next trip (D70) */
   standby?: boolean;
+  /** A dispatched storage spare runs without boarding until this first stop. */
+  hotCallout?: { from: number; firstBoardable: number };
 }
 
 /** Cancel a trip with its specific reason. The first reason given is kept
@@ -71,13 +73,13 @@ export function cancelTrip(trip: Trip, reason: string) {
 
 export type BlockEnd =
   | { kind: 'depot'; depot: number }
-  | { kind: 'stable'; station: number; berth?: number }
+  | { kind: 'stable'; station: number; berth?: number; holdFrom?: number; holdUntil?: number }
   | { kind: 'none' };
 
 export interface Block {
   id: number;
   svc: string;
-  start: { kind: 'depot'; depot: number; time: number } | { kind: 'stable'; station: number; berth?: number };
+  start: { kind: 'depot'; depot: number; time: number } | { kind: 'stable'; station: number; berth?: number; holdFrom?: number; holdUntil?: number };
   end: BlockEnd;
   trips: number[];
   /** A standby took over its later trips (R1, D45): the trips it keeps end

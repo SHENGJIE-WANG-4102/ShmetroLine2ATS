@@ -20,6 +20,7 @@ import {
 } from '../data/current';
 
 import { ahead } from './topologyOrder';
+import { SIGNAL_MARGIN } from './safetyLimits';
 export { ahead, directionToward } from './topologyOrder';
 
 export type TrackKind = 'DN' | 'UP' | 'X' | 'SID' | 'CON' | 'DEP';
@@ -152,7 +153,7 @@ export interface TPlatform {
   face: 'N' | 'S';
 }
 
-export type BerthKind = 'platform' | 'tail' | 'siding' | 'depot';
+export type BerthKind = 'platform' | 'tail' | 'siding' | 'depot' | 'shunt';
 
 export interface TBerth {
   id: number;
@@ -167,6 +168,14 @@ export interface TBerth {
   /** true when this platform berth is approached against the normal direction */
   reverse: boolean;
   name: string;
+  /** A fixed-position berth may be limited by clearance behind the train. */
+  maxLength?: number;
+}
+
+/** The position must clear its physical limit for the whole consist. */
+export function berthFits(topo: Topology, berth: number, length: number): boolean {
+  const b = topo.berths[berth];
+  return !!b && Number.isFinite(length) && length > 0 && (b.maxLength === undefined || length <= b.maxLength);
 }
 
 export interface RouteStep { link: number; dir: Dir }
@@ -242,6 +251,8 @@ export interface TStation {
   /** storage-only tail berths a stabled train leaves straight for the
    *  departure platform from, the one nearer the platform first */
   storageBerths: number[];
+  /** Reversal positions for a locally configured storage-entry shunt. */
+  shuntEntries: { storageLink: number; incoming: 'UP' | 'DN'; berth: number }[];
   equipped: boolean;
   row: number;
   x: number;
@@ -328,7 +339,7 @@ export function sharedTransferLink(topo: Topology, link: number): boolean {
  * No timetable, signal state, driving level or train-specific state is read. */
 export function safeWaitingPoint(topo: Topology, at: number | WaitingPoint, length: number, next: WaitingStage = {}): boolean {
   const berth = typeof at === 'number' ? topo.berths[at] : undefined;
-  if (typeof at === 'number' && !berth) return false;
+  if (typeof at === 'number' && !berthFits(topo, at, length)) return false;
   const point: WaitingPoint = berth ? { link: berth.link, off: berth.offset, dir: berth.dir } : at as WaitingPoint;
   if (!Number.isFinite(length) || length <= 0 || point.dir !== 1 && point.dir !== -1) return false;
   const headLink = topo.links[point.link];
@@ -1257,6 +1268,7 @@ export function buildTopology(): Topology {
   const stationTurnback: number[][] = chains.map(() => []);
   const stationRescue: number[][] = chains.map(() => []);
   const stationStorage: number[][] = chains.map(() => []);
+  const stationShunts: { storageLink: number; incoming: 'UP' | 'DN'; berth: number }[][] = chains.map(() => []);
   for (const p of platforms) {
     const l = links[p.link];
     const stopOff = (LINE_INFO.platformLength / 2) + (PLAT_HALF - LINE_INFO.platformLength / 2); // head at platform end
@@ -1367,6 +1379,31 @@ export function buildTopology(): Topology {
     }
     return Infinity;
   };
+  // Each enabled Y-connected storage loop may admit a local pull-out from
+  // either main platform: the complete consist first clears the reverse
+  // signal and the second half of its signal margin, then reverses into it.
+  for (const loop of LAYOUT.loops) {
+    if (!loop.localEntryShunt) continue;
+    const st = loop.station, store = berths.find(b => b.station === st && b.kind === 'siding' && b.name === loop.name);
+    if (!store) continue;
+    for (const incoming of ['UP','DN'] as const) {
+      const d: Dir = incoming === 'DN' ? 1 : -1;
+      const target = berths.find(b => b.link === store.link && b.dir === -d);
+      if (!target) continue;
+      const signal = signals.filter(s => s.station === st && s.role === 'rev' && s.dir === -d
+        && links[s.link].track === incoming && ahead(incoming, chains[st], s.chain)
+        && reach(s.link,s.dir,Infinity,(lid,dir) => lid === target.link && dir === target.dir))
+        .sort((a,b) => Math.abs(a.chain-chains[st])-Math.abs(b.chain-chains[st]))[0];
+      if (!signal) continue;
+      const chain = signal.chain + d * (LINE_INFO.trainLength + 2 * SIGNAL_MARGIN);
+      const lid = mainLinks[incoming].find(id => links[id].chainA < chain && chain < links[id].chainB);
+      if (lid === undefined || sections[links[lid].section].kind !== 'plain') continue;
+      const berth = addBerth({ kind:'shunt', link:lid, offset:chain-links[lid].chainA, dir:d,
+        platform:-1, station:st, depot:-1, reverse:true, maxLength:LINE_INFO.trainLength,
+        name:`${STATIONS[st].name}${incoming}调车换端` });
+      stationShunts[st].push({ storageLink: store.link, incoming, berth });
+    }
+  }
   const normalDirOf = (t: 'DN' | 'UP'): Dir => (t === 'DN' ? 1 : -1);
   const platLinkOf = (st: number, t: 'DN' | 'UP') => platforms[stationPlat[st][t]].link;
 
@@ -1718,7 +1755,7 @@ export function buildTopology(): Topology {
     return {
       index: i, id: s.id, name: s.name, chain: chains[i], platforms: stationPlat[i],
       turnbackBerths: stationTurnback[i], rescueBerths: stationRescue[i].length ? stationRescue[i] : stationTurnback[i],
-      storageBerths: stationStorage[i], frontTurnback: { DN: frontDN, UP: frontUP }, equipped: equipped[i],
+      storageBerths: stationStorage[i], shuntEntries: stationShunts[i], frontTurnback: { DN: frontDN, UP: frontUP }, equipped: equipped[i],
       row: r, x: chainToX(chains[i], r),
     };
   });

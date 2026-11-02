@@ -35,6 +35,8 @@ export interface TimetableData {
   reference?: Partial<Record<TrackDir, string>>;
   /** Depot positioning follows stopping timings without taking passengers. */
   positioningRevenue?: boolean;
+  /** Whether scheduled mainline stock moves must carry after opening. */
+  carryMainlineMoves?: boolean;
   /** Keep every scheduled passenger origin and destination through circulation. */
   preserveRevenueRoutes?: boolean;
   templates: Record<string, Template>;

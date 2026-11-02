@@ -4,7 +4,7 @@
 import type { Sim } from './engine';
 import { STANDBY_CALL, type Task, type Train, type StopTask } from './model';
 import type { TrackPoint, RouteStep, WaitingStage } from './topology';
-import { pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, topologyResourceLinks, sharedTransferLink } from './topology';
+import { berthFits, pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, topologyResourceLinks, sharedTransferLink } from './topology';
 import { approachLocked, committedTrain } from './interlocking';
 import { canStopBeforeSignal } from './protection';
 import { SIGNAL_MARGIN } from './protection';
@@ -197,7 +197,7 @@ function optionResourceLinks(sim: Sim, option: ResourceOption, tasks: Task[]): S
     const task = tasks[c.index], berth = sim.topo.berths[c.berth];
     const turn = task.k === 'stop' && platformTurnAfter(sim,tasks,c.index,c.berth,option.choices);
     if (task.k === 'stop' && turn
-      || task.k === 'reverse' && berth.kind === 'platform' || task.k === 'stable') links.add(berth.link);
+      || task.k === 'reverse' && (berth.kind === 'platform' || berth.kind === 'shunt') || task.k === 'stable') links.add(berth.link);
   }
   return links;
 }
@@ -374,7 +374,7 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
     }
     const out: ResourceOption[] = [];
     for (const goal of candidates) {
-      if (goal < 0) continue;
+      if (goal < 0 || !berthFits(sim.topo, goal, length)) continue;
       const phase = phaseTo(sim, point, goal);
       if (!phase) {
         if (option.phases.length) incomplete.push({ ...option, unreachable: { start: point, goal } });
@@ -473,6 +473,12 @@ export function sourceDepartureAt(sim: Sim, task: Task, tr?: Train): number | nu
 
 /** Existing source readiness, shared by admission, ordinary ARS and onboard. */
 export function sourceReadyAt(sim: Sim, task: Task, tr?: Train): number {
+  if (task.k === 'reverse' && tr && tr.tasks[0] === task) {
+    const start = sim.plan.blocks[tr.block]?.start;
+    const berth = start?.kind === 'stable' && start.berth !== undefined ? sim.topo.berths[start.berth] : undefined;
+    const departure = tr.tasks.find((next): next is StopTask => next.k === 'stop' && !!next.stabledOut);
+    if (berth && departure && tr.body.some(part => part.link === berth.link)) return sourceReadyAt(sim, departure, tr);
+  }
   if (task.k !== 'stop' || !(task.standby || task.stabledOut || task.turnbackWaitBerth !== undefined)) return -Infinity;
   if (task.turnbackWaitBerth !== undefined && !task.standby && !task.stabledOut) {
     // The marker describes a physical wait, not an ongoing speed rule. A

@@ -1,5 +1,7 @@
 /** Shared boundary for accepting a more restrictive movement authority. */
 import { PERF } from './dynamics';
+import { SIGNAL_MARGIN } from './safetyLimits';
+export { SIGNAL_MARGIN } from './safetyLimits';
 import type { Sim } from './engine';
 import type { Train } from './model';
 import { nextLink, linkChain, type Topology, type TrackPoint } from './topology';
@@ -8,8 +10,6 @@ import { brakingSpeedH, chainSense, G, heightAt, profileOf, type Profile } from 
 
 export type RestrictionBrake = 'supervision' | 'emergency';
 
-/** Signal stopping target, measured from the signal towards the approaching train. */
-export const SIGNAL_MARGIN = 6;
 
 /** Both brake classes use the same target and zero additional distance margin. */
 export const restrictionDistance = (speed: number, brake: RestrictionBrake = 'emergency') =>

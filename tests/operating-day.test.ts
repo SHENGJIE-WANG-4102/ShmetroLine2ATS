@@ -36,6 +36,15 @@ describe('operating day boundaries and replay',()=>{
   expect(sim.trainList).toHaveLength(8);
   expect(unfinishedAtRollover(sim)).toEqual([]);
  });
+ it('counts a storage shunt as unfinished once its scheduled release arrives',()=>{
+  const saved=capture(sim),tr=sim.trainList.find(t=>t.tasks[0]?.k==='reverse'
+    &&t.tasks.some(task=>task.k==='stop'&&task.stabledOut))!;
+  expect(tr).toBeDefined();expect(unfinishedAtRollover(sim).join(' ')).not.toContain(tr.vehicle);
+  const stop=tr.tasks.find(task=>task.k==='stop'&&task.stabledOut)!;
+  if(stop.k!=='stop'||stop.dep===null)throw new Error('missing scheduled departure');
+  sim.t=stop.dep;expect(unfinishedAtRollover(sim).join(' ')).toContain(tr.vehicle);
+  restore(sim,saved);
+ });
  it('copies a section phase through checkpoints and carries its arrival clock into the next day',()=>{
   const saved=capture(sim),tr=sim.trainList[0];
   tr.ato={state:{phase:'coast',recovered:false,neutral:2},plan:{cutoff:20,coastAt:800,coastFloor:15,

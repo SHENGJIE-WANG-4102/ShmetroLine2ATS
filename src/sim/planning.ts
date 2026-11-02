@@ -19,11 +19,11 @@ export interface PlanPreview {
 
 /** Summary errors describe the whole operating day, regardless of the clock
  * assigned to the last depot movement. Shared by extras and standby relief. */
-export function liveIssues(sim: Sim, plan: Plan): PlanIssue[] {
+export function liveIssues(sim: Sim, plan: Plan, reactivated: ReadonlySet<number> = new Set()): PlanIssue[] {
   const issues = validatePlan(sim.planCtx, plan).filter(i => i.code === 'YARD_BALANCE' || i.code === 'YARD_CAPACITY' || i.t >= sim.t - 1e-6);
-  const shortfall = yardShortfall(sim, plan);
+  const shortfall = yardShortfall(sim, plan, reactivated);
   if (shortfall) issues.push(shortfall);
-  return [...issues, ...possessionIssues(sim, plan)];
+  return [...issues, ...possessionIssues(sim, plan, reactivated)];
 }
 
 export function addedPlanErrors(sim: Sim, plan: Plan, after = liveIssues(sim, plan)): PlanIssue[] {
@@ -35,11 +35,13 @@ export function addedPlanErrors(sim: Sim, plan: Plan, after = liveIssues(sim, pl
   }));
 }
 
-export function noWorse(sim: Sim, plan: Plan): boolean { return addedPlanErrors(sim, plan).length === 0; }
+export function noWorse(sim: Sim, plan: Plan, reactivated?: ReadonlySet<number>): boolean {
+  return addedPlanErrors(sim, plan, liveIssues(sim, plan, reactivated)).length === 0;
+}
 
 /** Existing possession table is the sole source. Check the actual planned
  * run windows, including empty moves between a yard and its portal station. */
-export function possessionIssues(sim: Sim, plan: Plan): PlanIssue[] {
+export function possessionIssues(sim: Sim, plan: Plan, reactivated: ReadonlySet<number> = new Set()): PlanIssue[] {
   const works = sim.possessions.filter(p => p.state !== 'done' && p.state !== 'cancelled');
   if (!works.length) return [];
   const issues: PlanIssue[] = [];
@@ -62,7 +64,7 @@ export function possessionIssues(sim: Sim, plan: Plan): PlanIssue[] {
     }
   }
   for (const move of depotMoves(plan.blocks,plan.trips,sim.planCtx)) {
-    if (sim.blockDone.has(move.block) || move.delta < 0 && plan.blocks[move.block].train !== undefined) continue;
+    if (sim.blockDone.has(move.block) && !reactivated.has(move.block) || move.delta < 0 && plan.blocks[move.block].train !== undefined) continue;
     const block = plan.blocks[move.block], trips = block.trips.map(id=>plan.trips[id]).filter(t=>!t.cancelled);
     const trip = move.delta < 0 ? trips[0] : trips.at(-1);
     if (!trip) continue;
@@ -134,17 +136,17 @@ function canExtend(sim: Sim, block: number, last: number): boolean {
 /** Current yard stock must cover every planned departure from the yard.
  * Existing stock is reserved first, with planned returns credited only
  * after their entry movement. */
-export function yardShortfall(sim: Sim, plan: Plan): PlanIssue | undefined {
-  return yardCheck(sim, plan)?.issue;
+export function yardShortfall(sim: Sim, plan: Plan, reactivated: ReadonlySet<number> = new Set()): PlanIssue | undefined {
+  return yardCheck(sim, plan, reactivated)?.issue;
 }
 
 /** The shortfall and the circulation whose departure from the yard first overdraws it. */
-function yardCheck(sim: Sim, plan: Plan): { issue: PlanIssue; block: number } | undefined {
+function yardCheck(sim: Sim, plan: Plan, reactivated: ReadonlySet<number>): { issue: PlanIssue; block: number } | undefined {
   const balance = sim.depotStock.slice();
   // (a duty already out has drawn its car; a finished one has returned it;
   // a pending exit cannot happen before now)
   const moves = sortDepotMoves(depotMoves(plan.blocks, plan.trips)
-    .filter(m => !sim.blockDone.has(m.block) && !(m.delta < 0 && plan.blocks[m.block].train !== undefined))
+    .filter(m => (!sim.blockDone.has(m.block) || reactivated.has(m.block)) && !(m.delta < 0 && plan.blocks[m.block].train !== undefined))
     .map(m => m.delta < 0 ? { ...m, time: Math.max(sim.t, m.time) } : m));
   for (const move of moves) {
     balance[move.depot] += move.delta;

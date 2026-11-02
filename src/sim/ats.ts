@@ -10,7 +10,7 @@ import type { Sim } from './engine';
 import { cancelTrip, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import { settleDroppedCalls } from './connections';
 import type { Dir, Topology, TrackPoint, RouteStep } from './topology';
-import { nextLink, travelDirection, ahead, reversedBerthPoint } from './topology';
+import { berthFits, nextLink, travelDirection, ahead, reversedBerthPoint } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, signalPassed, type CmdResult } from './interlocking';
 import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission, retreatRouteBlocker } from './movement';
 import { takeVehicle, putVehicle, peekVehicle } from './yard';
@@ -898,6 +898,12 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     return;
   }
   if (task.k === 'reverse') {
+    // A local shunt may reach a second reversal point before visiting a
+    // platform. Finish the previous pull-out before starting the next turn.
+    if (tr.tbStage === 'depart') {
+      setTurnbackStage(sim, tr, 'none');
+      setTurnbackStage(sim, tr, 'arrive');
+    }
     sim.clearAlarm(`turnback-wait-unsafe-${tr.id}`);
     // Only mark a genuine planned adjacent connection, after the train has
     // physically reached the actual selected off-platform berth. This avoids
@@ -1629,6 +1635,15 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
       return preserveClaim();
     }
     const sg = sim.sig[sig];
+    // A fixed reversal point can only be used by a consist whose rear clears
+    // the protecting signal. No resource option exists when it is too long,
+    // so this check must also guard ARS's ordinary no-decision path.
+    if (!berthFits(topo, goal, tr.len)) {
+      const active = sim.routes.get(sg.route);
+      if (active && !active.entered && !active.manual) cancelArsRoute(sim, tr, sig);
+      setArsWait(sim, tr, 'ROUTE_WAIT', -1, sig, `${topo.berths[goal].name} 不足以容纳整列车及保护距离`);
+      return { train: tr, signal: sig, route: rid, prio: plannedTime(goalTask, sim.t), eta, ready: false, dist, via };
+    }
     const decision = resourceAllocation(sim).decisions.get(tr.id);
     if (decision && !decision.admitted && decision.option.phases.some(p => p.routes.includes(rid))) {
       const active = sim.routes.get(sg.route);

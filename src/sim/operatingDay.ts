@@ -11,6 +11,7 @@ import { yardCount, dayNumber } from './yard';
 import { dateLabel, dayTypeOf, isoDate, parseIso } from './calendar';
 import type { Block, Possession, SimConfig, StopTask, Task, Train, Trip } from './model';
 import { copyWaitAlternatives } from './halt';
+import { sourceReadyAt } from './resourceArbitration';
 
 export const DAY_S = 86400;
 /** a time of the old day on the new day's clock; unset markers (0, -1, ∞) stay */
@@ -39,7 +40,9 @@ export function availableStock(sim: Sim, day = dayNumber(sim.config)): number[] 
 
 /** trains still running at the rollover: they carry on into the new day */
 export function unfinishedAtRollover(sim: Sim): string[] {
-  return sim.trainList.filter(t => t.v >= .05 || (t.tasks.length && t.tasks[0].k !== 'stable' && !(t.tasks[0].k === 'stop' && t.tasks[0].stabledOut)))
+  return sim.trainList.filter(t => t.v >= .05 || (t.tasks.length && t.tasks[0].k !== 'stable'
+    && !(t.tasks[0].k === 'stop' && t.tasks[0].stabledOut)
+    && !(t.tasks[0].k === 'reverse' && sourceReadyAt(sim,t.tasks[0],t) > sim.t)))
     .map(t=>`${t.vehicle}（${t.svc}-${t.tripNo}，${sim.topo.sections[sim.topo.links[t.link].section].name}，${t.tasks[0]?describeTask(sim,t.tasks[0]):'无后续任务'}）`);
 }
 
@@ -152,6 +155,9 @@ function appendDuty(sim: Sim, from: Sim, tr: Train): { trips: Map<number, number
   }
   const b: Block = { ...old, id: block, trips: keep.map(id => trips.get(id)!), train: tr.id,
     start: old.start.kind === 'depot' ? { ...old.start, time: back(old.start.time) } : old.start,
+    end: old.end.kind === 'stable' ? { ...old.end,
+      ...(old.end.holdFrom === undefined ? {} : { holdFrom: back(old.end.holdFrom) }),
+      ...(old.end.holdUntil === undefined ? {} : { holdUntil: back(old.end.holdUntil) }) } : old.end,
     ...(old.withdrawal ? { withdrawal: { ...old.withdrawal, at: back(old.withdrawal.at) } } : {}) };
   sim.plan.blocks.push(b);
   return { trips, block };

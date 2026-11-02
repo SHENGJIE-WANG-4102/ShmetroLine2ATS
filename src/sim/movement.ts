@@ -218,7 +218,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
     && topo.platforms[berth.platform].station === tr.lastStation;
   // (a hot standby not yet called out does not queue for the platform, D70)
   const t0 = tr.tasks[0];
-  const standing = t0?.k === 'stop' && sourceReadyAt(sim, t0, tr) > sim.t;
+  const standing = !!t0 && sourceReadyAt(sim, t0, tr) > sim.t;
   // The preceding reversal (or overnight spawn) already placed the body at
   // its registered berth. Withholding ARS alone still lets ATO creep to the
   // exit signal. Keep authority here until the scheduled call-out instead.

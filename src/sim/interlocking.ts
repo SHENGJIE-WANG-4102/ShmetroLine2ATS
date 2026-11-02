@@ -417,7 +417,7 @@ export function updateInterlocking(sim: Sim) {
       : owner.phase === 'stabled' ? r.berths : [];
     const atTurnback = goals.some(id => {
       const goal = topo.berths[id];
-      return goal?.kind === 'tail' && r.berths.includes(id) && goal.link === owner.link && goal.dir === owner.dir
+      return (goal?.kind === 'tail' || goal?.kind === 'shunt') && r.berths.includes(id) && goal.link === owner.link && goal.dir === owner.dir
         && (goal.offset - owner.off) * owner.dir <= 5 && (goal.offset - owner.off) * owner.dir >= -3;
     }) && safeWaitingPoint(topo, { link: owner.link, off: owner.off, dir: owner.dir, incoming: owner.hist }, owner.len);
     // owner came to rest at its actual turnback or in the last section: complete

@@ -35,7 +35,7 @@ import type { Command, Train } from './model';
 import { unsafeAhead, rescuerFor } from './radio';
 import { goalBerth } from './movement';
 import { routeLeadsTo, rescueBlockedByConsist, exchangePartner } from './ats';
-import { lateForStabler, predictedLateness, RELIEF_DELAY } from './standby';
+import { canExchangeStabling, lateForStabler, predictedLateness, RELIEF_DELAY } from './standby';
 
 /** reaction time before answering a call / starting a procedure (s) */
 const REACT = 10;
@@ -214,6 +214,8 @@ function psdProcedures(sim: Sim) {
  * the same during and after incidents. */
 function recoveryRegulation(sim: Sim) {
   for (const tr of sim.trainList) {
+    if (tr.halt.train>=0 && sim.trains.get(tr.halt.train)?.phase==='stabled' && due(sim, `expired-slot-${tr.id}`, 30)
+      && canExchangeStabling(sim,tr) && cmd(sim,{c:'standby',train:tr.id}).ok) continue;
     if (tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn) continue;
     // D156: a train arriving to stable at a first-ready terminal is offered
     // at once to the train most late for a departure there.

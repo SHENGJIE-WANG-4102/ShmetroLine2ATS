@@ -26,10 +26,13 @@
  * the order trains are ready, and nobody chases the original duty.
  */
 import type { Sim } from './engine';
-import type { Block, Plan, StopTask, TrackDir, Train } from './model';
-import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, effectiveStops, effectiveEnd, type StandbyPlan } from './timetable';
+import type { Block, Plan, StopTask, TrackDir, Train, Trip } from './model';
+import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, standbyWindows, effectiveStops, effectiveEnd, buildStops, clearOnToYard, type StandbyPlan } from './timetable';
 import { noWorse } from './planning';
 import { extendTrainTasks, remainingStart, setTripFromTasks } from './ats';
+import { travelDirection, reversedBerthPoint } from './topology';
+import { routePathStart, walkRouteToBerth } from './routePath';
+import { platformBerth, departureBerthAfterReverse, storageOccupancy } from './timetable';
 
 /** Notice a standby needs before leaving the yard (s). */
 export const STANDBY_NOTICE = 300;
@@ -45,10 +48,21 @@ const HOT_PULL_OUT = 90;
 
 /** A hot standby standing in its turnback track (D70): its station and the
  * trip it stands for; null for any other train. */
-export function hotStandby(sim: Sim, tr: Train): { station: number; trip: number } | null {
+export function hotStandby(sim: Sim, tr: Train): { station: number; trip: number; parked?: boolean } | null {
   const t0 = tr.tasks[0];
   if (tr.failed || tr.manual || tr.withdrawn || tr.coupledLen > 0 || tr.block < 0 || tr.relievedBy) return null;
+  if(tr.phase==='stabled'&&!tr.tasks.length){
+    const block=sim.plan.blocks[tr.block],last=block?.trips.map(id=>sim.plan.trips[id]).filter(t=>!t.cancelled).at(-1);
+    if(block?.end.kind!=='stable'||block.end.berth===undefined||!last?.standby)return null;
+    const endBerth=block.end.berth;
+    const place=hotStandbyPlaces(sim.topo).find(p=>p.depot&&sim.topo.berths[p.berth]?.link===tr.link
+      && sim.topo.berths[endBerth]?.link===tr.link && standbyWindows(sim.plan.dayType,p).some(w=>w.from<=sim.t&&sim.t<w.to));
+    return place?{station:place.station,trip:-1,parked:true}:null;
+  }
   if (t0?.k !== 'stop' || !t0.standby || t0.dep === null || t0.trip < 0 || tr.phase !== 'run' || tr.v > 0.05) return null;
+  // A storage spare already assigned to a passenger suffix is still on its
+  // original link until its call-out starts; it is no longer available.
+  if (sim.plan.trips[t0.trip]?.hotCallout) return null;
   const place = hotStandbyPlaces(sim.topo).find(p => (p.depot ? [p.berth] : sim.topo.stations[p.station].turnbackBerths)
     .some(b => sim.topo.berths[b].link === tr.link));
   return place ? { station: place.station, trip: t0.trip } : null;
@@ -74,7 +88,21 @@ function hotCandidate(sim: Sim, tail: number[], minK = 0): { h: Train; k: number
       const start = remainingCalls(D, current);
       if (start === undefined) continue;
       const cut = stops.findIndex((s, i) => i >= start && s.st === at.station && s.stop && s.st !== effectiveEnd(D));
-      if (cut < 0 || stops[cut].dep < sim.t + HOT_NOTICE + HOT_PULL_OUT) continue;
+      if (cut < 0 || !at.parked && stops[cut].dep < sim.t + HOT_NOTICE + HOT_PULL_OUT) continue;
+      if(at.parked){
+        const place=hotStandbyPlaces(sim.topo).find(p=>p.station===at.station&&sim.topo.berths[p.berth]?.link===h.link);
+        if(!place)continue;
+        const reversal=travelDirection(sim.topo,h)!==D.dir;
+        const berth=sim.topo.berths.find(b=>b.link===h.link&&b.dir===h.dir&&Math.abs(b.offset-h.off)<5);
+        const point=reversal&&berth?reversedBerthPoint(sim.topo,berth.id,h.len,h.hist):reversal?undefined:{link:h.link,off:h.off,dir:h.dir};
+        const board=place.track==='storage'?stops.findIndex((p,i)=>i>cut&&p.stop&&!p.noBoard):cut;
+        if(board<0||place.track==='storage'&&!place.emptyCalloutToFirstPlatform||!point)continue;
+        const goal=platformBerth(sim.topo,stops[board].st,D.dir),route=routePathStart(sim.topo,point,goal);
+        if(!route || 'start' in route&&!Number.isFinite(walkRouteToBerth(sim.topo,sim.routeTable,route.start,goal)))continue;
+        const travel=board===cut?HOT_PULL_OUT:buildStops(sim.planCtx,D.dir,at.station,stops[board].st,0,true,1).at(-1)!.arr;
+        if(stops[board].dep<sim.t+HOT_NOTICE+travel+(reversal?40:0))continue;
+        out.push({h,k,cut,own:[]});break;
+      }
       // A siding is left in its prepared heading. An incompatible train is
       // served by the next hot standby or a yard spare, without teleporting.
       const ownTrip = sim.plan.trips[at.trip];
@@ -98,6 +126,10 @@ function recoveredTail(sim: Sim, plan: Plan, tail: number[], k: number, cut: num
   stops[0].arr = stops[0].dep;
   if (place?.track === 'storage') { stops[0].stop = false; stops[0].noBoard = true; }
   const suffix = { ...original, id: plan.trips.length, no: `${original.no}续`, from: stops[0].st, to: stops[stops.length - 1].st, stops, cancelled: false };
+  if(place?.track==='storage'&&place.emptyCalloutToFirstPlatform){
+    const board=stops.find((p,i)=>i>0&&p.stop&&!p.noBoard);
+    if(board)suffix.hotCallout={from:place.station,firstBoardable:board.st};
+  }
   delete suffix.cut;
   delete suffix.cancelReason;
   plan.trips.push(suffix);
@@ -165,6 +197,14 @@ function callOut(sim: Sim, h: Train, trip: number) {
   // (its departure stop stays a standby's: it is called up to the platform
   // STANDBY_CALL before, no earlier than the notice allows)
   h.tasks = blockTasks(sim.topo, sim.plan, b, b.trips.indexOf(trip));
+  if(h.phase==='stabled'){
+    const dir=sim.plan.trips[trip].dir;
+    if(travelDirection(sim.topo,h)!==dir){
+      const berth=sim.topo.berths.find(x=>x.link===h.link&&x.dir===h.dir&&Math.abs(x.offset-h.off)<5);
+      if(berth)h.tasks.unshift({k:'reverse',station:berth.station,berths:[berth.id],chosen:berth.id,minTime:40});
+    }
+    h.phase='run';h.phaseSince=sim.t;b.train=h.id;sim.blockDone.delete(b.id);
+  }
   setTripFromTasks(sim, h);
   sim.planRev++;
   sim.planDirty = true;
@@ -188,7 +228,7 @@ function hotTakeover(sim: Sim, from: number, tail: number[], why: string, depotK
   if (!takeable(sim.plan, from, tail)) return null;
   for (const { h, k, own, cut } of hotCandidate(sim, tail)) {
     if (k > depotK) break;
-    if (!own.length) continue;
+    if (!own.length&&h.phase!=='stabled') continue;
     const positioningOnly = own.every(id => !sim.plan.trips[id].revenue);
     const finish = (plan: Plan) => {
       plan.blocks[h.block].relieved = false;
@@ -203,10 +243,10 @@ function hotTakeover(sim: Sim, from: number, tail: number[], why: string, depotK
     // For a dedicated spare the covered empty return is also the required
     // stock transfer: the withdrawn car returns to one yard, its replacement
     // leaves that yard for the spare's former home. No night stock is invented.
-    const cover = findStandby(sim, h.block, own, 0, 0, finish, positioningOnly);
-    if (!cover || cover.k) continue;
+    const cover = own.length?findStandby(sim, h.block, own, 0, 0, finish, positioningOnly):null;
+    if (own.length&&(!cover || cover.k)) continue;
     const change = (plan: Plan) => {
-      applyYard(sim, plan, h.block, own, cover);
+      if(cover)applyYard(sim, plan, h.block, own, cover);
       return finish(plan);
     };
     const plan = structuredClone(sim.plan);
@@ -453,6 +493,8 @@ export function predictedLateness(sim: Sim, tr: Train): number {
  * can make on time; the late train keeps the trips before it, then is
  * withdrawn at the end of the last one (`standbyTick`). */
 export function cmdStandbyRelief(sim: Sim, tr: Train) {
+  const expired = expiredStablingExchange(sim, tr);
+  if (expired) return expired;
   if (tr.failed || tr.manual || tr.coupledLen > 0 || !tr.inService || tr.block < 0)
     return { ok: false, msg: '仅对正常载客运行的计划列车办理备车接替' };
   if (tr.relievedBy) return { ok: false, msg: `已由备车表号${tr.relievedBy}接替` };
@@ -482,6 +524,86 @@ export function cmdStandbyRelief(sim: Sim, tr: Train) {
   for (const [berth, train] of sim.berthRes) if (train === tr.id && !keep.has(berth)) sim.berthRes.delete(berth);
   tr.relievedBy = block.svc;
   return { ok: true, msg: `备车表号${block.svc}接替${sim.plan.trips[tail[c.k]].no}起车次；本车运行至${sim.plan.trips[lastKept].no}终点后回段` };
+}
+
+/** Read the same reservation calendar used by planning; do not attempt a
+ * dispatcher command for a train merely because another train is stabled. */
+function stablingExchangeCandidate(sim: Sim, incoming: Train) {
+  if (incoming.failed || incoming.manual || incoming.coupledLen > 0 || incoming.withdrawn || incoming.block < 0) return null;
+  if (incoming.rescuing >= 0 || incoming.rescueBy >= 0 || incoming.tasks.some(t => t.k === 'rescue')) return null;
+  const arrival = incoming.tasks[0];
+  if (arrival?.k !== 'stop' || arrival.dep !== null || arrival.trip !== incoming.tripId || arrival.berth < 0) return null;
+  const held = sim.trains.get(incoming.halt.train);
+  if (!held || held.id===incoming.id || held.phase!=='stabled' || held.failed || held.manual || held.block<0 || held.tasks.length) return null;
+  const a=sim.plan.blocks[held.block], b=sim.plan.blocks[incoming.block];
+  if (!a || !b || a.id===b.id || a.end.kind!=='stable' || a.end.berth===undefined) return null;
+  const position=sim.topo.berths[a.end.berth],target=sim.topo.berths[arrival.berth];
+  if (!position || !target || position.link!==target.link || held.link!==position.link) return null;
+  const heldSlot=storageOccupancy(sim.topo,sim.plan).find(x=>x.block===a.id && x.link===position.link && x.morning===false);
+  if(!heldSlot || (sim.t<heldSlot.to && (arrival.arr===null || arrival.arr>=heldSlot.from))) return null;
+  const tail=dutyTail(sim,incoming),first=sim.plan.trips[tail[0]];
+  if(!first){
+    const last=a.trips.map(id=>sim.plan.trips[id]).filter(t=>t&&!t.cancelled).at(-1);
+    if(b.end.kind!=='depot'||!last||last.to!==arrival.station||position.kind!=='platform')return null;
+    return {arrival,held,a,b,heldSlot,tail,first:undefined,destination:a.end,depot:b.end.depot};
+  }
+  if(first.cancelled || first.from!==arrival.station) return null;
+  const index=incoming.tasks.findIndex(t=>t.k==='stop' && t.trip===first.id && t.dep!==null);
+  if(index<0 || !incoming.tasks.slice(1,index).every(t=>t.k==='reverse'&&t.station===arrival.station))return null;
+  return {arrival,held,a,b,heldSlot,tail,first,destination:a.end,depot:undefined};
+}
+
+export function canExchangeStabling(sim: Sim, incoming: Train): boolean {
+  return stablingExchangeCandidate(sim,incoming)!==null;
+}
+
+/** Swap the two duties atomically after a previous reservation expired. */
+function expiredStablingExchange(sim: Sim, incoming: Train): {ok:boolean;msg:string}|null {
+  const candidate=stablingExchangeCandidate(sim,incoming);
+  if(!candidate)return null;
+  const {arrival,held,a,b,heldSlot,tail,first,destination,depot}=candidate;
+  const mutate=(plan:Plan,notBefore?:number)=>{
+    const p=plan.blocks[a.id],q=plan.blocks[b.id];
+    q.trips=q.trips.filter(id=>!tail.includes(id));p.trips.push(...tail);
+    for(const id of tail)plan.trips[id].block=p.id;
+    [p.end,q.end]=[q.end,p.end];p.train=held.id;
+    if(q.end.kind==='stable')q.end={...q.end,holdFrom:heldSlot.from,holdUntil:heldSlot.to};
+    if(depot!==undefined){
+      q.relieved=false;
+      const previous=p.trips.map(id=>plan.trips[id]).filter(t=>t&&!t.cancelled).at(-1);
+      if(!previous||notBefore===undefined)return undefined;
+      const move=clearOnToYard(sim.planCtx,plan.trips,p,previous,{depot,notBefore});
+      if(!move||!move.revenue)return undefined;
+      move.no=`${previous.no}续`;return move;
+    }
+    return first;
+  };
+  let preview:Plan|undefined, chosen:Trip|undefined,notBefore:number|undefined;
+  for(let at=sim.t+STANDBY_NOTICE;at<=sim.t+STANDBY_NOTICE+900;at+=30){
+    const proposed=structuredClone(sim.plan),move=mutate(proposed,depot===undefined?undefined:at);
+    if(!move){if(depot===undefined)break;continue;}
+    if(noWorse(sim,proposed,new Set([a.id]))){preview=proposed;chosen=move;notBefore=at;break;}
+    if(depot===undefined)break;
+  }
+  if(!preview||!chosen)return {ok:false,msg:`存车预约交换不可行：列车${held.svc}占用${sim.topo.berths[destination.berth!].name}，${depot===undefined?'原接续未通过预检':'没有可行载客回段接续'}`};
+  const committed=mutate(sim.plan,notBefore)!;
+  const tasks=blockTasks(sim.topo,sim.plan,a,a.trips.indexOf(committed.id));
+  const travel=travelDirection(sim.topo,held);
+  if(travel!==committed.dir){
+    const departure=tasks.find(t=>t.k==='stop');
+    if(departure?.k==='stop')departure.berth=departureBerthAfterReverse(sim.topo,destination.berth!,departure.berth);
+    tasks.unshift({k:'reverse',station:destination.station,berths:[destination.berth!],chosen:destination.berth!,minTime:40});
+  }else if(depot!==undefined){
+    const departure=tasks.find(t=>t.k==='stop');
+    if(departure?.k==='stop')departure.berth=destination.berth!;
+  }
+  held.tasks=tasks;held.phase='run';held.phaseSince=sim.t;held.inService=true;sim.blockDone.delete(a.id);
+  incoming.tasks=[arrival,{k:'stable',berth:destination.berth!,station:destination.station,reason:'存车'}];
+  if(depot!==undefined)delete incoming.relievedBy;
+  setTripFromTasks(sim,held);setTripFromTasks(sim,incoming);sim.planRev++;sim.planDirty=true;
+  const msg=`${sim.topo.stations[destination.station].name}过期存车交换：${held.svc}接${committed.no}，${incoming.svc}到达后存车`;
+  sim.log('C','运营',msg,{key:`expired-slot-${held.id}-${incoming.id}`});
+  return {ok:true,msg};
 }
 
 /** A relieved train that has finished its last kept trip returns to the yard. */

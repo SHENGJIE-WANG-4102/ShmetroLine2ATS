@@ -25,16 +25,21 @@ describe('fictional test line', () => {
     expect(sim.config.scope?.lineIds).toEqual(['test']);
   });
 
-  it('runs a complete day and its successor with weather, fleet conservation and no integrity violations', () => {
+  it('runs a complete day and its successor with weather, fleet conservation and no integrity violations', async () => {
     let sim = new Sim({ dayType: 'weekday', date: '2026-10-23', dateLabel: '测试', startTime: 14400, seed: 7, autoDispatch: true, autoRadio: true });
     const fleet = () => [...sim.vehicles.keys()].sort();
     const original = fleet();
     const served: number[] = [];
     for (let day = 0; day < 2; day++) {
       sim.command({ c: 'env', wind: 2, rain: true, duration: 86400 });
+      let nextYield = sim.t + 3600;
       while (sim.t < 27.75 * 3600) {
         sim.step();
         if (sim.integrity.violations.length) break;
+        if (sim.t >= nextYield) {
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+          nextYield += 3600;
+        }
       }
       expect(sim.integrity.violations).toEqual([]);
       expect(sim.t).toBeGreaterThanOrEqual(27.75 * 3600);

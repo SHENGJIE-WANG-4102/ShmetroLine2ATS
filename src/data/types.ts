@@ -76,6 +76,8 @@ export interface LoopDef {
     west: number;
     east: number;
     platform?: boolean;
+    /** Permit a protected pull-out and reversal for entry from either main platform. */
+    localEntryShunt?: boolean;
 }
 export interface TailDef {
     station: number;
@@ -261,6 +263,8 @@ export interface CoreLineData {
         berth: number;
         depot?: string;
         incoming?: "UP" | "DN";
+        /** A dispatched callout may run empty to its first boardable station. */
+        emptyCalloutToFirstPlatform?: boolean;
         /** Other real yard sources, in preference order, when the default source cannot supply this standby. */
         alternatives?: { depot: string; incoming: "UP" | "DN" }[];
           /** May remain unassigned, with a reported reason, when no safe slot/source exists. */

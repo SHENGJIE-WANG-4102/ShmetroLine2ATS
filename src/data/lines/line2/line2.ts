@@ -301,7 +301,7 @@ export const LAYOUT = {
   ] as SidingDef[],
   loops: [
     { id: 'GLL', name: '广兰路中间线', station: 22, west: -170, east: 170, platform: true },
-    { id: 'CXZ', name: '创新中路中间线', station: 24, west: -170, east: 170 },
+    { id: 'CXZ', name: '创新中路中间线', station: 24, west: -170, east: 170, localEntryShunt: true },
   ] as LoopDef[],
   /** single crossovers (渡线); a scissors is a '/' and a '\' next to each other */
   crossovers: [
@@ -467,8 +467,8 @@ export const OPERATIONS = {
     { station: 'PDA', track: 'turnback', berth: 0, windows: TERMINAL_STANDBY_WINDOWS, firstReady: true },
     // 主用折返线是科技馆1道（D149），热备放另一条。
     { station: 'KJG', track: 'turnback', berth: 1, depot: 'BZL', incoming: 'DN' },
-    { station: 'CXZ', track: 'storage', berth: 0, depot: 'CSD', incoming: 'UP' },
-  ] as { station: string; track: 'turnback' | 'storage'; berth: number; depot?: string; incoming?: 'UP' | 'DN';
+    { station: 'CXZ', track: 'storage', berth: 0, depot: 'CSD', incoming: 'DN', emptyCalloutToFirstPlatform: true },
+  ] as { station: string; track: 'turnback' | 'storage'; berth: number; depot?: string; incoming?: 'UP' | 'DN'; emptyCalloutToFirstPlatform?: boolean;
     windows?: typeof TERMINAL_STANDBY_WINDOWS; firstReady?: boolean }[],
   /** 用户决定（2026-10-28，D149）：站后折返只用一条主用折返线；另一条只在运行图
    * 要求（长候班、热备）、占用冲突或调度调整时才用。主用的是直通出发正线、出发不
