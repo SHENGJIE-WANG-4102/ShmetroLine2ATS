@@ -145,6 +145,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     trainDoor: doorFault ? 'fault' : tr.doorMotion?.kind === 'closing' ? 'closing' : tr.doorMotion?.kind === 'opening' ? 'opening' : tr.doorsOpen || tr.doorSide ? 'open' : sim.t < (tr.doorLockedAt ?? 0) ? 'closing' : tr.doorsCut > 0 ? 'isolated' : 'closed',
     departureBoard,
     doorsDone: doorsDone(tr),
+    turnHold: turnbackHold(sim, tr),
     // 用户实拍（2026-11-02）：门锁闭后、动车前出现黄色起步箭头
     startReady: tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen && !tr.doorSide
       && !tr.doorMotion && sim.t >= (tr.doorLockedAt ?? 0),
@@ -160,6 +161,22 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
  * 站停时间并刷新下一站。 */
 function doorsDone(tr: Train): boolean {
   return tr.phase === 'dwell' && (tr.doorsOpen && tr.doorMotion?.kind !== 'opening' || (tr.doorLockedAt ?? 0) > tr.arrivedAt);
+}
+
+/** 用户决定（2026-11-02）：折返全程 DMI 显示 HOLD：终点站台清客、在折返股道换端，
+ * 直到在发车站台车门锁闭（实拍 T2060：锁闭后才换成站停时间）。站台换端同样算。 */
+function turnbackHold(sim: Sim, tr: Train): boolean {
+  if (tr.v >= 0.05) return false;
+  if (tr.tbStage !== 'none' || tr.phase === 'reversing') return true;
+  const [first, second] = tr.tasks;
+  if (tr.phase !== 'dwell' || first?.k !== 'stop') return false;
+  if (second?.k === 'reverse') return true;
+  const trip = tr.tripId >= 0 ? sim.plan.trips[tr.tripId] : undefined;
+  const block = trip && sim.plan.blocks[trip.block];
+  if (!trip || !block || trip.from !== first.station) return false;
+  const prev = block.trips.slice(0, block.trips.indexOf(trip.id)).map(id => sim.plan.trips[id]).filter(t => !t.cancelled).at(-1);
+  const locked = doorsDone(tr) && !tr.doorsOpen && !tr.doorMotion && sim.t >= (tr.doorLockedAt ?? 0);
+  return !!prev && prev.to === trip.from && prev.dir !== trip.dir && !locked;
 }
 
 /** Display the working actually being performed, without changing train tasks/MA. */
@@ -209,7 +226,7 @@ function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
 
 /** The block turns back behind the working's terminus: its next revenue trip
  * leaves that station the other way and the station turns back in a tail or
- * siding (a platform change of ends shows no fold). 【假设】回段、存车不算。 */
+ * siding (a platform change of ends shows no fold); depot runs and stabling get none (用户确认). */
 function rearTurnAfter(sim: Sim, trip: Trip): boolean {
   const end = serviceEnd(sim.plan, trip);
   const block = sim.plan.blocks[trip.block];

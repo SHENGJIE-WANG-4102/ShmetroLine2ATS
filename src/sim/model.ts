@@ -417,6 +417,8 @@ export interface DmiData {
   trainDoor: 'closed' | 'opening' | 'closing' | 'open' | 'fault' | 'isolated';
   /** dwelling and the doors have finished opening at this stop (they may be closed again) */
   doorsDone: boolean;
+  /** standing in a turnback: terminal platform, turnback track, departure platform until the doors lock (HOLD) */
+  turnHold: boolean;
   /** doors locked and the automatic start pending (yellow start arrow, M on the brake symbol) */
   startReady: boolean;
   /** signed distance (m) from the head to the stopping point, positive short of it; null when none */

@@ -200,9 +200,9 @@ export class Dmi {
     field(318, '终点站', d?.dest ?? t.dest ?? '—', 148);
     c.textAlign = 'center';
     c.fillStyle = C.white;
-    // 用户实拍（2026-11-02）：扣车时显示 HOLD；否则门开好以后同一位置显示「站停时间」，
+    // 用户实拍（2026-11-02）：扣车、折返（直到发车站台门锁闭，用户决定）显示 HOLD；否则门开好以后同一位置显示「站停时间」，
     // 倒计时到 DEP（取整秒向下）。进站、开门过程中和区间运行都不显示。
-    if (t.hold || !!d?.departureBoard?.held) {
+    if (t.hold || !!d?.departureBoard?.held || !!d?.turnHold) {
       c.font = `bold 20px ${FONT}`;
       c.fillText('HOLD', 456, 50);
     } else if (d?.doorsDone && d.dep >= 0) {
@@ -404,7 +404,7 @@ export class Dmi {
 
   private statusRow(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, now: number) {
     const y = 460;
-    // 用户实拍（2026-11-02）：起步前约 2 s（DEP 前）B 变 M；【假设】惰行也算 M，制动、静止为 B
+    // 用户实拍（2026-11-02）：起步前约 2 s（DEP 前）B 变 M；惰行也算 M（用户同意），制动、静止为 B
     const motor = !!d?.startReady && d.dep >= 0 && d.dep - now <= 2 || t.a > 0.05 || t.v > 0.05 && t.a >= -0.12;
     wheel(c, 62, y, motor ? 'M' : 'B');
     c.fillStyle = C.white;
