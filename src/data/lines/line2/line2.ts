@@ -478,7 +478,7 @@ export const OPERATIONS = {
     GJH: '国家会展中心2道尽头线',
     SHR: '淞虹路2道（出入段线）',
     KJG: '上海科技馆1道折返线',
-    PDA: '浦东1号2号航站楼上行尾轨',
+    PDA: '浦东1号2号航站楼下行尾轨',
   } as Record<string, string>,
   /** a train passing a platform without stopping (跨站/跳停) runs through it at no more than this (km/h) */
   platformPassKmh: 45,
