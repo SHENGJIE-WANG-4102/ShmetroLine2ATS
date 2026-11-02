@@ -109,7 +109,7 @@ export const SOURCES: SourceRef[] = [
  * terminus versus 61 940 m in the table (1 m rounding).
  */
 export const STATIONS: StationData[] = [
-  { id: 'PXL', name: '蟠祥路·国家会计学院', interM: null, transfers: [], dwell: 20, demand: 0.35, pisLayout: 'wide' },
+  { id: 'PXL', name: '蟠祥路·国家会计学院', dmiName: '蟠祥路', interM: null, transfers: [], dwell: 20, demand: 0.35, pisLayout: 'wide' },
   { id: 'GJH', name: '国家会展中心', formerName: '徐泾东', interM: 1640, transfers: ['17'], dwell: 20, demand: 0.7, pisLayout: 'wide' },
   { id: 'HQZ', name: '虹桥火车站', interM: 1842, transfers: ['10', '17', '机场联络线', '国铁'], dwell: 25, demand: 1.6 },
   { id: 'HQ2', name: '虹桥2号航站楼', interM: 690, transfers: ['10', '机场联络线'], dwell: 20, demand: 1.0 },

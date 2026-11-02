@@ -178,7 +178,7 @@ export class Dmi {
     this.topBar(c, t, d, now);
     this.dial(c, v, vp, eb, over, t);
     this.rightColumn(c, t, d, eb);
-    this.statusRow(c, t, d);
+    this.statusRow(c, t, d, now);
     this.bottom(c, d, now);
 
     this.curNotch = t.notch;
@@ -200,11 +200,15 @@ export class Dmi {
     field(318, '终点站', d?.dest ?? t.dest ?? '—', 148);
     c.textAlign = 'center';
     c.fillStyle = C.white;
-    // HOLD: 用户确认 shown while an ATO/DTO train stands still; also while the train
-    // or its platform is held (扣车) in any mode
-    const hold = (t.mode === 'DTO' || t.mode === 'AM') && t.v < 0.05 || t.hold || !!d?.departureBoard?.held;
-    c.font = `bold 20px ${FONT}`;
-    c.fillText(hold ? 'HOLD' : '', 456, 50);
+    // 用户实拍（2026-11-02）：扣车时显示 HOLD；否则门开好以后同一位置显示「站停时间」，
+    // 倒计时到 DEP（取整秒向下）。进站、开门过程中和区间运行都不显示。
+    if (t.hold || !!d?.departureBoard?.held) {
+      c.font = `bold 20px ${FONT}`;
+      c.fillText('HOLD', 456, 50);
+    } else if (d?.doorsDone && d.dep >= 0) {
+      field(456, '站停时间', String(Math.max(0, Math.floor(d.dep - now))), 110);
+      c.textAlign = 'center';
+    }
     c.font = `bold 23px ${FONT}`;
     c.fillText(d?.trainNo ?? '', 556, 40);
     c.font = `22px ${FONT}`;
@@ -220,8 +224,8 @@ export class Dmi {
     c.font = `20px ${FONT}`;
     c.fillText('DEP', 563, 86);
     c.font = `bold 22px ${FONT}`;
-    c.fillText(d && d.dep >= 0 ? fmtTime(d.dep) : '--:--:--', 563, 113);
-    void now;
+    // 用户实拍：DEP 也是门开好以后才出现，动车后清空
+    c.fillText(d?.doorsDone && d.dep >= 0 ? fmtTime(d.dep) : '', 563, 113);
   }
 
   // ------------------------------------------------------------ speedometer
@@ -322,21 +326,27 @@ export class Dmi {
     c.strokeRect(513, 238, 95, 12);
     c.font = `17px ${FONT}`;
     c.textAlign = 'center';
-    c.fillText(Number.isFinite(t.stopDist) && t.stopDist >= 0 ? `${Math.round(t.stopDist)}m` : '--m', 560, 270, 95);
+    // 用户实拍（2026-11-02）：横条下的数用来对标，停准时如 -0.04m（到停车点的带符号距离）
+    const err = d?.stopErr;
+    c.fillText(err != null ? `${err.toFixed(2)}m` : Number.isFinite(t.stopDist) && t.stopDist >= 0 ? `${Math.round(t.stopDist)}m` : '--m', 560, 270, 95);
     c.textAlign = 'left';
     const state = eb ? 'eb' : t.a > 0.05 ? 'traction' : t.a < -0.12 && t.v > 0.05 ? 'brake' : 'coast';
     // 用户实拍（2026-11-02）：车头图标只在列车静止时显示，动车后消失
     if (t.v < 0.05) trainFront(c, 656, 214, state);
+    if (t.v < 0.05 && d?.startReady) startArrow(c, 693, 290);
     // Two distinct symbols: train doors always above AA; PSD only on a platform.
     // 用户确认：photograph shows OPEN leaves; closed leaves meet.
     // Train doors are white, PSD yellow in the reference.
     // Fault, isolation and lock-confirmation colours remain【假设】.
     const td = d?.trainDoor ?? (t.doors || t.doorSide ? 'open' : 'closed');
-    const tc = td === 'fault' ? C.red : td === 'closing' ? C.dim : td === 'isolated' ? '#ff9a2a' : C.white;
+    const tc = td === 'fault' ? C.red : td === 'isolated' ? '#ff9a2a' : C.white;
     // closeDoors clears the open bit when closing STARTS. The symbol must
     // remain separated until the physical close/lock confirmation completes.
-    const doorOpen = td === 'open' || td === 'closing' || t.doors || !!t.doorSide;
-    for (const x of doorOpen ? [518, 567] : [523, 555]) doorLeaf(c, x, 285, 34, 52, tc, false);
+    // 用户实拍（2026-11-02）：关门时两扇门里各一个向中间的箭头，开门时向外
+    const doorOpen = td === 'open' || td === 'closing' || td === 'opening' || t.doors || !!t.doorSide;
+    const moving = td === 'closing' || td === 'opening';
+    (doorOpen ? [518, 567] : [523, 555]).forEach((x, i) => doorLeaf(c, x, 285, 34, 52, tc, false,
+      !moving ? undefined : (i === 0) === (td === 'closing') ? 1 : -1));
     if (td === 'fault' || td === 'isolated') {
       c.strokeStyle = tc; c.lineWidth = 3;
       c.beginPath(); c.moveTo(516, 339); c.lineTo(603, 283);
@@ -349,7 +359,8 @@ export class Dmi {
     c.font = `bold 42px ${FONT}`;
     c.fillText(t.mode === 'DTO' || t.mode === 'AM' ? 'AA' : 'MM', 527, 400);
     const pc = psd === 'fault' ? C.red : psd === 'bypass' ? '#ff9a2a' : C.yellow;
-    for (const x of psd === 'none' ? [] : psd === 'open' ? [663, 697] : [669, 691]) {
+    // 用户实拍（2026-11-02）：站台门图标在车门开好以后才出现，关门锁闭后消失；故障、旁路照常显示
+    for (const x of psd === 'fault' || psd === 'bypass' ? [669, 691] : psd === 'open' && d?.doorsDone ? [663, 697] : []) {
       c.strokeStyle = pc;
       c.lineWidth = 3;
       c.strokeRect(x, 358, 22, 52);
@@ -391,9 +402,11 @@ export class Dmi {
 
   // ------------------------------------------------------------ row under the dial
 
-  private statusRow(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null) {
+  private statusRow(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, now: number) {
     const y = 460;
-    wheel(c, 62, y);
+    // 用户实拍（2026-11-02）：起步前约 2 s（DEP 前）B 变 M；【假设】惰行也算 M，制动、静止为 B
+    const motor = !!d?.startReady && d.dep >= 0 && d.dep - now <= 2 || t.a > 0.05 || t.v > 0.05 && t.a >= -0.12;
+    wheel(c, 62, y, motor ? 'M' : 'B');
     c.fillStyle = C.white;
     c.font = `bold 26px ${FONT}`;
     c.textAlign = 'left';
@@ -483,7 +496,7 @@ function scrollButton(c: CanvasRenderingContext2D, b: { x: number; y: number; w:
 }
 
 /** wheel / axle status: scalloped ring with a letter (Line 2 photos) on an axle line (Casco) */
-function wheel(c: CanvasRenderingContext2D, x: number, y: number) {
+function wheel(c: CanvasRenderingContext2D, x: number, y: number, glyph: 'B' | 'M') {
   c.strokeStyle = C.white;
   c.fillStyle = C.white;
   c.lineWidth = 3;
@@ -492,11 +505,11 @@ function wheel(c: CanvasRenderingContext2D, x: number, y: number) {
   c.moveTo(x - 26, y - 13); c.lineTo(x - 26, y + 13); c.moveTo(x + 26, y - 13); c.lineTo(x + 26, y + 13); c.stroke();
   c.beginPath(); c.arc(x, y, 20, 0, Math.PI * 2); c.stroke();
   c.beginPath(); c.arc(x, y, 15, 0, Math.PI * 2); c.lineWidth = 2; c.stroke();
-  // the glyph inside reads as "B" on both Line 2 photos (blurry: see README)
+  // B standing / braking, M from the start (user photos 2026-11-02)
   c.font = `bold 24px ${LATIN}`;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
-  c.fillText('B', x, y + 1);
+  c.fillText(glyph, x, y + 1);
   c.textAlign = 'left';
   c.textBaseline = 'alphabetic';
 }
@@ -535,15 +548,31 @@ function trainFront(c: CanvasRenderingContext2D, x: number, y: number, state: 't
   c.fill();
 }
 
-/** a platform screen door leaf: outline with a glazed upper half */
-function doorLeaf(c: CanvasRenderingContext2D, x: number, y: number, w: number, hh: number, col: string, open: boolean) {
+/** a door leaf: outline with a glazed upper half, or an arrow (+1 right, -1 left) while moving */
+function doorLeaf(c: CanvasRenderingContext2D, x: number, y: number, w: number, hh: number, col: string, open: boolean, arrow?: 1 | -1) {
   c.strokeStyle = col;
   c.lineWidth = 3;
   roundRect(c, x, y, w, hh, 3);
   c.stroke();
   c.fillStyle = col;
-  if (open) c.fillRect(x + 5, y + 5, w - 10, hh - 10);
+  if (arrow) {
+    const cx = x + w / 2, cy = y + hh / 3, tip = cx + arrow * 11;
+    c.beginPath(); c.moveTo(cx - arrow * 11, cy); c.lineTo(tip - arrow * 4, cy); c.stroke();
+    c.beginPath(); c.moveTo(tip, cy); c.lineTo(tip - arrow * 9, cy - 7); c.lineTo(tip - arrow * 9, cy + 7); c.closePath(); c.fill();
+  } else if (open) c.fillRect(x + 5, y + 5, w - 10, hh - 10);
   else c.fillRect(x + 6, y + 6, w - 12, hh / 2 - 8);
+}
+
+/** yellow start arrow under the cab front: doors locked, automatic start pending (user photos 2026-11-02) */
+function startArrow(c: CanvasRenderingContext2D, x: number, y: number) {
+  // one outline: a flat head, a narrow neck, then a base flaring out wider than the head
+  c.fillStyle = C.yellow;
+  c.beginPath();
+  c.moveTo(x, y);
+  c.lineTo(x + 45, y + 20); c.lineTo(x + 24, y + 20); c.lineTo(x + 47, y + 62);
+  c.lineTo(x - 47, y + 62); c.lineTo(x - 24, y + 20); c.lineTo(x - 45, y + 20);
+  c.closePath();
+  c.fill();
 }
 
 /** stopping-window hexagon (vertical): green bands show where the train is relative to the stopping point */

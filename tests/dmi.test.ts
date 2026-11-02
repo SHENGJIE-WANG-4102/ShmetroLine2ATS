@@ -47,7 +47,7 @@ describe('Line 2 photographed cab content',()=>{
   t.destStation=airport;
   t.tasks=[{k:'stop',station:airport,berth,trip:-1,arr:null,dep:null,doors:true,revenue:true},
    {k:'reverse',station:airport,berths:turn.berths,chosen:turn.berths[0],minTime:40}];
-  t.phase='run';
+  t.phase='run';t.tripId=-1;
   expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼');
   expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼');
   t.phase='dwell';t.link=s.topo.berths[berth].link;
@@ -72,18 +72,26 @@ describe('Line 2 photographed cab content',()=>{
   expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼');
   // standing at the departure platform: the real terminus
   t.link=s.topo.berths[depBerth].link;t.phase='dwell';t.tbStage='none';
+  // 用户实拍（2026-11-02）：门开好以后才刷新下一站
+  expect(computeDmi(s,t.id)?.next).toBe('');
+  t.doorsOpen=true;
   expect(computeDmi(s,t.id)?.next).toBe(STATIONS[departure.to].dmiName??STATIONS[departure.to].name);
+  t.doorsOpen=false;
   const end=serviceEnd(s.plan,departure);
   expect(end).toBeDefined();
-  expect(computeDmi(s,t.id)?.dest).toBe(STATIONS[end!].dmiName??STATIONS[end!].name);
+  // 用户确认（2026-11-02）：终点站在站后折返的写「xxx折」
+  const back=s.plan.blocks[departure.block].trips.slice(s.plan.blocks[departure.block].trips.indexOf(departure.id)+1).map(id=>s.plan.trips[id]).find(x=>!x.cancelled&&x.from===end);
+  const fold=back&&back.revenue&&back.dir!==departure.dir&&turnbackAt(s.topo,end!,departure.dir)?.kind==='rear'?'折':'';
+  expect(computeDmi(s,t.id)?.dest).toBe((STATIONS[end!].dmiName??STATIONS[end!].name)+fold);
   // stabled overnight in the tail: turned back there, the same until it stands at the platform
   t.link=s.topo.berths[turn.berths[0]].link;t.phase='run';t.tbStage='none';t.v=0;
   t.tasks=[{k:'stop',station:airport,berth:depBerth,trip:departure.id,arr:null,dep:s.t+3600,doors:true,revenue:true,stabledOut:true},
    {k:'stop',station:departure.to,berth:platformBerth(s.topo,departure.to,'UP'),trip:departure.id,arr:null,dep:null,doors:true,revenue:true}];
   expect(computeDmi(s,t.id)).toMatchObject({next:'浦东1_2航站楼',dest:'浦东1_2航站楼'});
+  // standing at the departure platform, doors not yet open: 下一站 blank (用户实拍 2026-11-02)
   t.link=s.topo.berths[depBerth].link;
-  expect(computeDmi(s,t.id)?.next).toBe(STATIONS[departure.to].dmiName??STATIONS[departure.to].name);
-  t.tasks=[{k:'stop',station:airport,berth,trip:-1,arr:null,dep:null,doors:true,revenue:true}];t.destStation=airport;
+  expect(computeDmi(s,t.id)?.next).toBe('');
+  t.tasks=[{k:'stop',station:airport,berth,trip:-1,arr:null,dep:null,doors:true,revenue:true}];t.destStation=airport;t.tripId=-1;
   expect(computeDmi(s,t.id)?.next).toBe('浦东1_2航站楼');
   expect(computeDmi(s,t.id)?.dest).toBe('浦东1_2航站楼');
   const other=STATIONS.findIndex(st=>st.id==='SHR');
@@ -125,7 +133,7 @@ describe('Line 2 photographed cab content',()=>{
    {k:'stop',station:6,berth:turn.depBerth,trip:trip.id,arr:null,dep:s.t+60,doors:true,revenue:true},
    {k:'stop',station:7,berth:platformBerth(s.topo,7,'DN'),trip:trip.id,arr:null,dep:null,doors:true,revenue:true}];
   expect(computeDmi(s,t.id)?.next).toBe(STATIONS[7].name);
-  expect(computeDmi(s,t.id)?.dest).not.toContain('折');
+  expect(computeDmi(s,t.id)?.dest).not.toBe(`${STATIONS[6].dmiName??STATIONS[6].name}折`);
   for(const p of s.topo.platforms){
    const b=s.topo.berths.find(b=>b.platform===p.id&&!b.reverse)!;
    if(!b)continue;

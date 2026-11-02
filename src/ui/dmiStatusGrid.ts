@@ -118,7 +118,7 @@ export function drawStatusGrid(c: CanvasRenderingContext2D, t: TrainSnap, d: Dmi
   c.textAlign = 'left';
   text('列车门', 494, 70, 18); text('站台门', 580, 70, 18);
   const door = (x: number, state: string) => {
-    const open = state === 'open' || state === 'closing';
+    const open = state === 'open' || state === 'closing' || state === 'opening';
     const col = state === 'fault' ? RED : state === 'none' ? '#555a60' : '#b9c3d6';
     c.fillStyle = col; c.fillRect(x, 92, 12, 42); c.fillRect(x + (open ? 26 : 15), 92, 12, 42);
   };

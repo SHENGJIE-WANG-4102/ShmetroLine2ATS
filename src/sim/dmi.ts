@@ -4,11 +4,11 @@
  * the regular train snapshot.
  */
 import type { Sim } from './engine';
-import type { DmiData, DmiMsg, Level, Mode, Train, StopTask } from './model';
+import type { DmiData, DmiMsg, Level, Mode, Train, StopTask, Trip } from './model';
 import { LINE, STATIONS, fleetEntry } from '../data/current';
 import { stopError } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
-import { effectiveStops, serviceEnd } from './timetable';
+import { effectiveStops, serviceEnd, turnbackAt } from './timetable';
 import { signalAheadFrom, platformSide, dwellDepartureAt } from './ats';
 import { trainLevel } from './energy';
 
@@ -142,13 +142,24 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     dwellTotal: dwelling ? Math.max(1, dep - tr.phaseSince) : 0,
     avail: availableMode(sim, tr),
     psd,
-    trainDoor: doorFault ? 'fault' : tr.doorMotion?.kind === 'closing' ? 'closing' : tr.doorsOpen || tr.doorSide ? 'open' : sim.t < (tr.doorLockedAt ?? 0) ? 'closing' : tr.doorsCut > 0 ? 'isolated' : 'closed',
+    trainDoor: doorFault ? 'fault' : tr.doorMotion?.kind === 'closing' ? 'closing' : tr.doorMotion?.kind === 'opening' ? 'opening' : tr.doorsOpen || tr.doorSide ? 'open' : sim.t < (tr.doorLockedAt ?? 0) ? 'closing' : tr.doorsCut > 0 ? 'isolated' : 'closed',
     departureBoard,
+    doorsDone: doorsDone(tr),
+    // 用户实拍（2026-11-02）：门锁闭后、动车前出现黄色起步箭头
+    startReady: tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen && !tr.doorSide
+      && !tr.doorMotion && sim.t >= (tr.doorLockedAt ?? 0),
+    stopErr: Number.isFinite(err) ? err : null,
     stopWin: win,
     vEbi: tr.vEbi,
     maDist: Number.isFinite(tr.maDist) ? tr.maDist : -1,
     date: calendarDate(sim.config.date, sim.t),
   };
+}
+
+/** 用户实拍（2026-11-02）：本站门开好以后（之后关门也算）才显示站台门状态、DEP、
+ * 站停时间并刷新下一站。 */
+function doorsDone(tr: Train): boolean {
+  return tr.phase === 'dwell' && (tr.doorsOpen && tr.doorMotion?.kind !== 'opening' || (tr.doorLockedAt ?? 0) > tr.arrivedAt);
 }
 
 /** Display the working actually being performed, without changing train tasks/MA. */
@@ -186,9 +197,26 @@ function workingNames(sim: Sim, tr: Train): { next: string; dest: string } {
   if (nextWorking && !trip) dest = name(after.at(-1)?.station ?? tr.destStation);
   // A platform-only reversal changes at once to the next working: its next
   // call and real terminus (用户确认).
-  const next = nextWorking ? after[1]
-    : (tr.phase === 'dwell' || atOrigin) && first?.k === 'stop' && first.dep !== null ? stops[1] : stops[0];
-  return { next: next ? name(next.station) : '—', dest };
+  // 下一站 refreshes to the following call only once the doors are fully open
+  // (用户实拍 2026-11-02); at the origin platform it is blank until then.
+  const dwellHere = (tr.phase === 'dwell' || atOrigin) && first?.k === 'stop' && first.dep !== null;
+  const next = nextWorking ? after[1] : dwellHere && doorsDone(tr) ? stops[1] : dwellHere && atOrigin ? undefined : stops[0];
+  // 用户确认（2026-11-02）：终点站在站后折返的，整趟都写「xxx折」。
+  const working = trip ?? (tr.tripId >= 0 ? sim.plan.trips[tr.tripId] : undefined);
+  if (working && dest !== '—' && !dest.endsWith('折') && rearTurnAfter(sim, working)) dest += '折';
+  return { next: next ? name(next.station) : dwellHere && atOrigin ? '' : '—', dest };
+}
+
+/** The block turns back behind the working's terminus: its next revenue trip
+ * leaves that station the other way and the station turns back in a tail or
+ * siding (a platform change of ends shows no fold). 【假设】回段、存车不算。 */
+function rearTurnAfter(sim: Sim, trip: Trip): boolean {
+  const end = serviceEnd(sim.plan, trip);
+  const block = sim.plan.blocks[trip.block];
+  if (end === undefined || !block) return false;
+  const next = block.trips.slice(block.trips.indexOf(trip.id) + 1).map(id => sim.plan.trips[id])
+    .find(t => !t.cancelled && t.from === end);
+  return !!next && next.revenue && next.dir !== trip.dir && turnbackAt(sim.topo, end, trip.dir)?.kind === 'rear';
 }
 
 function calendarDate(iso: string | undefined, t: number): string {

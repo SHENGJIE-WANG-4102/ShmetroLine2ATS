@@ -414,7 +414,13 @@ export interface DmiData {
   /** highest mode the equipment could offer now */
   avail: { mode: Mode; level: Level };
   psd: 'none' | 'closed' | 'open' | 'fault' | 'bypass';
-  trainDoor: 'closed' | 'closing' | 'open' | 'fault' | 'isolated';
+  trainDoor: 'closed' | 'opening' | 'closing' | 'open' | 'fault' | 'isolated';
+  /** dwelling and the doors have finished opening at this stop (they may be closed again) */
+  doorsDone: boolean;
+  /** doors locked and the automatic start pending (yellow start arrow, M on the brake symbol) */
+  startReady: boolean;
+  /** signed distance (m) from the head to the stopping point, positive short of it; null when none */
+  stopErr: number | null;
   /** Platform sign, located from the departure signal; never a DMI countdown. */
   departureBoard?: { at: number; signalName: string; signalOffset: number; aspect: Aspect;
     held: boolean; headLeftAt?: number; remaining: number; side: '' | 'L' | 'R'; station: number };
