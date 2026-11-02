@@ -15,7 +15,7 @@
  *    that node ("entry key" = node*65536 + link).
  */
 import {
-  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, OPERATIONS, stationChainages,
+  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, OPERATIONS, stationChainages, DIRECTIONS,
   type CrossoverKind, type SidingLane, type LeadDef,
 } from '../data/current';
 
@@ -1113,7 +1113,7 @@ export function buildTopology(): Topology {
       if (lid === undefined) throw new Error(`platform link not found for ${STATIONS[i].name} ${t}`);
       const p: TPlatform = {
         id: platforms.length, station: i, track: t, link: lid, section: links[lid].section,
-        name: `${STATIONS[i].name} ${t === 'DN' ? '下行' : '上行'}站台`,
+        name: `${STATIONS[i].name} ${DIRECTIONS[t].label}站台`,
         // UP runs north of DN: an island lies between them, a side platform outside
         face: (STATIONS[i].sidePlatform?.includes(t) ?? false) === (t === 'UP') ? 'N' : 'S',
       };
@@ -1284,13 +1284,13 @@ export function buildTopology(): Topology {
       if (lid === undefined) throw new Error(`Invalid tail turnback position at ${STATIONS[ti.station].id}/${t}`);
       const l = links[lid];
       const offset = stopCh === undefined ? (dir === -1 ? 15 : l.len - 15) : stopCh - l.chainA;
-      const id = addBerth({ kind: 'tail', link: lid, offset, dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${t === 'DN' ? '下行' : '上行'}尾轨` });
+      const id = addBerth({ kind: 'tail', link: lid, offset, dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${DIRECTIONS[t].label}尾轨` });
       if (ti.turnback) stationTurnback[ti.station].push(id);
       if (ti.turnback && stopCh !== undefined) {
         const deepId = dir === -1 ? mainLinks[t][0] : mainLinks[t][mainLinks[t].length - 1];
         const deep = links[deepId];
         stationRescue[ti.station].push(addBerth({ kind: 'tail', link: deepId, offset: dir === -1 ? 15 : deep.len - 15,
-          dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${t === 'DN' ? '下行' : '上行'}尾轨(救援)` }));
+          dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${DIRECTIONS[t].label}尾轨(救援)` }));
       }
       // A storage-only tail on the track that leaves away from the buffer
       // (蟠祥路 下行) holds two trains, one on each of its links: they go out
@@ -1299,7 +1299,7 @@ export function buildTopology(): Topology {
       const innerId = dir === -1 ? mainLinks[t][1] : mainLinks[t][mainLinks[t].length - 2];
       if (!ti.turnback && away && links[innerId].len >= LINE_INFO.trainLength + 30) {
         const il = links[innerId];
-        const inner = addBerth({ kind: 'tail', link: innerId, offset: dir === -1 ? 15 : il.len - 15, dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${t === 'DN' ? '下行' : '上行'}尾轨(内)` });
+        const inner = addBerth({ kind: 'tail', link: innerId, offset: dir === -1 ? 15 : il.len - 15, dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${DIRECTIONS[t].label}尾轨(内)` });
         stationStorage[ti.station].push(inner, id);
       }
     }

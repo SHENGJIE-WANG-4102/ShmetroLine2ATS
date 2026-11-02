@@ -10,7 +10,7 @@ import { CommandPanel, type PanelHooks } from './cmdpanel';
 import { confirmAndSend, toast, showIntegritySnapshot } from './confirm';
 import { FAULT_LABELS } from '../sim/faults';
 import { SCENARIOS, RANDOM_LEVELS } from '../sim/scenario';
-import { LINE, STATIONS, LINE_INFO, WEATHER_RULES, unattended } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, DIRECTIONS, WEATHER_RULES, unattended } from '../data/current';
 import type { FaultKind, RadioCall, SimEvent } from '../sim/model';
 import type { Audio } from './audio';
 import { inverterMode, type VvvfMode } from './vvvf';
@@ -338,7 +338,7 @@ export class SidePanel {
           const [label, style] = STATE[c.state];
           return h('tr', { style: tr ? 'cursor:pointer' : '', onclick: () => { if (tr) { this.store.select({ kind: 'train', id: tr.id }); this.hooks.locate(); } } },
             h('td', {}, STATIONS[c.st].name),
-            h('td', {}, c.kind === 'feed' ? `${line(c)} → ${LINE.branding.shortName}${c.dir === 'DN' ? '下行' : '上行'}` : `${LINE.branding.shortName}${c.dir === 'DN' ? '下行' : '上行'} → ${line(c)}`),
+            h('td', {}, c.kind === 'feed' ? `${line(c)} → ${LINE.branding.shortName}${DIRECTIONS[c.dir].label}` : `${LINE.branding.shortName}${DIRECTIONS[c.dir].label} → ${line(c)}`),
             h('td', { class: 'mono' }, hm(c.kind === 'feed' ? c.planned + 30 : c.planned)),
             h('td', { class: 'mono' }, `${hm(c.l2)}${tr && tr.delay > 60 ? `（晚${Math.round(tr.delay / 60)}′）` : ''}`),
             h('td', { style }, label));

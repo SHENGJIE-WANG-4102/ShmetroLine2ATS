@@ -17,7 +17,7 @@ import { cancelTrip, type Block, type DayType, type Plan, type PlanStop, type St
 import { plannedDwell } from './calibration';
 import { STATIONS, OPERATIONS, LINE_INFO, SIMULATION, stationOpened, type FixedRun } from '../data/current';
 import { FIXED_LATE_TRAINS } from '../data/current';
-import { FIRST_LAST } from '../data/current';
+import { FIRST_LAST, DIRECTIONS } from '../data/current';
 import type { ClockBand } from '../data/simulation';
 import { plannedWaiting } from './plannedWaiting';
 import { plannedNormalWork, plannedWaitLong, plannedWaitBerth } from './plannedWaitBerth';
@@ -4637,7 +4637,7 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
         && topo.berths[duty.end.berth].platform!==berth.platform) continue;
       if (trip.to === station && next?.dir === 'UP' && turnbackAt(topo, station, 'DN')?.kind === 'rear') continue;
       if (stop && (stop.dep >= arrived - MIN_HEADWAY || stop.arr < departure + MIN_HEADWAY))
-        out.push({ severity: 'error', code: 'STABLE_CONFLICT', t: stop.arr, blocks: [block.id, trip.block], text: `${name(station)} 下行正线存车与 ${trip.no}（${trip.revenue ? '载客' : '空驶'}）冲突` });
+        out.push({ severity: 'error', code: 'STABLE_CONFLICT', t: stop.arr, blocks: [block.id, trip.block], text: `${name(station)} ${DIRECTIONS.DN.label}正线存车与 ${trip.no}（${trip.revenue ? '载客' : '空驶'}）冲突` });
     }
   }
   for (const t of live) {
@@ -4661,7 +4661,7 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
       const storedTurn = a.standby && hotStandbyPlaces(topo).some(p=>p.station===a.to&&p.depot
         &&storageArrivalBerth(topo,p.berth,a.dir)!==undefined);
       if (a.dir !== d.dir && !turnbackAt(topo,a.to,a.dir) && !storedTurn)
-        out.push({severity:'error',code:'TURN_UNAVAILABLE',t:arr,blocks:[b.id],text:`${name(a.to)} 无${a.dir==='DN'?'下行':'上行'}到达换端条件（${a.no}→${d.no}）`});
+        out.push({severity:'error',code:'TURN_UNAVAILABLE',t:arr,blocks:[b.id],text:`${name(a.to)} 无${DIRECTIONS[a.dir].label}到达换端条件（${a.no}→${d.no}）`});
       if (a.dir !== d.dir && dep - arr < minTurn(a.to) - 1e-6) out.push({ severity: 'error', code: 'TURN_SHORT', t: arr, text: `车底 ${b.svc} 在 ${name(a.to)} 折返仅 ${(dep - arr).toFixed(1)} s（${a.no}→${d.no}，最小 ${minTurn(a.to)} s）` });
       if (a.dir !== d.dir && !storedTurn && !frontTurnClear(ctx, live, a, dep, new Set(ts.map(trip => trip.id))))
         out.push({severity:'error',code:'FRONT_CONFLICT',t:arr,blocks:[b.id],text:`${name(a.to)} 站前折返占用时段与正常方向列车冲突`});
@@ -4742,7 +4742,7 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
           reported = list[i].t;
           // the design headway is the hard limit: a plan below it cannot run
           // to time (the operating headways the templates keep are far wider)
-          out.push({ severity: 'error', code: 'HEADWAY', gap: h, t: list[i].t, blocks: [list[i-1].block,list[i].block], text: `${name(st)} ${dir === 'DN' ? '下行' : '上行'} ${list[i - 1].no}/${list[i].no} 间隔 ${Math.round(h)} s（最小 ${MIN_HEADWAY} s）` });
+          out.push({ severity: 'error', code: 'HEADWAY', gap: h, t: list[i].t, blocks: [list[i-1].block,list[i].block], text: `${name(st)} ${DIRECTIONS[dir].label} ${list[i - 1].no}/${list[i].no} 间隔 ${Math.round(h)} s（最小 ${MIN_HEADWAY} s）` });
         }
       }
     }

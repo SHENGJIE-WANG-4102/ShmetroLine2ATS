@@ -265,7 +265,7 @@ function build(station: number, track: TrackDir): Board {
     h('i'), h('span', {}, STATIONS[i].name))));
   const load = h('div', { class: 'pm-load' });
   const media = h('div', { class: 'pis-media' },
-    h('div', { class: 'pm-head' }, h('img', { src: metroLogo, alt: '' }), lineBadge(), h('span', {}, `${track === 'DN' ? '下行' : '上行'}站台`)),
+    h('div', { class: 'pm-head' }, h('img', { src: metroLogo, alt: '' }), lineBadge(), h('span', {}, `${DIRECTIONS[track].label}站台`)),
     h('div', { class: 'pm-name' }, s.name), h('div', { class: 'pm-towards' }, towards), strip, load);
   const ticker = h('div', { class: 'pis-ticker' });
   const bar = h('div', { class: 'pis-bar' }, lineBadge(), ticker);

@@ -12,7 +12,7 @@ import { CanvasTextMetrics, Container, Graphics, Text, type FederatedPointerEven
 import type { Topology } from '../sim/topology';
 import type { Snapshot, TrainSnap } from '../sim/model';
 import { SEC, SW, PLT, SIG_ASPECT } from '../sim/model';
-import { LINE, STATIONS, LINE_INFO, stationOpened } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, DIRECTIONS, stationOpened } from '../data/current';
 import { formatTrainNumber } from './trainNumber';
 import { formatDrivingMode } from './drivingMode';
 import type { Store, Selection } from './store';
@@ -304,13 +304,13 @@ export class TrackView {
         this.addStatic({ t, kind, prio: 50, wx: x, wy: y, cands: [{ dx: 0, dy: -12 }], w: textWidth(s, 20), h: 24, minZoom: 0 });
       };
       if (!detail) {
-        lab('◀ 上行', 14, rd.top + L.upY, 'dir');
-        lab('下行 ▶', 14, rd.top + L.dnY, 'dir');
+        lab(`◀ ${DIRECTIONS.UP.label}`, 14, rd.top + L.upY, 'dir');
+        lab(`${DIRECTIONS.DN.label} ▶`, 14, rd.top + L.dnY, 'dir');
         if (r < geom.rows.length - 1) lab(`接第${r + 2}行`, rd.x1 + 12, rd.top + L.midY, 'cont', C.line);
         if (r > 0) lab(`接第${r}行`, 14, rd.top + L.midY, 'cont', C.line);
       } else {
-        lab('◀ 上行', 14, rd.top + L.upY, 'dir');
-        lab('下行 ▶', 14, rd.top + L.dnY, 'dir');
+        lab(`◀ ${DIRECTIONS.UP.label}`, 14, rd.top + L.upY, 'dir');
+        lab(`${DIRECTIONS.DN.label} ▶`, 14, rd.top + L.dnY, 'dir');
       }
     });
     for (const z of topo.zones) {

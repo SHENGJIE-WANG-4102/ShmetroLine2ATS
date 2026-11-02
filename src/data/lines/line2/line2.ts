@@ -199,13 +199,13 @@ export const FLEET: { no: string; type: string; n: number }[] = FLEET_TYPES.flat
 
 
 /**
- * 上行 / 下行 convention used throughout the UI. The real Shanghai Metro
- * labelling for Line 2 is not stated in the sources; here 下行 = eastbound
- * (towards 浦东1号2号航站楼), 上行 = westbound (approximation).
+ * 上行 / 下行 labels shown in the UI. User-confirmed (2026-11-02): towards
+ * 浦东1号2号航站楼 is 上行, towards 国家会展中心 / 蟠祥路 is 下行. The internal
+ * DN / UP codes only mean increasing / decreasing station index.
  */
 export const DIRECTIONS = {
-  DN: { label: '下行', towards: '往浦东1号2号航站楼', prefix: 'X' },
-  UP: { label: '上行', towards: '往蟠祥路·国家会计学院', prefix: 'S' },
+  DN: { label: '上行', towards: '往浦东1号2号航站楼', prefix: 'S' },
+  UP: { label: '下行', towards: '往蟠祥路·国家会计学院', prefix: 'X' },
 } as const;
 
 // ---------------------------------------------------------------------------

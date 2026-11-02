@@ -15,13 +15,13 @@
 import type { Sim } from './engine';
 import type { Connection, StopTask, TrackDir, Train, Trip } from './model';
 export type { Connection };
-import { STATIONS, LINE_INFO } from '../data/current';
+import { STATIONS, LINE_INFO, DIRECTIONS } from '../data/current';
 import { OTHER_LAST_TRAINS } from '../data/current';
 import { parseIso } from './calendar';
 import { trainLabel } from './ats';
 import { effectiveStops } from './timetable';
 
-const DIR_NAME: Record<TrackDir, string> = { DN: '下行', UP: '上行' };
+const DIR_NAME: Record<TrackDir, string> = { DN: DIRECTIONS.DN.label, UP: DIRECTIONS.UP.label };
 
 export function hhmm(t: number): string {
   return `${String(Math.floor(t / 3600) % 24).padStart(2, '0')}:${String(Math.floor((t % 3600) / 60)).padStart(2, '0')}`;

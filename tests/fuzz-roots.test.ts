@@ -48,7 +48,7 @@ describe('whole-movement resource admission', () => {
     const sim=new Sim({dayType:'weekday',dateLabel:'physical-route-or',startTime:14400,seed:7,noPossessions:true});
     for(const tr of [...sim.trainList])sim.removeTrain(tr);
     const signal=sim.topo.signals.find(s=>s.name==='X0905')!;
-    const goal=sim.topo.berths.find(b=>b.name==='江苏路 下行站台')!;
+    const goal=sim.topo.berths.find(b=>b.name==='江苏路 上行站台')!;
     const straight=sim.topo.routes.find(r=>r.name==='X0905→X0911')!;
     const side=sim.topo.routes.find(r=>r.name==='X0905→X0911(侧向)')!;
     expect(sim.routeTable.next.get(goal.id)![signal.id]).toBe(straight.id);

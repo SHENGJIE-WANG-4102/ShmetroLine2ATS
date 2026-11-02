@@ -50,23 +50,23 @@ const events: InstructorEventData[] = [
   { id:"jingansi-nanjingwest-train-failure", name:"静安寺—南京西路列车故障", category:"列车故障", windows:[[25200,79200]], probability:.5, action: {"kind":"train","dir":"DN","windows":[{"from":"JAS","to":"NJX","fromOffset":150,"toOffset":-150},{"from":"JAS","to":"NJX","fromOffset":-2500,"toOffset":-150}],"fault":"trainFail","duration":0,"recover":false,"noTrainMessage":true} },
   { id:"severe-wind-sequence", name:"雷暴大风过程", category:"天气", windows:[[14400,99900]], probability:.5, action: {"kind":"weather","wind":2,"duration":2400}, steps: [{"after":360,"name":"暴雨","action":{"kind":"weather","rain":true,"duration":1800}},{"after":780,"name":"阵风≥10级，高架段停运","action":{"kind":"weather","wind":4,"duration":720}},{"after":1500,"name":"风力减弱（黄色）","action":{"kind":"weather","wind":2,"duration":900}}] },
   { id:"jingansi-possession-extension", name:"静安寺—南京西路施工延时销点", category:"施工", windows:[[16200,18360]], probability:.5, action: {"kind":"possession","station":"JAS","until":21000,"message":"施工负责人报告：作业未完，申请延时至 05:50 销点"} },
-  { id:"first-westbound-train-failure", name:"上行首班车故障", category:"列车故障", windows:[[20520,22500]], probability:.5, action: {"kind":"train","dir":"UP","windows":[{"from":"KJG","to":"LYL","fromOffset":-600,"toOffset":300},{"from":"RMG","to":"GLL","fromOffset":0,"toOffset":0}],"fault":"trainFail","duration":300,"recover":true,"noTrainMessage":true} },
+  { id:"first-westbound-train-failure", name:"下行首班车故障", category:"列车故障", windows:[[20520,22500]], probability:.5, action: {"kind":"train","dir":"UP","windows":[{"from":"KJG","to":"LYL","fromOffset":-600,"toOffset":300},{"from":"RMG","to":"GLL","fromOffset":0,"toOffset":0}],"fault":"trainFail","duration":300,"recover":true,"noTrainMessage":true} },
   { id:"guanglan-middle-switch-failure", name:"广兰路中间线道岔P2305失表", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"namedSwitch","station":"GLL","name":"P2305","duration":1500} },
   { id:"hongqiao-railway-evening-crowd", name:"虹桥火车站大客流（×4）", category:"客流", windows:[[57600,70200]], probability:.5, action: {"kind":"surge","station":"HQZ","duration":2400,"multiplier":4} },
   { id:"hongqiao-terminal2-evening-crowd", name:"虹桥2号航站楼大客流（×3）", category:"客流", windows:[[57600,70200]], probability:.5, action: {"kind":"surge","station":"HQ2","duration":2100,"multiplier":3} },
-  { id:"hongqiao-railway-down-psd-failure", name:"虹桥火车站下行站台门故障", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"psd","station":"HQZ","dir":"DN","duration":900} },
+  { id:"hongqiao-railway-down-psd-failure", name:"虹桥火车站上行站台门故障", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"psd","station":"HQZ","dir":"DN","duration":900} },
   { id:"exhibition-centre-closing-crowd", name:"国家会展中心散场客流（×6）", category:"客流", windows:[[57600,70200]], probability:.5, action: {"kind":"surge","station":"GJH","duration":2400,"multiplier":6} },
-  { id:"exhibition-centre-train-pecu", name:"下行列车乘客紧急报警", category:"列车故障", windows:[[25200,79200]], probability:.5, action: {"kind":"train","dir":"DN","windows":[{"from":"GJH","to":"SHR","fromOffset":200,"toOffset":0}],"fault":"pecu","duration":0,"recover":false,"noTrainMessage":true} },
-  { id:"hongqiao-railway-down-start-signal-failure", name:"虹桥火车站下行出站信号机故障", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"startSignal","station":"HQZ","dir":"DN","duration":900} },
-  { id:"lujiazui-down-track-intrusion", name:"陆家嘴下行站台人员侵入", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"trackPerson","station":"LJZ","dir":"DN"} },
+  { id:"exhibition-centre-train-pecu", name:"上行列车乘客紧急报警", category:"列车故障", windows:[[25200,79200]], probability:.5, action: {"kind":"train","dir":"DN","windows":[{"from":"GJH","to":"SHR","fromOffset":200,"toOffset":0}],"fault":"pecu","duration":0,"recover":false,"noTrainMessage":true} },
+  { id:"hongqiao-railway-down-start-signal-failure", name:"虹桥火车站上行出站信号机故障", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"startSignal","station":"HQZ","dir":"DN","duration":900} },
+  { id:"lujiazui-down-track-intrusion", name:"陆家嘴上行站台人员侵入", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"trackPerson","station":"LJZ","dir":"DN"} },
   { id:"lujiazui-pudongsouth-axle-disturbance", name:"陆家嘴—浦东南路计轴受扰", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"axle","from":"LJZ","to":"PDN","dir":"DN","margin":200,"duration":360} },
-  { id:"river-tunnel-westbound-train-failure", name:"越江隧道上行列车故障", category:"列车故障", windows:[[25200,79200]], probability:.5, action: {"kind":"train","dir":"UP","windows":[{"from":"NJD","to":"LJZ","fromOffset":150,"toOffset":-150},{"from":"NJD","to":"SJD","fromOffset":150,"toOffset":0}],"fault":"trainFail","duration":0,"recover":false,"noTrainMessage":true} },
+  { id:"river-tunnel-westbound-train-failure", name:"越江隧道下行列车故障", category:"列车故障", windows:[[25200,79200]], probability:.5, action: {"kind":"train","dir":"UP","windows":[{"from":"NJD","to":"LJZ","fromOffset":150,"toOffset":-150},{"from":"NJD","to":"SJD","fromOffset":150,"toOffset":0}],"fault":"trainFail","duration":0,"recover":false,"noTrainMessage":true} },
   { id:"hongqiao-railway-return-crowd", name:"虹桥火车站返程大客流（×5）", category:"客流", windows:[[75600,86400]], probability:.5, action: {"kind":"surge","station":"HQZ","duration":4200,"multiplier":5} },
   { id:"pudong-airport-return-crowd", name:"浦东机场到达大客流（×4）", category:"客流", windows:[[75600,86400]], probability:.5, action: {"kind":"surge","station":"PDA","duration":3600,"multiplier":4} },
   { id:"hongqiao-terminal2-return-crowd", name:"虹桥2号航站楼大客流（×3）", category:"客流", windows:[[75600,86400]], probability:.5, action: {"kind":"surge","station":"HQ2","duration":3600,"multiplier":3} },
-  { id:"hongqiao-terminal2-down-psd-failure", name:"虹桥2号航站楼下行站台门故障", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"psd","station":"HQ2","dir":"DN","duration":720} },
+  { id:"hongqiao-terminal2-down-psd-failure", name:"虹桥2号航站楼上行站台门故障", category:"设备故障", windows:[[25200,79200]], probability:.5, action: {"kind":"psd","station":"HQ2","dir":"DN","duration":720} },
   { id:"extra-train-pecu", name:"加班车乘客紧急报警", category:"列车故障", windows:[[25200,79200]], probability:.5, action: {"kind":"extraPecu"} },
-  { id:"nanjing-east-closure-sequence", name:"南京东路封站过程", category:"运营调整", windows:[[55800,57600]], probability:.5, action: {"kind":"log","category":"客流","text":"公安通告：20分钟后南京东路站临时封站，列车跳站通过，出入口关闭；随后处置通过列车的乘客报警。"}, steps: [{"after":1200,"name":"封站","action":{"kind":"closeStation","station":"NJD","alreadyText":"南京东路站已封站，出入口关闭","text":"南京东路站封站：上、下行站台跳停（计划），出入口关闭"}},{"after":1920,"name":"通过列车乘客要求下车","action":{"kind":"train","dir":"DN","windows":[{"from":"RMG","to":"LJZ","fromOffset":200,"toOffset":-200},{"from":"JAS","to":"PDN","fromOffset":0,"toOffset":0}],"fault":"pecu","duration":0,"recover":false,"noTrainMessage":true}}] },
+  { id:"nanjing-east-closure-sequence", name:"南京东路封站过程", category:"运营调整", windows:[[55800,57600]], probability:.5, action: {"kind":"log","category":"客流","text":"公安通告：20分钟后南京东路站临时封站，列车跳站通过，出入口关闭；随后处置通过列车的乘客报警。"}, steps: [{"after":1200,"name":"封站","action":{"kind":"closeStation","station":"NJD","alreadyText":"南京东路站已封站，出入口关闭","text":"南京东路站封站：上、上行站台跳停（计划），出入口关闭"}},{"after":1920,"name":"通过列车乘客要求下车","action":{"kind":"train","dir":"DN","windows":[{"from":"RMG","to":"LJZ","fromOffset":200,"toOffset":-200},{"from":"JAS","to":"PDN","fromOffset":0,"toOffset":0}],"fault":"pecu","duration":0,"recover":false,"noTrainMessage":true}}] },
   { id:"peoples-square-diverted-crowd", name:"人民广场客流激增（×3）", category:"客流", windows:[[57600,61200]], probability:.5, action: {"kind":"surge","station":"RMG","duration":2280,"multiplier":3} },
   { id:"lujiazui-diverted-crowd", name:"陆家嘴客流激增（×3.5）", category:"客流", windows:[[57600,61200]], probability:.5, action: {"kind":"surge","station":"LJZ","duration":2100,"multiplier":3.5} },
 ];
@@ -131,7 +131,7 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'rescue',
     name: '故障列车救援',
-    desc: '一列下行载客列车在静安寺—南京西路区间发生牵引故障，司机处置无效。需组织后车清客救援、调整后续列车运行，并尽快恢复线路。',
+    desc: '一列上行载客列车在静安寺—南京西路区间发生牵引故障，司机处置无效。需组织后车清客救援、调整后续列车运行，并尽快恢复线路。',
     objectives: [
       '应答司机电话，确认无法恢复后组织救援（选中故障列车 → 组织救援，或电话中“组织后车救援”）',
       '救援期间对后续列车扣车/折返，避免区间积压',
@@ -162,7 +162,7 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'dawn-poss',
     name: '首班车：施工延时销点',
-    desc: '凌晨静安寺—南京西路区间施工未能按时销点，施工负责人报告预计延时至05:50。首班车即将上线，广兰路始发的上行首班车途中又发生故障。需在封锁区间两侧组织首班车折返或等待，销点后尽快恢复全线运营。',
+    desc: '凌晨静安寺—南京西路区间施工未能按时销点，施工负责人报告预计延时至05:50。首班车即将上线，广兰路始发的下行首班车途中又发生故障。需在封锁区间两侧组织首班车折返或等待，销点后尽快恢复全线运营。',
     objectives: [
       '掌握施工延时情况，封锁区间两侧首班车提前折返（人民广场站西渡线 / 中山公园站东剪刀渡线），或在站等待',
       '应答首班车司机故障电话，按程序处置（复位/救援）',
@@ -179,7 +179,7 @@ const scenarios: ScenarioDef[] = [
     name: '广兰路中间线道岔故障',
     desc: '晚高峰广兰路中间线西端道岔P2305失去表示，小交路列车无法进入中间线站台折返。需调整小交路折返站（上海科技馆尽头线），或延伸为大交路，并组织现场钩锁、引导进路恢复中间线折返。',
     objectives: [
-      '确认P2305失表，通知维修；避免小交路列车在广兰路下行站台积压',
+      '确认P2305失表，通知维修；避免小交路列车在广兰路上行站台积压',
       '后续小交路列车改在上海科技馆折返（选中列车 → 人工折返），或延伸至浦东1号2号航站楼',
       '钩锁后办理引导进路恢复中间线折返；修复后单操恢复表示',
     ],
@@ -191,11 +191,11 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'hq-night',
     name: '虹桥枢纽夜间大客流',
-    desc: '晚间航班、高铁集中到达，虹桥火车站、虹桥2号航站楼进站客流激增，往市区方向站台严重拥挤；随后虹桥火车站下行站台门故障。需及时加开、限流并处置站台门故障。',
+    desc: '晚间航班、高铁集中到达，虹桥火车站、虹桥2号航站楼进站客流激增，往市区方向站台严重拥挤；随后虹桥火车站上行站台门故障。需及时加开、限流并处置站台门故障。',
     objectives: [
       '套用“虹桥枢纽大客流加开”运行图模板（命令页 → 加开运行图模板）',
       '应答车站客流电话，视情限流；扣车均衡后续间隔',
-      '虹桥火车站下行站台门故障：确认人工关闭后办理互锁解除发车，修复后恢复',
+      '虹桥火车站上行站台门故障：确认人工关闭后办理互锁解除发车，修复后恢复',
     ],
     dayType: 'weekday', start: H(19, 40), duration: 50 * 60,
     events: [
@@ -207,7 +207,7 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'ciie-close',
     name: '进博会散场',
-    desc: '进博会闭馆散场，国家会展中心进站客流达平时6倍；一列满载下行列车上乘客按下紧急报警，随后虹桥火车站下行出站信号机故障。需加开、均衡间隔并处置报警和信号故障。',
+    desc: '进博会闭馆散场，国家会展中心进站客流达平时6倍；一列满载上行列车上乘客按下紧急报警，随后虹桥火车站上行出站信号机故障。需加开、均衡间隔并处置报警和信号故障。',
     objectives: [
       '套用“进博会保障加开”或人工加开列车，提升西段运力',
       '处置列车乘客紧急报警（应答司机电话，就近站台处置）',
@@ -223,9 +223,9 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'ljz-person',
     name: '陆家嘴人员侵入轨行区',
-    desc: '早高峰陆家嘴站下行站台有乘客跳下轨行区。需立即紧急关闭站台、扣停接近列车；人员出清后恢复运营，随后一段计轴受扰需预复位并组织列车压道。',
+    desc: '早高峰陆家嘴站上行站台有乘客跳下轨行区。需立即紧急关闭站台、扣停接近列车；人员出清后恢复运营，随后一段计轴受扰需预复位并组织列车压道。',
     objectives: [
-      '应答车站电话，立即紧急关闭陆家嘴下行站台，扣停接近列车',
+      '应答车站电话，立即紧急关闭陆家嘴上行站台，扣停接近列车',
       '确认人员出清后取消紧急关闭，恢复运营并均衡间隔',
       '计轴受扰：故障修复后计轴预复位，首列车RM压道出清',
     ],
@@ -238,10 +238,10 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'river-tunnel',
     name: '越江隧道列车故障',
-    desc: '晚高峰一列上行载客列车在陆家嘴—南京东路越江隧道内牵引故障，无法自行恢复。需组织后车救援；救援期间东侧后续列车在上海科技馆折返，西侧在人民广场组织折返，维持两端运营。',
+    desc: '晚高峰一列下行载客列车在陆家嘴—南京东路越江隧道内牵引故障，无法自行恢复。需组织后车救援；救援期间东侧后续列车在上海科技馆折返，西侧在人民广场组织折返，维持两端运营。',
     objectives: [
       '应答司机电话，确认无法恢复后组织后车救援',
-      '东侧后续上行列车在上海科技馆折返，西侧列车在人民广场站后折返，避免隧道区间积压',
+      '东侧后续下行列车在上海科技馆折返，西侧列车在人民广场站后折返，避免隧道区间积压',
       '救援完成后恢复全线运营，回归运行图',
     ],
     dayType: 'weekday', start: H(18, 0), duration: 50 * 60,
@@ -252,11 +252,11 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'holiday-return',
     name: '国庆返程高峰：定点加班车',
-    desc: '国庆最后返程日（节假日运行图），虹桥枢纽与浦东机场晚间到达客流集中。虹桥火车站往龙阳路定点加班车延长至次日00:05，浦东1号2号航站楼往中山公园临时加班至23:30。加班车只在指定车站停车（虹桥两站上下客，其余停靠站只下不上），其余车站以不超过45 km/h通过。期间虹桥2号航站楼下行站台门故障，加班车上又有乘客按下紧急报警。',
+    desc: '国庆最后返程日（节假日运行图），虹桥枢纽与浦东机场晚间到达客流集中。虹桥火车站往龙阳路定点加班车延长至次日00:05，浦东1号2号航站楼往中山公园临时加班至23:30。加班车只在指定车站停车（虹桥两站上下客，其余停靠站只下不上），其余车站以不超过45 km/h通过。期间虹桥2号航站楼上行站台门故障，加班车上又有乘客按下紧急报警。',
     objectives: [
       '保障加班车准点始发：虹桥火车站 23:04 / 23:30 / 23:45 / 00:05 往龙阳路；浦东1号2号航站楼 22:50 / 23:10 / 23:30 往中山公园',
       '加班车停站与通过按计划执行（只下不上站不上客，通过站限速45 km/h）',
-      '虹桥2号航站楼下行站台门故障：确认人工关闭后办理互锁解除发车，修复后恢复',
+      '虹桥2号航站楼上行站台门故障：确认人工关闭后办理互锁解除发车，修复后恢复',
       '应答加班车乘客紧急报警；视情对虹桥火车站限流',
     ],
     dayType: 'weekend', start: H(22, 30), duration: 100 * 60,
@@ -275,7 +275,7 @@ const scenarios: ScenarioDef[] = [
   {
     id: 'njd-closure',
     name: '国庆南京东路封站跳停',
-    desc: '国庆假期，外滩客流管控，公安部门通告16:00起南京东路站临时封站：列车跳站通过、出入口关闭、不办理换乘。客流转向人民广场、陆家嘴，两站站台迅速拥挤；一列下行列车通过南京东路时有乘客要求下车，按下紧急报警。',
+    desc: '国庆假期，外滩客流管控，公安部门通告16:00起南京东路站临时封站：列车跳站通过、出入口关闭、不办理换乘。客流转向人民广场、陆家嘴，两站站台迅速拥挤；一列上行列车通过南京东路时有乘客要求下车，按下紧急报警。',
     objectives: [
       '确认16:00 ATS按计划设置南京东路上下行跳停（封站），封站期间不得取消',
       '列车以不超过45 km/h通过南京东路站台',

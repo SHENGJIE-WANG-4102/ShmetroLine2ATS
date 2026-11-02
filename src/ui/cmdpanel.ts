@@ -11,7 +11,7 @@ import { timePick } from './timepick';
 import { h, clear } from './dom';
 import type { Store } from './store';
 import { confirmAndSend, type CmdSpec } from './confirm';
-import { LINE, STATIONS, LINE_INFO, OPERATIONS, supportsSignalSystem, unattended } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, DIRECTIONS, OPERATIONS, supportsSignalSystem, unattended } from '../data/current';
 import { PERF } from '../sim/dynamics';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT, type TrackDir, type TrainSnap } from '../sim/model';
 import { turnbackAt, exitStation, effectiveEnd, OVERLAY_PRESETS } from '../sim/timetable';
@@ -213,7 +213,7 @@ export class CommandPanel {
       const f = this.store.snap!.sections[id];
       const state = f & SEC.DIST ? '故障占用' : f & SEC.PRESET ? '预复位（待压道）' : f & SEC.OCC ? (f & SEC.COMM ? '通信列车占用' : '计轴占用') : '空闲';
       return [
-        ['车站/区间', STATIONS[s.station].name], ['股道', { DN: '下行正线', UP: '上行正线', X: '渡线', SID: '折返/存车线', CON: '折返线连接', DEP: '出入段线' }[s.track]],
+        ['车站/区间', STATIONS[s.station].name], ['股道', { DN: `${DIRECTIONS.DN.label}正线`, UP: `${DIRECTIONS.UP.label}正线`, X: '渡线', SID: '折返/存车线', CON: '折返线连接', DEP: '出入段线' }[s.track]],
         ['长度', `${Math.round(s.len)} m`], ['状态', state, f & SEC.DIST ? 'bad' : f & SEC.PRESET ? 'warn' : ''],
         ['进路锁闭', f & SEC.LOCK ? (f & SEC.ROUTEFLEET ? '自动通过进路' : '进路锁闭') : '无'], ['限速', f & SEC.TSR ? `临时 ${this.store.snap!.sectionTsr[id]} km/h` : f & SEC.ENV ? `天气 ${this.store.snap!.sectionTsr[id] || '停运'}` : '无', f & (SEC.TSR | SEC.ENV) ? 'warn' : ''],
         ['封锁', f & SEC.POSS ? '施工封锁' : f & SEC.BLOCK ? '调度封锁' : '无', f & SEC.BLOCK ? 'warn' : ''], ['里程', `K${(s.chainFrom / 1000).toFixed(3)}–K${(s.chainTo / 1000).toFixed(3)}`],
@@ -296,14 +296,14 @@ export class CommandPanel {
     ]));
     this.el.append(h('div', { class: 'cmdgrid' },
       this.btn('打开车站图（联锁）', () => this.hooks.openStation(id), 'primary'),
-      this.btn('下行站台', () => this.store.select({ kind: 'platform', id: st.platforms.DN })),
-      this.btn('上行站台', () => this.store.select({ kind: 'platform', id: st.platforms.UP })),
+      this.btn(`${DIRECTIONS.DN.label}站台`, () => this.store.select({ kind: 'platform', id: st.platforms.DN })),
+      this.btn(`${DIRECTIONS.UP.label}站台`, () => this.store.select({ kind: 'platform', id: st.platforms.UP })),
       ...topo.platforms.filter((p) => p.station === id && p.pool !== undefined)
         .map((p) => this.btn('中间线站台', () => this.store.select({ kind: 'platform', id: p.id }))),
     ));
     this.el.append(this.liveKv(() => {
       const s = this.store.snap!;
-      return [['下行候车', `${s.platformWaiting[st.platforms.DN]} 人`], ['上行候车', `${s.platformWaiting[st.platforms.UP]} 人`]];
+      return [[`${DIRECTIONS.DN.label}候车`, `${s.platformWaiting[st.platforms.DN]} 人`], [`${DIRECTIONS.UP.label}候车`, `${s.platformWaiting[st.platforms.UP]} 人`]];
     }));
     this.pisSection(id);
   }
@@ -378,7 +378,7 @@ export class CommandPanel {
       const dir = this.trainDir(t);
       return [
         ...(t.manual ? [['换向器', t.reverser === -1 ? '后' : t.reverser === 0 ? '零' : '前'] as [string, string]] : []),
-        ['目的地', t.dest || '—'], ['方向', dir === 'DN' ? '下行' : '上行'],
+        ['目的地', t.dest || '—'], ['方向', DIRECTIONS[dir].label],
         ['当前任务', t.task], ['晚点', t.inService ? fmtDelay(t.delay) : '非载客', t.delay > 300 ? 'bad' : t.delay > 120 ? 'warn' : ''],
         ...(t.unattendedStatus ? [['自动作业', t.unattendedStatus] as [string, string]] : []),
         ['停车原因', t.halt ? `${t.halt.label}${t.halt.blocker ? `（${t.halt.blocker}）` : ''} [${t.halt.code}] ${t.halt.detail}` : '—'],
@@ -487,7 +487,7 @@ export class CommandPanel {
     const snap = this.store.snap!;
     const depSel = h('select', {}, ...topo.depots.map((d) => h('option', { value: d.id }, d.name))) as HTMLSelectElement;
     if (depot !== undefined) depSel.value = String(depot);
-    const dirSel = h('select', {}, h('option', { value: 'DN' }, '下行'), h('option', { value: 'UP' }, '上行')) as HTMLSelectElement;
+    const dirSel = h('select', {}, h('option', { value: 'DN' }, DIRECTIONS.DN.label), h('option', { value: 'UP' }, DIRECTIONS.UP.label)) as HTMLSelectElement;
     const toSel = h('select', {}) as HTMLSelectElement;
     const fill = () => {
       clear(toSel);
