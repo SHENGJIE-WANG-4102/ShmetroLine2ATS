@@ -404,8 +404,8 @@ export class Dmi {
 
   private statusRow(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, now: number) {
     const y = 460;
-    // 用户实拍（2026-11-02）：起步前约 2 s（DEP 前）B 变 M；惰行也算 M（用户同意），制动、静止为 B
-    const motor = startCue(d, now) || t.a > 0.05 || t.v > 0.05 && t.a >= -0.12;
+    // 用户实拍（2026-11-02）：起步前 B 变 M，比黄箭头晚 0.5～1 s（用户）；惰行也算 M（用户同意），制动、静止为 B
+    const motor = startCue(d, now, 1.25) || t.a > 0.05 || t.v > 0.05 && t.a >= -0.12;
     wheel(c, 62, y, motor ? 'M' : 'B');
     c.fillStyle = C.white;
     c.font = `bold 26px ${FONT}`;
@@ -496,10 +496,10 @@ function scrollButton(c: CanvasRenderingContext2D, b: { x: number; y: number; w:
 }
 
 /** wheel / axle status: scalloped ring with a letter (Line 2 photos) on an axle line (Casco) */
-/** 实拍视频（2026-11-02 机场 V1414）：门锁闭后等到 DEP 前约 2 s，黄色起步箭头出现、B 变 M，
- * 同时门关好绿灯熄灭；TDT 过零车动、箭头消失。 */
-function startCue(d: DmiData | null, now: number): boolean {
-  return !!d?.startReady && d.dep >= 0 && d.dep - now <= 2;
+/** 实拍视频（2026-11-02 机场 V1414）：门锁闭后等到 DEP 前约 2 s，黄色起步箭头出现，
+ * 同时门关好绿灯熄灭；B 变 M 再晚 0.5～1 s（用户）；TDT 过零车动、箭头消失。 */
+function startCue(d: DmiData | null, now: number, lead = 2): boolean {
+  return !!d?.startReady && d.dep >= 0 && d.dep - now <= lead;
 }
 
 function wheel(c: CanvasRenderingContext2D, x: number, y: number, glyph: 'B' | 'M') {
