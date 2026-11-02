@@ -177,7 +177,7 @@ export class Dmi {
 
     this.topBar(c, t, d, now);
     this.dial(c, v, vp, eb, over, t);
-    this.rightColumn(c, t, d, eb);
+    this.rightColumn(c, t, d, eb, now);
     this.statusRow(c, t, d, now);
     this.bottom(c, d, now);
 
@@ -311,7 +311,7 @@ export class Dmi {
 
   // ------------------------------------------------------------ right column
 
-  private rightColumn(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, eb: boolean) {
+  private rightColumn(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, eb: boolean, now: number) {
     // mode and level
     c.fillStyle = C.white;
     c.font = `bold 44px ${FONT}`;
@@ -333,7 +333,7 @@ export class Dmi {
     const state = eb ? 'eb' : t.a > 0.05 ? 'traction' : t.a < -0.12 && t.v > 0.05 ? 'brake' : 'coast';
     // 用户实拍（2026-11-02）：车头图标只在列车静止时显示，动车后消失
     if (t.v < 0.05) trainFront(c, 656, 214, state);
-    if (t.v < 0.05 && d?.startReady) startArrow(c, 693, 290);
+    if (t.v < 0.05 && startCue(d, now)) startArrow(c, 693, 290);
     // Two distinct symbols: train doors always above AA; PSD only on a platform.
     // 用户确认：photograph shows OPEN leaves; closed leaves meet.
     // Train doors are white, PSD yellow in the reference.
@@ -405,7 +405,7 @@ export class Dmi {
   private statusRow(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData | null, now: number) {
     const y = 460;
     // 用户实拍（2026-11-02）：起步前约 2 s（DEP 前）B 变 M；惰行也算 M（用户同意），制动、静止为 B
-    const motor = !!d?.startReady && d.dep >= 0 && d.dep - now <= 2 || t.a > 0.05 || t.v > 0.05 && t.a >= -0.12;
+    const motor = startCue(d, now) || t.a > 0.05 || t.v > 0.05 && t.a >= -0.12;
     wheel(c, 62, y, motor ? 'M' : 'B');
     c.fillStyle = C.white;
     c.font = `bold 26px ${FONT}`;
@@ -496,6 +496,12 @@ function scrollButton(c: CanvasRenderingContext2D, b: { x: number; y: number; w:
 }
 
 /** wheel / axle status: scalloped ring with a letter (Line 2 photos) on an axle line (Casco) */
+/** 实拍视频（2026-11-02 机场 V1414）：门锁闭后等到 DEP 前约 2 s，黄色起步箭头出现、B 变 M，
+ * 同时门关好绿灯熄灭；TDT 过零车动、箭头消失。 */
+function startCue(d: DmiData | null, now: number): boolean {
+  return !!d?.startReady && d.dep >= 0 && d.dep - now <= 2;
+}
+
 function wheel(c: CanvasRenderingContext2D, x: number, y: number, glyph: 'B' | 'M') {
   c.strokeStyle = C.white;
   c.fillStyle = C.white;
@@ -563,7 +569,7 @@ function doorLeaf(c: CanvasRenderingContext2D, x: number, y: number, w: number, 
   else c.fillRect(x + 6, y + 6, w - 12, hh / 2 - 8);
 }
 
-/** yellow start arrow under the cab front: doors locked, automatic start pending (user photos 2026-11-02) */
+/** yellow start arrow under the cab front: about 2 s before the automatic start (startCue) */
 function startArrow(c: CanvasRenderingContext2D, x: number, y: number) {
   // one outline: a flat head, a narrow neck, then a base flaring out wider than the head
   c.fillStyle = C.yellow;
