@@ -4370,3 +4370,11 @@ D139/D155 的两处超差（静安寺西行首班 +138 s、机场末班终到 +8
 静态资源 diff、对照和复跑日志分别在 `work/D165-audit-diff.txt`、`work/D165-before-fuzz-134.log`、`work/D165-stabled-fuzz-{103,116,134}.log`，两条红例的完整等待链及快照在各自输出目录。原定三种子全绿未达到，上述红项按审查结论保留，完整性检查与时限不变。
 
 公共文件：`src/data/types.ts`、`src/sim/topology.ts`、`src/sim/ats.ts`、`src/sim/interlocking.ts`；线路数据：`src/data/lines/line2/line2.ts`；测试：`tests/tail-resources.test.ts`、`tests/core.test.ts`、`tests/resource-source-ready.test.ts`。未更改其他终点站数据、清客、限速、换端时间或最短折返常量。原始视频和探针在 `work/`。
+
+## D167 侧式站台画在正线外侧；华夏东路改侧式（2026-11-02）
+
+用户指出（2026-11-02），配线图（`reference/上海轨道交通全网配线V2025.26.2.pdf`）上华夏东路、川沙、凌空路的站台画法是对的，模型画错了。
+
+- 线路总览（`src/ui/trackview.ts`）：侧式站台改画在本侧正线外侧，上行在上、下行在下。过去所有站台都画在两条正线之间，侧式站台看起来像岛式。判据用拓扑里已有的 `TPlatform.face`。广兰路的岛式加中间线画法不变。14 号线的侧式站台按同一规则显示。
+- 华夏东路：配线图上是两侧式，`sidePlatform` 补成 `['DN','UP']`。这条会连带改变开门侧和车载广播的开门方向（右侧）。D3 里「其余按岛式【假设】」漏了这一站。
+- 公共文件：`src/ui/trackview.ts`；线路数据：`src/data/lines/line2/line2.ts`。

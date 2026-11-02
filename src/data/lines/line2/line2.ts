@@ -134,7 +134,7 @@ export const STATIONS: StationData[] = [
   { id: 'GLL', name: '广兰路', interM: 2055, transfers: [], dwell: 20, demand: 1.0, sidePlatform: ['DN'] },
   { id: 'TZ', name: '唐镇', interM: 3393, transfers: [], dwell: 20, demand: 0.9 },
   { id: 'CXZ', name: '创新中路', interM: 1788, transfers: [], dwell: 20, demand: 0.5, sidePlatform: ['DN', 'UP'] },
-  { id: 'HXD', name: '华夏东路', interM: 2100, transfers: [], dwell: 20, demand: 0.6 },
+  { id: 'HXD', name: '华夏东路', interM: 2100, transfers: [], dwell: 20, demand: 0.6, sidePlatform: ['DN', 'UP'] },
   { id: 'CS', name: '川沙', interM: 2756, transfers: [], dwell: 20, demand: 0.8, sidePlatform: ['DN', 'UP'] },
   { id: 'LKL', name: '凌空路', interM: 2595, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
   { id: 'YDD', name: '远东大道', interM: 3070, transfers: [], dwell: 20, demand: 0.3 },

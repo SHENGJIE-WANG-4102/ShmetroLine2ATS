@@ -343,14 +343,17 @@ export class TrackView {
       const up = p.track === 'UP';
       let y0 = up ? top + L.upY + 9 : top + L.midY + 5;
       let y1 = up ? top + L.midY - 5 : top + L.dnY - 9;
-      if (topo.platforms.some((q) => q.station === p.station && q.pool !== undefined)) {
+      // a side platform lies outside its main (UP north, DN south), as in the layout PDF
+      const side = p.pool === undefined && p.face === (up ? 'N' : 'S');
+      if (side && up) { y0 = top + L.upY - 30; y1 = top + L.upY - 9; }
+      else if (side) { y0 = top + L.dnY + 9; y1 = top + L.dnY + 30; }
+      else if (topo.platforms.some((q) => q.station === p.station && q.pool !== undefined)) {
         // 广兰路: island between the UP main and the middle track (upper face UP,
-        // lower face middle track), side platform outside the DN main
+        // lower face middle track)
         const lane = top + L.upY + 0.7 * (L.dnY - L.upY);
         const half = (top + L.upY + 9 + lane - 5) / 2;
         if (p.pool !== undefined) { y0 = half; y1 = lane - 5; }
-        else if (up) { y0 = top + L.upY + 9; y1 = half; }
-        else { y0 = top + L.dnY + 9; y1 = top + L.dnY + 30; }
+        else { y0 = top + L.upY + 9; y1 = half; }
       }
       const rect = new Graphics().rect(x0, y0, x1 - x0, y1 - y0).fill({ color: 0xffffff });
       rect.tint = stationOpened(p.station) ? C.platform : 0x454b50;
