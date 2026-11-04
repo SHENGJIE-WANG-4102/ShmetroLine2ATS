@@ -502,8 +502,20 @@ const coastFloor = (): number => OPERATIONS.sectionCoastMinKmh / 3.6;
 /** Gravity along the travel at `x` metres ahead of the planning point. */
 export type SectionGrade = (x: number) => number;
 
+/** The integrator's state at the top of every step of a run without a planned
+ * coast. A run with a planned coast at `coastAt` is the same run, step for
+ * step, until the remaining distance first reaches `coastAt` (atoControl only
+ * looks at the coast point from there on), so it can resume from that step. */
+interface SectionTrace { x: number[]; v: number[]; a: number[]; eta: number[]; segment: number[]; state: AtoState[] }
+/** A trial run asked only one question stops once its answer is settled: the
+ * eta only grows and an invalid coast never becomes valid again. */
+interface SectionTrial { trace?: SectionTrace; from?: SectionTrace; etaAtLeast?: number; etaAbove?: number; validity?: boolean }
+
 function integrateSection(dist: number, initialV: number, initialA: number, cutoff: number, coastAt: number,
-  limits: readonly SectionLimit[] | undefined, margin: number, keepSamples: boolean, grade?: SectionGrade): SectionPlan {
+  limits: readonly SectionLimit[] | undefined, margin: number, keepSamples: boolean, grade?: SectionGrade,
+  trial: SectionTrial = {}): SectionPlan {
+  const { trace, from } = trial;
+  const etaAtLeast = trial.etaAtLeast ?? Infinity, etaAbove = trial.etaAbove ?? Infinity, validity = !!trial.validity;
   const plan: SectionPlan = { cutoff, coastAt, coastFloor: Math.min(cutoff, coastFloor()), eta: 0, samples: [], coastValid:true, completed:false };
   if (!(dist > 0) || !Number.isFinite(dist)) return plan;
   const dt = .1;
@@ -511,11 +523,24 @@ function integrateSection(dist: number, initialV: number, initialA: number, cuto
   let length = 0;
   for (const s of limits ?? []) { length += s.length; boundaries.push({end:length,cap:Math.max(.1,s.limit-margin)}); }
   if (!boundaries.length || length < dist) boundaries.push({end:dist,cap:cutoff});
-  const state: AtoState = { phase:'traction', recovered:false, neutral:0 };
+  let state: AtoState = { phase:'traction', recovered:false, neutral:0 };
   let x = 0, v = Math.max(0, initialV), a = initialA, segment = 0;
   const maxTime = Math.max(3600, dist / Math.max(.1, cutoff) + 300);
   if (keepSamples) plan.samples.push({remaining:dist,speed:v});
+  if (from && coastAt >= 0 && !keepSamples) {
+    // first step whose remaining distance is within the coast point
+    let lo = 0, hi = from.x.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (Math.max(0, dist - from.x[mid]) <= coastAt) hi = mid; else lo = mid + 1; }
+    if (lo < from.x.length) {
+      x = from.x[lo]; v = from.v[lo]; a = from.a[lo]; plan.eta = from.eta[lo]; segment = from.segment[lo];
+      state = { ...from.state[lo] };
+    }
+  }
   while (plan.eta < maxTime) {
+    if (trace) {
+      trace.x.push(x); trace.v.push(v); trace.a.push(a); trace.eta.push(plan.eta); trace.segment.push(segment);
+      trace.state.push({ ...state });
+    }
     const remaining = Math.max(0, dist - x);
     if (atoStopReady(v, remaining)) { plan.completed=x<=dist+.3; break; }
     while (segment + 1 < boundaries.length && boundaries[segment].end <= x) segment++;
@@ -538,6 +563,7 @@ function integrateSection(dist: number, initialV: number, initialA: number, cuto
     const travelled = (v+nextV)*dt/2;
     x += travelled; v=nextV;
     plan.eta += dt;
+    if (plan.eta >= etaAtLeast || plan.eta > etaAbove || validity && !plan.coastValid) break;
     if (keepSamples && (plan.samples.length === 1 || dist-x < plan.samples.at(-1)!.remaining-10)) plan.samples.push({remaining:Math.max(0,dist-x),speed:v});
     // A restrictive plan can become unachievable from a moving initial state;
     // return its bounded physical estimate, never throw in the worker.
@@ -599,22 +625,36 @@ export function sectionEta(dist: number, v: number, cruise: number, limits?: rea
 export function sectionPlan(dist: number, v: number, budget: number, ceiling: number,
   limits?: readonly SectionLimit[], margin = 0, a = 0, level = 1, grade?: SectionGrade): SectionPlan {
   ceiling = levelCruise(level,ceiling);
-  const fast = integrateSection(dist,v,a,Math.max(.1,ceiling),-1,limits,margin,false,grade);
+  // Runs at one cutoff share their steps up to the coast point (SectionTrace).
+  const traces = new Map<number, SectionTrace>();
+  const run = (speed: number, coast: number, question: Omit<SectionTrial, 'trace' | 'from'> = {}): SectionPlan => {
+    let trace = traces.get(speed);
+    if (coast < 0 || !trace) {
+      // A base run stopped by its question still records a true prefix: a
+      // coast point beyond it falls back to a full run.
+      const record = trace ? undefined : { x: [], v: [], a: [], eta: [], segment: [], state: [] } as SectionTrace;
+      const base = integrateSection(dist,v,a,speed,-1,limits,margin,false,grade,{ trace: record, ...question });
+      if (record) traces.set(speed, trace = record);
+      if (coast < 0) return base;
+    }
+    return integrateSection(dist,v,a,speed,coast,limits,margin,false,grade,{ from: trace, ...question });
+  };
+  const fast = run(Math.max(.1,ceiling),-1);
   if (!Number.isFinite(dist) || !(dist > 0) || budget <= fast.eta)
     return integrateSection(dist,v,a,Math.max(.1,ceiling),-1,limits,margin,true,grade);
   let cutoff = Math.max(.1,ceiling), coastAt = -1, lowerCutoff = level !== 1;
   const earliestLegal = (speed: number): SectionPlan => {
     let lo=0,hi=dist;
-    const earliest=integrateSection(dist,v,a,speed,hi,limits,margin,false,grade);
+    const earliest=run(speed,hi);
     if(earliest.coastValid)return earliest;
-    for(let i=0;i<10;i++){const mid=(lo+hi)/2;if(integrateSection(dist,v,a,speed,mid,limits,margin,false,grade).coastValid)lo=mid;else hi=mid;}
-    return integrateSection(dist,v,a,speed,lo,limits,margin,false,grade);
+    for(let i=0;i<10;i++){const mid=(lo+hi)/2;if(run(speed,mid,{validity:true}).coastValid)lo=mid;else hi=mid;}
+    return run(speed,lo);
   };
   if (level === 1) {
     const earliest = earliestLegal(cutoff);
     if (earliest.eta >= budget) {
       let lo = 0, hi = earliest.coastAt;
-      for (let i=0;i<11;i++) { const mid=(lo+hi)/2; if(integrateSection(dist,v,a,cutoff,mid,limits,margin,false,grade).eta<budget)lo=mid;else hi=mid; }
+      for (let i=0;i<11;i++) { const mid=(lo+hi)/2; if(run(cutoff,mid,{etaAtLeast:budget}).eta<budget)lo=mid;else hi=mid; }
       coastAt=hi;
     } else { coastAt=earliest.coastAt; lowerCutoff=true; }
   }
@@ -625,19 +665,23 @@ export function sectionPlan(dist: number, v: number, budget: number, ceiling: nu
     // remains. (Judging a step by its longest coast stopped one step high and
     // arrived early by most of a step.)
     const floor = Math.min(cutoff, OPERATIONS.sectionCruiseMinKmh / 3.6) - 1e-9;
-    for (const speed of steps.map(step => step / 3.6).filter(speed => speed > 0 && speed >= floor && speed < cutoff - 1e-9).sort((a, b) => b - a)) {
-      if (integrateSection(dist,v,a,speed,-1,limits,margin,false,grade).eta > budget) break;
-      cutoff = speed;
+    // (the run time only grows as the step falls: bisect the step list)
+    const candidates = steps.map(step => step / 3.6).filter(speed => speed > 0 && speed >= floor && speed < cutoff - 1e-9).sort((a, b) => b - a);
+    let fits = -1, fails = candidates.length;
+    while (fails - fits > 1) {
+      const mid = (fits + fails) >> 1;
+      if (run(candidates[mid],-1,{etaAbove:budget}).eta > budget) fails = mid; else fits = mid;
     }
+    if (fits >= 0) cutoff = candidates[fits];
     const earliest = earliestLegal(cutoff);
     if (earliest.eta >= budget) {
       let lo = 0, hi = earliest.coastAt;
-      for (let i=0;i<11;i++) { const mid=(lo+hi)/2; if(integrateSection(dist,v,a,cutoff,mid,limits,margin,false,grade).eta<budget)lo=mid;else hi=mid; }
+      for (let i=0;i<11;i++) { const mid=(lo+hi)/2; if(run(cutoff,mid,{etaAtLeast:budget}).eta<budget)lo=mid;else hi=mid; }
       coastAt=hi;
     } else coastAt=earliest.coastAt;
   } else if (lowerCutoff) {
     let lo = Math.min(cutoff,OPERATIONS.sectionCruiseMinKmh/3.6), hi = cutoff;
-    for(let i=0;i<11;i++){const mid=(lo+hi)/2;const candidate=level===1?earliestLegal(mid):integrateSection(dist,v,a,mid,-1,limits,margin,false,grade);if(candidate.eta>budget)lo=mid;else hi=mid;}
+    for(let i=0;i<11;i++){const mid=(lo+hi)/2;const candidate=level===1?earliestLegal(mid):run(mid,-1);if(candidate.eta>budget)lo=mid;else hi=mid;}
     cutoff=(lo+hi)/2;
     coastAt=level===1?earliestLegal(cutoff).coastAt:-1;
   }

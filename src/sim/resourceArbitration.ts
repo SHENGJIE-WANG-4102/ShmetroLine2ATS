@@ -767,7 +767,8 @@ function physicallyNeeds(order: PhysicalOrder, train: number, owner: number | ((
   if (seen.has(train)) return false;
   seen.add(train);
   const hit = typeof owner === 'number' ? (id: number) => id === owner : owner;
-  return [...order.get(train) ?? []].some(id => hit(id) || physicallyNeeds(order, id, hit, seen));
+  for (const id of order.get(train) ?? []) if (hit(id) || physicallyNeeds(order, id, hit, seen)) return true;
+  return false;
 }
 
 function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: PhysicalOrder, request: ResourceRequest, option: ResourceOption): { id: number } | undefined {
@@ -786,17 +787,22 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   // physically behind a no-earlier entrant of this platform (which this rule
   // orders behind the applicant) cannot reach it first. Waiting for it closes
   // a loop: me -> it -> the train ahead of it -> me (D173).
-  const byId = new Map(requests.map(r => [r.id, r]));
+  let byId: Map<number, ResourceRequest> | undefined;
+  const later = new Map<ResourceRequest, boolean>();
   const queuedBehindLater = (id: number) => physicallyNeeds(physical, id, z => {
-    const r = z === request.id ? undefined : byId.get(z);
+    const r = z === request.id ? undefined : (byId ??= new Map(requests.map(q => [q.id, q]))).get(z);
     // (a committed entrant goes regardless, and the queue behind it follows)
-    return !!r && !r.committed && !(r.inside && !r.safeHere) && departsHere(r, false);
+    if (!r || r.committed || r.inside && !r.safeHere) return false;
+    let hit = later.get(r);
+    if (hit === undefined) later.set(r, hit = departsHere(r, false));
+    return hit;
   });
+  // (pure conditions: the costly transitive queue walk is tested last)
   const first = requests.find(other => other.id !== request.id && other.options.some(o => !o.unreachable) && departsHere(other, true)
-    && !queuedBehindLater(other.id)
     // A vehicle already occupying this movement must clear before scheduling
     // priority can apply, rather than waiting for someone queued behind it.
     && !other.train?.body.some(b => option.sections.has(sim.topo.links[b.link].section)) && !needsThisOccupant(other.id)
+    && !queuedBehindLater(other.id)
     // Only an executable unentered demand can order an actual resource
     // occupant. A source blocked by another occupant must let them clear,
     // rather than ordering an occupant before it can ever leave its source.

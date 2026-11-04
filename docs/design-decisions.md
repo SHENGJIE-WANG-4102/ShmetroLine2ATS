@@ -4634,3 +4634,37 @@ D79 世纪公园 DN（往机场） 21:45–22:00 仍差 +3，涉及 4161/4163/41
 
 公共文件：`src/sim/ats.ts`、`resourceArbitration.ts`、`timetable.ts`、`dynamics.ts`、`movement.ts`、`gradient.ts`、`src/ui/cmdpanel.ts`、`src/data/types.ts`、`src/data/simulationExtras.ts`。2号线数据：`line2.ts`（限速档、区间余量）、`physics.ts`（软起步、软停车）、`simulation.ts`（东行退峰）。测试：`timetable`、`turnback-end`、`yard-cut-takeover`、`field-calibration`、`official-headways`（新增）、`calibration`、`round3`、`fuzz-roots`、`ato-stop-release`。
 
+
+## D174 性能第一批：结果逐位不变的优化（2026-11-04）
+
+用户决定（2026-11-04）：性能现在是 P0。
+
+**测量**
+- 探针在 `work/perf/`：先存 07:30 检查点，再单独跑 07:30–08:00，用 esbuild 打包，和正式构建一样不带 `__name` 包装。
+- 早高峰纯推演 116.6×。界面在实际倍速低于所选的 90% 时提示跟不上，选 120× 时就是低于 108×，所以早高峰正贴着线。
+- 快照每次 0.6 ms（20 Hz），检查点每次 5 ms（每 60 s 仿真时间一次），合计约 2%，不是瓶颈。
+- 运行中的列车每拍约 7.8 µs，占约 45%，开销分散在前方扫描、调整曲线、车体、ATO 控制、安全校验上。
+- 发车那一拍的 `sectionPlan` 每次约 4 ms，约占 18%：每个区间约 20 次试算积分，约 1.9 万步。
+- 资源仲裁每秒一次，约占 8%。
+
+**改动（结果逐位不变）**
+- `sectionPlan`（`dynamics.ts`）：
+  - 同一个限速下，惰行试算在剩余距离到达惰行点之前，和不惰行的那次积分逐步相同（atoControl 只在那之后看惰行点）。所以不惰行的那次按步记下状态，惰行试算从惰行点那一步接着算。
+  - 只问一个问题的试算，答案一确定就停：预算比较在 eta 达到预算时停（eta 只增不减）；惰行合法性在一旦不合法时停（不合法不会变回合法）。
+  - 限速档位改为二分查找。依据是档位越低、运行时间越长；全天两种日型的哈希一致，说明这个单调性在实际运行中成立。
+- `regulationProfile`（`movement.ts`）：每拍构造分段点时，不再用 Set、flatMap、filter，改为数组加排序、去重。
+- `earlierOrigin`（`resourceArbitration.ts`）：
+  - 「同站台后发车」判断按请求记忆，`byId` 按需构造；
+  - 纯条件里把代价最大的传递排队检查放到最后（`&&` 的各项都是纯判断，换顺序结果不变）；
+  - `physicallyNeeds` 不再展开数组。
+
+**验证**
+- 早高峰 07:30–08:00：116.6× → 131.7×（约 +13%）。逐秒对所有列车的位置、速度、加速度做哈希，与改前一致。
+- 工作日、双休日 04:00–26:00 全天：新旧逐秒哈希完全一致（`d7874ef0ba7b26c7`、`bbcf41909f3094ac`），完整性 0 违例。四个进程并行跑时，各时段的新旧耗时比为 1.06～1.13。
+- 相关 14 个单测文件 175 条，失败 1 条：`terminal-wait-manual` 的 1063→1084，是 14 号线运行图车底接续变了。换回 dd59a4f 原版同样失败，属于 D173 记的 14 号线遗留，按用户「14 号线先不修」不动。
+
+**仍未解决**
+- 早高峰约 131×，余量只有一成。下一步要动每拍的固定开销。
+- 已知性能代价：慢约 1.4～1.5 倍那条（D173），这次只追回约 13%。
+
+公共文件：`src/sim/dynamics.ts`、`src/sim/movement.ts`、`src/sim/resourceArbitration.ts`。

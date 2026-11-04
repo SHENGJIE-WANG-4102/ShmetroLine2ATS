@@ -120,9 +120,16 @@ export function regulationProfile(sim: Sim, tr: Train): { distance: number; limi
     add(body.link, -behind - length, -behind);
     behind += length;
   }
-  const cuts = [...new Set([0, distance, ...restrictions.flatMap(s => [s.from, s.to]).filter(d => d > 0 && d < distance)])].sort((a, b) => a - b);
+  // (10 Hz for every regulated train: plain arrays, no Set/flatMap)
+  const cuts = [0, distance];
+  for (const s of restrictions) {
+    if (s.from > 0 && s.from < distance) cuts.push(s.from);
+    if (s.to > 0 && s.to < distance) cuts.push(s.to);
+  }
+  cuts.sort((a, b) => a - b);
   const limits: SectionLimit[] = [];
   for (let i = 1; i < cuts.length; i++) {
+    if (cuts[i] === cuts[i - 1]) continue;
     const start = cuts[i - 1];
     let limit = PERF.vMax;
     for (const r of restrictions) if (r.from <= start && r.to > start) limit = Math.min(limit, r.limit);
