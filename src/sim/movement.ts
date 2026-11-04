@@ -4,7 +4,7 @@ import { utoBusy, utoVehicleWait } from './uto';
  * control, kinematics and footprint (occupancy) maintenance.
  */
 import type { Sim } from './engine';
-import type { Train, BodySeg } from './model';
+import type { Train, BodySeg, StopTask } from './model';
 import { nextLink, linkChain, type Dir } from './topology';
 import { profileOf, heightAt, chainSense, gradeAccelAt, gradeAlong, brakingSpeedH } from './gradient';
 import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
@@ -23,6 +23,9 @@ import { resourceAuthorityBlocker, sourceReadyAt, sourceWaitReason } from './res
 
 /** speed limits / platform stops further than this do not influence the braking curves */
 const LOOKAHEAD = 1400;
+/** Running-delay estimate period (s): the arrival-regulation delay is
+ * re-estimated on a new target and then every 10 s (user decision 2026-11-04, D175). */
+export const DELAY_ESTIMATE_S = 10;
 /**
  * The movement authority itself is not range limited: the scan follows the set
  * route until it reaches its end (first signal without a locked route) or the
@@ -880,10 +883,20 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   // Running delay against the arrival plan: the arrival this train makes
   // from here at the current speed limit, compared with the planned arrival.
   const nextStop = tr.tasks[0];
-  const budgetProfile = rearLeg || targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null ? regulationProfile(sim, tr) : null;
-  const budgetDistance = budgetProfile?.distance ?? Infinity;
-  const targetDelay = targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance)
-    ? sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, budgetProfile?.limits, PERF.atoMargin) - nextStop.arr : tr.delay;
+  const budgeted = rearLeg || targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null;
+  // The distance is needed every tick; the static limit profile only for a
+  // new section plan and the periodic delay estimate (D175).
+  let budgetProfile: { distance: number; limits: SectionLimit[] } | null = null;
+  const profile = () => budgetProfile ??= regulationProfile(sim, tr);
+  const budgetDistance = budgeted ? regulationDistance(sim, tr) : Infinity;
+  const timed = targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance);
+  // Re-estimated on a new target and then every DELAY_ESTIMATE_S, staggered by train.
+  const estimate = timed && (tr.ato?.delay === undefined || tr.ato.turnbackLeg !== undefined
+    || tr.ato.berth !== (nextStop as StopTask).berth || tr.ato.arrival !== (nextStop as StopTask).arr
+    || Math.floor(sim.t / DELAY_ESTIMATE_S + tr.id / 7) !== Math.floor((sim.t - dt) / DELAY_ESTIMATE_S + tr.id / 7));
+  const targetDelay = !timed ? tr.delay : estimate
+    ? sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, profile().limits, PERF.atoMargin) - (nextStop as StopTask).arr!
+    : tr.ato!.delay!;
   if (regulated) tr.delay = targetDelay;
   const atoMargin = rearLeg || targetRegulated && targetDelay > 2 ? PERF.atoFastMargin : PERF.atoMargin;
   const stopAt = Math.min(scan.stopDist, scan.maDist);
@@ -972,7 +985,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     if (!same || old.ceiling !== ceiling || old.obstructed && !obstructed
       || Math.abs(budgetDistance - (old.distance - tr.lastDs)) > 2) {
       tr.ato = { state: same ? old.state : {phase:'traction',recovered:false,neutral:0},
-        plan: sectionPlan(budgetDistance,tr.v,arrival-sim.t,ceiling,budgetProfile?.limits,atoMargin,tr.a,1,gradeAhead),
+        plan: sectionPlan(budgetDistance,tr.v,arrival-sim.t,ceiling,profile().limits,atoMargin,tr.a,1,gradeAhead),
         berth:rearLeg.goal,arrival,level:1,ceiling,manual:false,distance:budgetDistance,obstructed,
         turnbackLeg:rearLeg.kind,started };
     } else {
@@ -994,12 +1007,13 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
         && Math.abs(budgetDistance - (old.distance - tr.lastDs)) <= 2
         ? { ...old.state } : { phase: 'traction' as const, recovered: false, neutral: 0 };
       tr.ato = { state,
-        plan: sectionPlan(budgetDistance, tr.v, nextStop.arr - sim.t, ceiling, budgetProfile?.limits, atoMargin, tr.a, level, gradeAhead),
+        plan: sectionPlan(budgetDistance, tr.v, nextStop.arr - sim.t, ceiling, profile().limits, atoMargin, tr.a, level, gradeAhead),
         berth: nextStop.berth, arrival: nextStop.arr, level, ceiling, manual: tr.manual, distance: budgetDistance, obstructed };
     }
     tr.ato!.distance = budgetDistance;
     tr.ato!.obstructed = obstructed;
     tr.ato!.manual = tr.manual;
+    tr.ato!.delay = targetDelay;
   } else tr.ato = undefined;
   vT = Math.min(vT, vPerm, tr.vCap);
   // standing a few metres short of a signal at stop: ATO does not start into

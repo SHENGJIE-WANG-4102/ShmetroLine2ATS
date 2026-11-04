@@ -373,7 +373,8 @@ export class TrackView {
       if (!geom.pos[topo.links[topo.platforms[st.platforms.DN].link].a]) continue;
       const x = geom.chainX(st.chain, row);
       const top = geom.rows[row].top;
-      const size = detail ? 48 : 40;
+      // (user 2026-11-04: names were too large)
+      const size = detail ? 36 : 26;
       const name = st.name;
       const t = this.mkText(name, size, stationOpened(st.index) ? 0xe6edf4 : 0x81878d, { bold: true });
       t.eventMode = 'static';

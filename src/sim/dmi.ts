@@ -45,7 +45,7 @@ export function dmiTask(tr: Train): string {
   if (tr.depotStage === 'in' || tr.tasks[0]?.k === 'depot') return 'in';
   if (tr.depotStage === 'out') return 'out';
   if (tr.tbStage !== 'none' || tr.tasks[0]?.k === 'reverse') return 'turn';
-  return tr.tasks.some(t => t.k === 'stop' && (t.stabledOut || t.standby)) && !tr.inService ? 'out' : 'service';
+  return !tr.inService && tr.tasks.some(t => t.k === 'stop' && (t.stabledOut || t.standby)) ? 'out' : 'service';
 }
 
 /** once a second: turn state changes into DMI messages */

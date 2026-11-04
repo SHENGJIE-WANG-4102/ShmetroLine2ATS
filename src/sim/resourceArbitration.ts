@@ -92,6 +92,8 @@ function newQueryCache() {
     /** earlierOrigin's current-movement stop per train and platform. Only an
      * admitted applicant's own tasks change during an allocation; it drops its entry. */
     movementStops: new WeakMap<Train, Map<number, StopTask | null>>(),
+    /** last task index of each trip's stops, per train (same lifetime as movementStops) */
+    tripEnds: new WeakMap<Train, Map<number, number>>(),
   };
 }
 function queryCache(sim: Sim) {
@@ -350,6 +352,12 @@ function phaseSwitches(sim: Sim, phase: ResourcePhase) {
 }
 
 /** Alternatives are collected without changing tasks or writing reservations. */
+/** A berth physically held by a stored train with no further task. */
+function deadOccupant(sim: Sim, berth: number, self: number): boolean {
+  const holder = sim.trains.get(berthHolder(sim, berth, self, true));
+  return !!holder && holder.id !== self && holder.phase === 'stabled' && !holder.tasks.length;
+}
+
 function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, first: number, history: RouteStep[], held: Set<number>, tr?: Train): ResourceOption[] {
   const incomplete: ResourceOption[] = [];
   const build = (index: number, point: TrackPoint, option: ResourceOption, depth: number, incoming: RouteStep[], projected?: number): ResourceOption[] => {
@@ -371,6 +379,15 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
     } else if (task.k === 'stable' && task.berth < 0) {
       const station = task.station ?? sim.topo.sections[sim.topo.links[point.link].section].station;
       candidates = (sim.topo.stations[station]?.turnbackBerths ?? []).map(id => stablingBerth(sim.topo, id));
+    } else if (task.k === 'stable' && deadOccupant(sim, task.berth, tr?.id ?? -1)) {
+      // 【假设】(D175) The planned overnight place is held by a stored train
+      // without any further duty: it will not clear tonight. Degrade to the
+      // station's other storage places, the planned one still first.
+      // (deep places first, then the shallow ones in front of them)
+      const station = task.station ?? sim.topo.berths[task.berth].station;
+      const shallow = sim.topo.stations[station]?.turnbackBerths ?? [];
+      const others = [...shallow.map(id => stablingBerth(sim.topo, id)), ...shallow];
+      candidates = [...new Set([task.berth, ...others])];
     }
     const out: ResourceOption[] = [];
     for (const goal of candidates) {
@@ -832,14 +849,25 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
       let trip = first?.k === 'stop' ? first.trip : -1;
       const station = first && 'station' in first ? first.station : undefined;
       let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
-      task = tasks.find((t): t is StopTask => {
+      const cache = queryCache(sim);
+      let ends = cache.tripEnds.get(tr);
+      if (!ends) {
+        cache.tripEnds.set(tr, ends = new Map());
+        tasks.forEach((t, i) => { if (t.k === 'stop') ends!.set(t.trip, i); });
+      }
+      task = null;
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
         if ('station' in t && t.station !== station) sameStation = false;
         // Finishing a local cab change starts this same movement's service;
         // it does not expose a later turn at another station to the queue.
         if (sameStation && t.k === 'stop' && t.dep !== null && (t.arr === null || t.arr === t.dep)) trip = t.trip;
-        return t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
-          && t.dep !== null && sim.topo.berths[t.berth].platform === platform;
-      }) ?? null;
+        if (t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
+          && t.dep !== null && sim.topo.berths[t.berth].platform === platform) { task = t; break; }
+        // Off the current station the trip no longer changes: past its last
+        // stop (or with none) nothing later can match.
+        if (!sameStation && i > 0 && (trip < 0 || i >= (ends.get(trip) ?? -1))) break;
+      }
       byPlatform.set(platform, task);
     }
     // (pure conditions, cheapest first)
@@ -939,7 +967,7 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
           const task = tr.tasks[c.index];
           if (task.k === 'depot' && depotBerth(sim.topo, task) !== c.berth && !applyDepotChoice(sim, tr, task, c.berth)) { changed = false; break; }
         }
-        queryCache(sim).movementStops.delete(tr);
+        queryCache(sim).movementStops.delete(tr); queryCache(sim).tripEnds.delete(tr);
         if (!changed) {
           current.admitted = false; current.code = 'ROUTE_CONFLICT';
           const task = tr.tasks.find((t): t is Extract<Task, { k: 'depot' }> => t.k === 'depot');
@@ -951,10 +979,13 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
           const task = tr.tasks[c.index];
           if (task.k === 'stop' && task.depotWork && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;
           if (task.k === 'reverse' && task.chosen !== c.berth) cowTask(tr, task).chosen = c.berth;
-          if (task.k === 'stable' && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;
+          if (task.k === 'stable' && task.berth !== c.berth) {
+            if (task.berth >= 0) sim.log('B', '运营', `${trainLabel(tr)} 计划存车位 ${sim.topo.berths[task.berth].name} 被无任务存车占用，改停 ${sim.topo.berths[c.berth].name}`);
+            cowTask(tr, task).berth = c.berth;
+          }
           if (option.phases.some(p => reachesBerth(sim, p, c.berth))) sim.berthRes.set(c.berth, tr.id);
         }
-        queryCache(sim).movementStops.delete(tr);
+        queryCache(sim).movementStops.delete(tr); queryCache(sim).tripEnds.delete(tr);
       }
       decision = current;
       break;

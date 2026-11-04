@@ -327,7 +327,9 @@ export interface Train {
   ato?: { state: AtoState; plan: SectionPlan; berth: number; arrival: number | null;
     level: number; ceiling: number; manual: boolean; distance: number; obstructed: boolean;
     /** A rear leg starts its physical clock at first motion, not while waiting for a route. */
-    turnbackLeg?: 'entry' | 'exit'; started?: boolean };
+    turnbackLeg?: 'entry' | 'exit'; started?: boolean;
+    /** Running delay against this arrival, re-estimated every DELAY_ESTIMATE_S (D175). */
+    delay?: number };
   /** The same phase latch for moves without a scheduled arrival budget. */
   atoMove?: AtoState;
   /** train status flags */

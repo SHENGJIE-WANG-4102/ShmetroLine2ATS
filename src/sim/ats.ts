@@ -638,7 +638,7 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
   const b = sim.topo.links[sim.topo.platforms[sim.topo.stations[east].platforms[dir]].link];
   const origin = dir === 'DN' ? a : b;
   const from = Math.max(a.chainA, a.chainB), to = Math.min(b.chainA, b.chainB);
-  const occupants = sim.trainList.filter(other => other !== tr && (
+  const occupies = (other: Train) => other !== tr && (
     (other.pendingDeparture?.station === st.station || other.phase === 'run' && other.lastStation === st.station
       && other.link === origin.id
       && other.tasks[0]?.k === 'stop' && other.tasks[0].station !== st.station
@@ -649,7 +649,7 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
       const x = l.chainA + (l.chainB - l.chainA) * seg.from / l.len;
       const y = l.chainA + (l.chainB - l.chainA) * seg.to / l.len;
       return Math.max(x, y) > from + .01 && Math.min(x, y) < to - .01;
-    })));
+    }));
   const platform=sim.topo.stations[adjacent].platforms[dir],ps=sim.plat[platform];
   // 用户决定：正常运行不额外限车；只有前方发生阻塞才启用限额。
   const blocked=ps.hold||ps.esp||(ps.psdFault&&ps.psd!=='bypass')||ps.psd==='closeFail'
@@ -659,15 +659,18 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
       const p=sim.topo.berths[stop.berth].platform;
       return p===platform||sim.topo.platforms[p]?.pool===platform;
     })
-    ||occupants.some(other=>{
+    // (the same occupants in the same order; the cheap state test first)
+    ||sim.trainList.some(other=>{
+      if(!other.failed&&!other.hold&&(other.phase!=='run'||other.v>=.05||other.pendingDeparture))return false;
+      if(!occupies(other))return false;
       if(other.failed||other.hold)return true;
-      if(other.phase!=='run'||other.v>=.05||other.pendingDeparture)return false;
       const cause=rootCause(sim,other,true);
       // A pure closed traffic dependency is not an independent obstruction
       // which may activate capacity against itself. Unknown/acyclic stays.
       return !cause.cycle||cause.external!==false;
     });
   if(!blocked)return;
+  const occupants = sim.trainList.filter(occupies);
   if (occupants.length >= rule.limit) return { train: occupants[0].id,
     detail: `${sim.topo.stations[st.station].name}—${sim.topo.stations[adjacent].name} ${occupants.length}/${rule.limit}列` };
   // A converging platform cannot reserve the restricted interval before
@@ -2193,6 +2196,29 @@ function stopBerthOnPath(sim: Sim, tr: Train, station: number, d: TrackDir): num
   return topo.berths.find(b => b.kind === 'platform' && b.station === station && reachable(b.id))?.id ?? normal;
 }
 
+/** A clear-out platform chosen on the train's actual path (stopBerthOnPath)
+ * may not lead to the depot's planned end change at the same station, e.g. a
+ * train that entered the station's other track against its direction. Change
+ * ends where it already stands instead, when that leads on to the next task
+ * (D175). The planned platform is kept whenever it is reachable. */
+function turnAtClearPlatform(sim: Sim, tasks: Task[]) {
+  const { topo } = sim, clear = tasks[0];
+  if (clear?.k !== 'stop' || topo.berths[clear.berth].kind !== 'platform') return;
+  const i = tasks.findIndex((t, j) => j > 0 && t.k === 'reverse' && t.station === clear.station);
+  const turn = tasks[i - 1], rev = tasks[i] as Extract<Task, { k: 'reverse' }> | undefined, next = tasks[i + 1];
+  if (i < 0 || !rev || turn === clear || turn?.k !== 'stop' || turn.station !== clear.station) return;
+  const from = topo.berths[clear.berth];
+  const reaches = (b: { link: number; offset: number; dir: Dir }, goal: number) =>
+    Number.isFinite(distanceToBerthFrom(sim, b.link, b.offset, b.dir, goal));
+  if (reaches(from, turn.berth)) return;
+  const flipped = topo.berths.find(x => x.kind === 'platform' && x.platform === from.platform && x.dir !== from.dir);
+  const goal = next && 'berth' in next ? next.berth : -1;
+  if (!flipped || goal === undefined || goal < 0 || !reaches(flipped, goal)) return;
+  tasks.splice(i - 1, 1);
+  rev.berths = [clear.berth];
+  rev.chosen = clear.berth;
+}
+
 export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   const { topo, plan } = sim;
   if (rescuePending(tr))
@@ -2227,7 +2253,7 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   } else if (next !== undefined && tr.inService) {
     tasks.push({ k: 'stop', berth: stopBerthOnPath(sim, tr, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 60, note: '清客' });
   }
-  if (reachable) depotTasks(topo, depot, d, tasks);
+  if (reachable) { depotTasks(topo, depot, d, tasks); turnAtClearPlatform(sim, tasks); }
   else {
     const platform = topo.links[tr.link].platform;
     const current = tr.phase === 'dwell' ? curStop(tr)?.station
