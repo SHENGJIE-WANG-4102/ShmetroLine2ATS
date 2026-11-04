@@ -89,6 +89,9 @@ function newQueryCache() {
     protection: new WeakMap<ResourceOption, Map<number, boolean>>(),
     running: new WeakMap<ReadonlySet<number>, Map<number, boolean>>(),
     switches: new WeakMap<ResourcePhase, Sim['topo']['routes'][number]['switches']>(),
+    /** earlierOrigin's current-movement stop per train and platform. Only an
+     * admitted applicant's own tasks change during an allocation; it drops its entry. */
+    movementStops: new WeakMap<Train, Map<number, StopTask | null>>(),
   };
 }
 function queryCache(sim: Sim) {
@@ -814,25 +817,35 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   // it. Inspect only the service's current movement, never later circulations;
   // ordinary through trains receive no resource claim of their own.
   return sim.trainList.find(tr => {
-    if (tr.id === request.id || tr.failed || tr.body.some(b => option.sections.has(sim.topo.links[b.link].section))) return false;
+    if (tr.id === request.id || tr.failed) return false;
     // Only the current service or the contiguous turn at its current stop
     // can compete here. A future return trip from several stations away
     // does not reserve this origin ahead of an actual siding occupant.
     // DWELL still belongs to its actual current stop, not the next station.
     // An ordinary running service has not begun its destination's cab change.
-    const tasks = tr.tasks, first = tasks[0];
-    let trip = first?.k === 'stop' ? first.trip : -1;
-    const station = first && 'station' in first ? first.station : undefined;
-    let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
-    const task = tasks.find((t): t is StopTask => {
-      if ('station' in t && t.station !== station) sameStation = false;
-      // Finishing a local cab change starts this same movement's service;
-      // it does not expose a later turn at another station to the queue.
-      if (sameStation && t.k === 'stop' && t.dep !== null && (t.arr === null || t.arr === t.dep)) trip = t.trip;
-      return t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
-        && t.dep !== null && sim.topo.berths[t.berth].platform === platform;
-    });
-    return !!task && task.dep! < origin.dep! && !needsThisOccupant(tr.id) && !queuedBehindLater(tr.id);
+    const stops = queryCache(sim).movementStops;
+    let byPlatform = stops.get(tr);
+    if (!byPlatform) stops.set(tr, byPlatform = new Map());
+    let task = byPlatform.get(platform);
+    if (task === undefined) {
+      const tasks = tr.tasks, first = tasks[0];
+      let trip = first?.k === 'stop' ? first.trip : -1;
+      const station = first && 'station' in first ? first.station : undefined;
+      let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
+      task = tasks.find((t): t is StopTask => {
+        if ('station' in t && t.station !== station) sameStation = false;
+        // Finishing a local cab change starts this same movement's service;
+        // it does not expose a later turn at another station to the queue.
+        if (sameStation && t.k === 'stop' && t.dep !== null && (t.arr === null || t.arr === t.dep)) trip = t.trip;
+        return t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
+          && t.dep !== null && sim.topo.berths[t.berth].platform === platform;
+      }) ?? null;
+      byPlatform.set(platform, task);
+    }
+    // (pure conditions, cheapest first)
+    return !!task && task.dep! < origin.dep!
+      && !tr.body.some(b => option.sections.has(sim.topo.links[b.link].section))
+      && !needsThisOccupant(tr.id) && !queuedBehindLater(tr.id);
   });
 }
 
@@ -926,6 +939,7 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
           const task = tr.tasks[c.index];
           if (task.k === 'depot' && depotBerth(sim.topo, task) !== c.berth && !applyDepotChoice(sim, tr, task, c.berth)) { changed = false; break; }
         }
+        queryCache(sim).movementStops.delete(tr);
         if (!changed) {
           current.admitted = false; current.code = 'ROUTE_CONFLICT';
           const task = tr.tasks.find((t): t is Extract<Task, { k: 'depot' }> => t.k === 'depot');
@@ -940,6 +954,7 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
           if (task.k === 'stable' && task.berth !== c.berth) cowTask(tr, task).berth = c.berth;
           if (option.phases.some(p => reachesBerth(sim, p, c.berth))) sim.berthRes.set(c.berth, tr.id);
         }
+        queryCache(sim).movementStops.delete(tr);
       }
       decision = current;
       break;

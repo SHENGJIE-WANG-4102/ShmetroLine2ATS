@@ -645,7 +645,8 @@ export function sectionPlan(dist: number, v: number, budget: number, ceiling: nu
   let cutoff = Math.max(.1,ceiling), coastAt = -1, lowerCutoff = level !== 1;
   const earliestLegal = (speed: number): SectionPlan => {
     let lo=0,hi=dist;
-    const earliest=run(speed,hi);
+    // (only an invalid trial stops early: a valid one is a complete run)
+    const earliest=run(speed,hi,{validity:true});
     if(earliest.coastValid)return earliest;
     for(let i=0;i<10;i++){const mid=(lo+hi)/2;if(run(speed,mid,{validity:true}).coastValid)lo=mid;else hi=mid;}
     return run(speed,lo);
