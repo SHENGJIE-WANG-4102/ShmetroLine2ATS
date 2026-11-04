@@ -9,10 +9,9 @@
  *    climbs at 24‰ into the next station; the dip grows with the distance;
  *  - the 黄浦江 crossing (南京东路—陆家嘴) dives to about 34 m at the
  *    river's middle on ≈27‰ grades;
- *  - the historical D65 calibration uses a K37.4 elevation anchor and a
- *    K60.9 ground anchor, with 12 m high points and gentle 10‰ dips. These
- *    synthetic anchors are retained independently of the corrected tunnel
- *    portals; they are not evidence of the real surface/underground boundary.
+ *  - the selected line's PROFILE_ANCHORS locate the elevated and ground
+ *    sections; the synthetic elevated profile has 12 m high points and
+ *    gentle 10‰ dips. These heights are assumptions, not surveyed geometry.
  * Heights are rail level relative to the ground (m). Gravity acts on the
  * whole train: the mean grade under its length.
  */
@@ -103,6 +102,30 @@ export function heightAt(p: Profile, c: number): number {
   let lo = 0, hi = ch.length - 1;
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if (ch[m] <= c) lo = m; else hi = m; }
   return h[lo] + (h[hi] - h[lo]) * (c - ch[lo]) / (ch[hi] - ch[lo]);
+}
+
+/** gradeAccelAt along the travel from `head`, for a caller stepping through
+ * nearby distances (the ATO section integrator): the same interpolation,
+ * starting each lookup from the previous profile segment. */
+export function gradeAlong(p: Profile, head: number, s: number, len = LINE_INFO.trainLength): (d: number) => number {
+  const { ch, h } = p, last = ch.length - 1;
+  const hint = [0, 0];
+  const height = (c: number, k: number) => {
+    if (c <= ch[0]) return h[0];
+    if (c >= ch[last]) return h[last];
+    let lo = hint[k];
+    if (lo >= last || ch[lo] > c || ch[lo + 1] <= c) {
+      let hi = last; lo = 0;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (ch[m] <= c) lo = m; else hi = m; }
+      hint[k] = lo;
+    }
+    const hi = lo + 1;
+    return h[lo] + (h[hi] - h[lo]) * (c - ch[lo]) / (ch[hi] - ch[lo]);
+  };
+  return d => {
+    const c = head + s * d;
+    return -G * (height(c, 0) - height(c - s * len, 1)) / len;
+  };
 }
 
 /** +1 when travel on the link at `dir` increases the chainage, -1 when it decreases, 0 off the chainage axis */

@@ -19,7 +19,7 @@ import type { Topology } from './topology';
 import { MODE, allowed, modeState, type ModeState } from './fsm';
 import { trainLabel, setDepartureReadyAt } from './ats';
 import { openCall, unsafeAhead } from './radio';
-import { nextLink } from './topology';
+import { nextLink, stablingBerth } from './topology';
 import { swPos } from './interlocking';
 import { withdrawAuthority } from './movement';
 import { OPERATIONS, supportsSignalSystem, unattended, LINE } from '../data/current';
@@ -69,13 +69,22 @@ export function driverTurnbackKind(topo: Topology, task: Pick<ReverseTask,'chose
   return topo.berths[task.chosen]?.kind === 'platform' ? 'front' : 'rear';
 }
 
+/** Rear timing calibration applies to registered turnback places, not a
+ * depot conversion track that happens to use the same cab-change task. */
+export function calibratedRearTurnback(topo: Topology, task: Pick<ReverseTask, 'chosen' | 'station'>): boolean {
+  const berth = topo.berths[task.chosen];
+  return !!berth && berth.kind !== 'platform' && !!topo.stations[task.station]?.turnbackBerths
+    .some(id => id === berth.id || stablingBerth(topo, id) === berth.id);
+}
+
 /** The paper measures the complete turn, including its door departures.
  * Deduct those shared driver confirmations from the change-of-ends increment. */
-export function turnbackDwell(mode: Mode, minimum: number, kind: 'front'|'rear' = 'rear', simulatedDriver = false): number {
+export function turnbackDwell(mode: Mode, minimum: number, kind: 'front'|'rear' = 'rear', simulatedDriver = false, calibratedRear = false): number {
   if (unattended('turnback') && mode === 'DTO' && OPERATIONS.uto) return minimum + OPERATIONS.uto.turnbackS;
+  const base = kind === 'rear' && calibratedRear ? Math.max(minimum, OPERATIONS.rearTurnback?.changeEndsS ?? minimum) : minimum;
   const work=OPERATIONS.atoDriverWork;
   const extra=simulatedDriver ? work.turnbackExtraS[kind]-work.turnbackDoorCycles[kind]*work.postLockExtraS : work.legacyEndChangeS;
-  return minimum + (mode === 'DTO' ? 0 : extra);
+  return base + (mode === 'DTO' ? 0 : extra);
 }
 
 /**
@@ -107,7 +116,7 @@ export function setMode(sim: Sim, tr: Train, mode: Mode, level: Level, why: stri
   // same driver budget used at reversal entry, without adding it twice.
   const task = tr.tasks[0];
   if (tr.phase === 'reversing' && task?.k === 'reverse')
-    tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(mode, task.minTime,driverTurnbackKind(sim.topo,task),simulatedAmDriver(tr)));
+    tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(mode, task.minTime,driverTurnbackKind(sim.topo,task),simulatedAmDriver(tr),calibratedRearTurnback(sim.topo,task)));
   if (mode !== 'RM') { tr.rmAuth = 0; tr.rmSig = -1; tr.rmReason = ''; }
   // A sighting scan is not an ATP authority. Mode/level changes can happen
   // after the second's ZC refresh, so validate the new protection immediately.
@@ -365,7 +374,7 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
     // AM→AM takeover that did not require a mode transition.
     const task = tr.tasks[0];
     if (tr.phase === 'reversing' && task?.k === 'reverse')
-      tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(tr.mode, task.minTime));
+      tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(tr.mode, task.minTime, driverTurnbackKind(sim.topo, task), false, calibratedRearTurnback(sim.topo,task)));
     tr.atoButtons = { f: false, g: false };
     // A takeover during automatic post-lock waiting goes straight to F/G.
     if (tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen) {

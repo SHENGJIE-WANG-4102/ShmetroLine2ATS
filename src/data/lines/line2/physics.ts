@@ -9,10 +9,15 @@ const PERF: SimulationExtras['physics']['performance'] = {
   /** 【假设】Comfort thresholds, pending comparison with the measured coast. */
   atoSpeedHysteresis: 3 / 3.6,
   atoNeutralS: .5,
-  /** 【假设】Each brake ramp occupies 10% of braking time. The recording
-   * supports a gentle ~2 s build-up, but its weak low-frequency tail cannot
-   * establish the release fraction. Symmetry preserves bPlan and distance. */
-  atoBrakeRampFraction: .1,
+  /** D171【假设】渐松末段；沿用同一对称jerk曲线，平均bPlan和制动距离不变。
+   * 不再在0.35m/s直接抹去末段：以更小的数值收敛阈值完成真实低速走行。 */
+  atoBrakeRampFraction: .25,
+  atoStopSnap: { speed: .03, distance: .03, margin: .01 },
+  /** D173 用户（2026-11-04）：起步要先小加速度，0～10 km/h 内由 0.35 线性升到 atoAccelMax。【假设】数值。 */
+  atoSoftStart: { speed: 10 / 3.6, accel: .35 },
+  /** D173 用户（2026-11-04）：末端减速太快（DMI 2 直接到 0）。制动保持 bPlan，最后约 5.5 s 线性松到 0
+   * （约从 7 km/h 起）。【假设】依据 11-02 录音 02A05 末段制动声 5～9 s（中、低置信）。 */
+  atoSoftStop: { releaseS: 5.5 },
   /** longitudinal jerk limit in traction and service braking; not under EB (m/s³, GB/T 7928 6.13) */
   jerk: 0.75,
   /** max service brake (m/s²) */

@@ -44,6 +44,10 @@ export interface TimetableData {
   shownPeriods: Record<DayType, Period[]>;
   dwellBands: Record<DayType, ClockBand[]>;
   runBands: Record<DayType, ClockBand[]>;
+  /** Directed physical sections may use a different level within clock bands.
+   * Missing sections and uncovered clocks retain runBands. Station IDs are data. */
+  sectionRunBands?: Partial<Record<DayType, { from: string; to: string;
+    bands: (ClockBand & { allowanceS?: number })[] }[]>>;
   serviceData: Record<DayType, ServiceData>;
   opening: { outerAlternation: number; stockUntil: number; redirectFrom: number; emptyFeedersFrom: number; feederUntil: number; stableUntil: number; dayStart: number; defaultStableDeparture: number };
   outerBandMargin: number;

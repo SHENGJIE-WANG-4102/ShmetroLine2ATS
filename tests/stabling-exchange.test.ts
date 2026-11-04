@@ -1,7 +1,7 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {canExchangeStabling} from '../src/sim/standby';
-import {overnightPlaces} from '../src/sim/timetable';
+import {departureBerthAfterReverse,platformBerth} from '../src/sim/timetable';
 import type {Block,Plan,StopTask,Trip} from '../src/sim/model';
 import * as planning from '../src/sim/planning';
 import {capture,restore} from '../src/sim/state';
@@ -10,7 +10,10 @@ import {applyInput} from '../src/sim/diagnostics';
 afterEach(()=>vi.restoreAllMocks());
 function fixture(until=14400){
  const s=new Sim({dayType:'weekday',dateLabel:'slot',startTime:14400,seed:3,noPossessions:true});s.t=20000;s.autoDispatch=true;
- const place=overnightPlaces(s.topo).find(p=>p.kind==='platform'&&p.track==='turnback')!;
+ // Synthetic reservation: the generic exchange contract remains valid even
+ // when the selected line does not schedule overnight platform stabling.
+ const place=s.topo.stations.flatMap(st=>st.turnbackBerths.filter(b=>s.topo.berths[b].kind==='platform')
+  .map(berth=>({station:st.index,berth:departureBerthAfterReverse(s.topo,berth,platformBerth(s.topo,st.index,'UP'))}))).at(0)!;
  const berth=s.topo.berths[place.berth],st=place.station,template=s.plan.trips[0];
  const trip=(id:number,dir:'DN'|'UP',from:number,to:number,dep:number,block:number):Trip=>({...template,id,no:`T${id}`,dir,from,to,block,cancelled:false,completed:false,revenue:true,
   stops:[{st:from,arr:dep,dep,stop:true},{st:to,arr:dep+180,dep:dep+180,stop:true}]});

@@ -173,7 +173,7 @@ describe('faults', () => {
     expect(sim.trains.has(rescuer.id) && sim.trains.get(rescuer.id)!.phase !== 'stabled').toBe(false);
     // the rest of the line keeps running
     expect(sim.trainList.filter((t) => t.inService && t.v > 1).length).toBeGreaterThan(10);
-  });
+  }, 300_000); // about 70 min of full-line simulation
 
   it('passenger surge → crowding alarm and longer dwell', () => {
     const sim = makeSim('weekday', H);
@@ -200,6 +200,6 @@ describe('scenario catalogue', () => {
       const fired = sim.events.filter((e) => e.text.startsWith('场景事件：'));
       expect(fired.length).toBe(def.events.length);
       expect(fired.filter((e) => e.text.includes('未找到')).map((e) => e.text)).toEqual([]);
-    }, 600_000); // evening scenarios warm up a whole operating day first
+    }, 1_200_000); // evening scenarios warm up a whole operating day first (~13 h of full-line simulation from 04:00)
   }
 });

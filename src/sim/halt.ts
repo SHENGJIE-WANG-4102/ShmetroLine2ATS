@@ -14,7 +14,7 @@
 import { computerCrew, utoBusy, utoVehicleWait } from './uto';
 import type { Sim } from './engine';
 import type { Train, StopTask } from './model';
-import { atoStartReady, depotBerth, simulatedAmDoorWork } from './ats';
+import { atoStartReady, depotBerth, rescueCouplingDoorWait, simulatedAmDoorWork } from './ats';
 import { goalBerth, manualTractionHold, reversePermission } from './movement';
 import { swPos } from './interlocking';
 import { STATIONS } from '../data/current';
@@ -166,7 +166,10 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
   if(utoBusy(tr))return r('MODE_CHANGE',-1,tr.uto!.detail,tr.uto!.until);
   if (tr.phase === 'stabled') return r('STABLED');
   if (tr.failed) return r('FAILED');
-  if (tr.phase === 'coupling') return r('COUPLING');
+  if (tr.phase === 'coupling') {
+    const wait = rescueCouplingDoorWait(sim, tr);
+    return wait ? r(wait.code, -1, wait.detail) : r('COUPLING');
+  }
   if (tr.phase === 'dwell') {
     const work = tr.tasks[0]?.k === 'stop' ? tr.tasks[0].depotWork : undefined;
     if (work) {

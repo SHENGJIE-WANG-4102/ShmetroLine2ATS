@@ -6,13 +6,13 @@ import { utoBusy, utoVehicleWait } from './uto';
 import type { Sim } from './engine';
 import type { Train, BodySeg } from './model';
 import { nextLink, linkChain, type Dir } from './topology';
-import { profileOf, heightAt, chainSense, gradeAccelAt, brakingSpeedH } from './gradient';
+import { profileOf, heightAt, chainSense, gradeAccelAt, gradeAlong, brakingSpeedH } from './gradient';
 import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
 import { levelAccel, trainLevel } from './energy';
 import { swPos } from './interlocking';
 import { TRACTION_UNITS } from './vehicle';
-import { PERF, brakingSpeed, jerkLimited, tractionAccel, atoTractionAccel, atoControl, atoStopApproachDistance, atoBrakeProfile, atoLimitSpeed, sectionPlan, sectionRecommended, sectionEta, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
-import { routeLeadsTo, distanceToBerthFrom, type TaskPathVisitor } from './ats';
+import { PERF, brakingSpeed, jerkLimited, tractionAccel, atoTractionAccel, atoControl, atoStopApproachDistance, atoBrakeProfile, atoLimitSpeed, atoStopReady, atoStopMargin, sectionPlan, sectionRecommended, sectionEta, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
+import { routeLeadsTo, distanceToBerthFrom, rearTurnbackLeg, preciseAtoStationStop, type TaskPathVisitor } from './ats';
 import type { HaltCode } from './halt';
 import { applyEB } from './onboard';
 import { psdSafe } from './psd';
@@ -869,15 +869,16 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   const regulated = !rm && !tr.manual && tr.inService && (tr.mode === 'DTO' || tr.mode === 'AM');
   const recommend = tr.manual && tr.mode === 'CM';
   const targetRegulated = regulated || recommend && tr.inService;
+  const rearLeg = !tr.manual && !rm ? rearTurnbackLeg(sim, tr) : undefined;
   // Running delay against the arrival plan: the arrival this train makes
   // from here at the current speed limit, compared with the planned arrival.
   const nextStop = tr.tasks[0];
-  const budgetProfile = targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null ? regulationProfile(sim, tr) : null;
+  const budgetProfile = rearLeg || targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null ? regulationProfile(sim, tr) : null;
   const budgetDistance = budgetProfile?.distance ?? Infinity;
   const targetDelay = targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance)
     ? sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, budgetProfile?.limits, PERF.atoMargin) - nextStop.arr : tr.delay;
   if (regulated) tr.delay = targetDelay;
-  const atoMargin = targetRegulated && targetDelay > 2 ? PERF.atoFastMargin : PERF.atoMargin;
+  const atoMargin = rearLeg || targetRegulated && targetDelay > 2 ? PERF.atoFastMargin : PERF.atoMargin;
   const stopAt = Math.min(scan.stopDist, scan.maDist);
   // the profile (gradient.ts): gravity on the train, and the height of a point
   // ahead for the ATP curves, which brake against the grade as well (D65)
@@ -887,6 +888,8 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   const aG = gradeAccelAt(prof, head, sense, tr.len);
   const h0 = heightAt(prof, head);
   const rise = (d: number) => sense ? heightAt(prof, head + sense * d) - h0 : 0;
+  // the ATO plan coasts against the same grade the train will feel
+  const gradeAhead = sense ? gradeAlong(prof, head, sense, tr.len) : undefined;
   // wet rail (adhesion.ts); in low-adhesion mode ATO brakes earlier and softer on the exposed section
   const adh = adhesionLimit(sim, tr);
   const lowAdh = sim.env.lowAdh && adh.exposed && (!tr.manual || recommend);
@@ -927,7 +930,12 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     // and ATP curves retain their independently supervised braking rates.
     const state = tr.ato && tr.ato.berth === goalBerth(tr) ? tr.ato.state : tr.atoMove;
     const entry = state?.brakeEntrySpeed;
-    const stopping = lowAdh ? brakingSpeed(scan.stopDist - .2, 0, bPlan)
+    // A numerical standstill outside the station capture window has no
+    // moving entry for a new brake shape. Use the existing distance envelope
+    // until motion supplies one; a zero-speed shape must not become MA0.
+    const unlatchedPrecisionStop = entry === undefined && preciseAtoStationStop(sim.topo, tr)
+      && tr.v < PERF.atoStopSnap!.speed && !atoStopReady(tr.v, scan.stopDist);
+    const stopping = lowAdh || unlatchedPrecisionStop ? brakingSpeed(scan.stopDist - atoStopMargin(.2), 0, bPlan)
       : entry !== undefined ? atoBrakeProfile(entry, scan.stopDist, state?.brakeEntryDistance, state?.brakeEntryGrade).speed
         : scan.stopDist <= atoStopApproachDistance(tr.v, tr.a, aG) ? atoBrakeProfile(tr.v, scan.stopDist, undefined, aG).speed : Infinity;
     vT = Math.min(vT, stopping);
@@ -943,13 +951,32 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   // A section has one physical plan, rather than a new cruise target at every
   // 100 ms tick. Only a changed task, budget, level or driver mode replaces it.
   // No route/traffic/ATP constraint is cached in this unhindered plan.
-  const level = targetRegulated ? trainLevel(sim, tr, targetDelay) : 1;
-  if (targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance) && budgetDistance > 0) {
+  const level = rearLeg ? 1 : targetRegulated ? trainLevel(sim, tr, targetDelay) : 1;
+  if (rearLeg && Number.isFinite(budgetDistance) && budgetDistance > 0) {
+    const ceiling = PERF.vMax - atoMargin, old = tr.ato;
+    const same = old?.turnbackLeg === rearLeg.kind && old.berth === rearLeg.goal && !old.manual;
+    const waiting = tr.v < .05 && tr.lastDs <= 1e-6;
+    const obstructed = tr.hold || standStill || scan.maDist < budgetDistance
+      && scan.maDist < tr.v * tr.v / (2 * bPlan) + 60;
+    let arrival = same && old.arrival !== null ? old.arrival : sim.t + rearLeg.seconds;
+    if (same && (!old.started && waiting || old.started && waiting && obstructed))
+      arrival = old.started ? arrival + dt : sim.t + rearLeg.seconds;
+    const started = !!(same && old.started || tr.lastDs > 1e-6 || tr.v >= .05);
+    if (!same || old.ceiling !== ceiling || old.obstructed && !obstructed
+      || Math.abs(budgetDistance - (old.distance - tr.lastDs)) > 2) {
+      tr.ato = { state: same ? old.state : {phase:'traction',recovered:false,neutral:0},
+        plan: sectionPlan(budgetDistance,tr.v,arrival-sim.t,ceiling,budgetProfile?.limits,atoMargin,tr.a,1,gradeAhead),
+        berth:rearLeg.goal,arrival,level:1,ceiling,manual:false,distance:budgetDistance,obstructed,
+        turnbackLeg:rearLeg.kind,started };
+    } else {
+      old.arrival = arrival; old.started = started; old.distance = budgetDistance; old.obstructed = obstructed;
+    }
+  } else if (targetRegulated && nextStop?.k === 'stop' && nextStop.arr !== null && Number.isFinite(budgetDistance) && budgetDistance > 0) {
     const ceiling = PERF.vMax - atoMargin;
     const old = tr.ato;
     const obstructed = tr.hold || standStill || scan.maDist < budgetDistance - 1
       && scan.maDist < tr.v * tr.v / (2 * bPlan) + 60;
-    if (!old || old.berth !== nextStop.berth || old.arrival !== nextStop.arr || old.level !== level
+    if (!old || old.turnbackLeg || old.berth !== nextStop.berth || old.arrival !== nextStop.arr || old.level !== level
       || old.ceiling !== ceiling || old.manual && !tr.manual || old.obstructed && !obstructed
       || Math.abs(budgetDistance - ((old?.distance ?? budgetDistance) - tr.lastDs)) > 2) {
       // Switching between the ordinary and late speed margin must not erase a
@@ -960,7 +987,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
         && Math.abs(budgetDistance - (old.distance - tr.lastDs)) <= 2
         ? { ...old.state } : { phase: 'traction' as const, recovered: false, neutral: 0 };
       tr.ato = { state,
-        plan: sectionPlan(budgetDistance, tr.v, nextStop.arr - sim.t, ceiling, budgetProfile?.limits, atoMargin, tr.a, level),
+        plan: sectionPlan(budgetDistance, tr.v, nextStop.arr - sim.t, ceiling, budgetProfile?.limits, atoMargin, tr.a, level, gradeAhead),
         berth: nextStop.berth, arrival: nextStop.arr, level, ceiling, manual: tr.manual, distance: budgetDistance, obstructed };
     }
     tr.ato!.distance = budgetDistance;
@@ -1053,7 +1080,8 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     // (a sliding train can go past it)
     const hard = tr.eb || tr.slip === 'slide' ? Infinity : Math.max(0, stopAt + 0.3);
     if (ds > hard) { ds = hard; tr.v = Math.min(tr.v, 0.3); }
-    if (stopAt < 0.4 && tr.v < 0.35 && !tr.eb) tr.v = 0;
+    const stoppingAtBerth = preciseAtoStationStop(sim.topo, tr) && Number.isFinite(scan.stopDist) && scan.stopDist <= scan.maDist;
+    if (!tr.eb && (stoppingAtBerth ? atoStopReady(tr.v, stopAt) : stopAt < .4 && tr.v < .35)) tr.v = 0;
   }
   // at a stand the brakes hold it: nothing left to ease off, traction builds up from
   // nothing (on a rising grade it keeps building until it lifts the train)

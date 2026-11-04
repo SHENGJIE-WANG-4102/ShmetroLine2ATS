@@ -4,6 +4,7 @@ import type { Template, Period, OverlayPreset } from '../../../sim/timetable';
 import type { ClockBand, ServiceData, SimulationData } from '../../simulation';
 import { SIMULATION_EXTRAS } from './simulationExtras';
 import { INSTRUCTOR_DATA } from './scenarios';
+import { OFFPEAK_SECTION_RUN_BANDS } from './running';
 const H = (h: number, m = 0) => h * 3600 + m * 60;
 const TEMPLATES: Record<string, Template> = {
   weekdayAM: {
@@ -12,7 +13,7 @@ const TEMPLATES: Record<string, Template> = {
   },
   weekdayPM: {
     id: 'weekdayPM', name: '工作日晚高峰', desc: '大小交路交替：大—大—小，淞虹路—广兰路 3\'00"，外段 4\'30"',
-    pattern: ['big', 'big', 'small'], headway: 180, peak: true, phase: { UP: 1 },
+    pattern: ['big', 'big', 'small'], headway: 180, peak: true, phase: { UP: 2 },
   },
   weekdayAMTail: {
     id: 'weekdayAMTail', name: '早高峰退出', desc: '2:1 交路逐步退出早高峰', // 【假设】
@@ -33,7 +34,8 @@ const TEMPLATES: Record<string, Template> = {
     pattern: ['big'], headway: 180,
   },
   weekend: {
-    id: 'weekend', name: '双休日/节假日', desc: '全天单一大交路，日间 4\'30"', pattern: ['big'], headway: 270,
+    // D173：官方双休日08:30–20:30平均4'00"。
+    id: 'weekend', name: '双休日/节假日', desc: '全天单一大交路，日间 4\'00"', pattern: ['big'], headway: 240,
   },
   firstLast: {
     id: 'firstLast', name: '首末班及收车', desc: '首班 05:25 起 7\'00"；21:57 后蟠祥路—广兰路 8\'00"，末班后回段/存车',
@@ -86,7 +88,8 @@ const SHOWN_PERIODS: Record<DayType, Period[]> = {
 
 const DWELL_BANDS: Record<DayType, ClockBand[]> = {
   weekday: [
-    { from: 0, to: H(6, 5), value: 0.918 },
+    // D171 用户决定2026-11-03：首末班只压客流项；沿用既有收班低客流系数【假设】。
+    { from: 0, to: H(6, 5), value: 0.418 },
     { from: H(6, 5), to: H(6, 50), value: 1 },
     { from: H(6, 50), to: H(9, 30), value: 0.8 },
     { from: H(9, 30), to: H(16, 50), value: 1 },
@@ -94,10 +97,11 @@ const DWELL_BANDS: Record<DayType, ClockBand[]> = {
     // D138【假设】: existing evening band fitted to the seven ride-east samples.
     { from: H(19, 30), to: H(20, 30), value: 1.2 },
     // D163【假设】: field dwell after 20:30, median 47.55 s (n=11, D129); factor 1 averages 47.5 s.
-    { from: H(20, 30), to: Infinity, value: 1 },
+    { from: H(20, 30), to: H(22, 30), value: 1 },
+    { from: H(22, 30), to: Infinity, value: 0.418 },
   ],
   weekend: [
-    { from: 0, to: H(6, 40), value: 0.918 },
+    { from: 0, to: H(6, 40), value: 0.418 },
     { from: H(6, 40), to: H(21), value: 1.05 },
     { from: H(21), to: H(21, 40), value: 0.918 },
     { from: H(21, 40), to: Infinity, value: 0.418 },
@@ -110,6 +114,7 @@ const RUN_BANDS: Record<DayType, ClockBand[]> = {
     // (median, n=11, D129); level 4 budgets 32.6%, level 1 18.2% (evening peak field 18.3%).
     // The published last trains (from 21:57) fit level 1 with ~45 s dwells (D129), so
     // level 1 again from 21:40, where the existing level-4 band had no sample.
+    // D171平峰另按running.ts逐区间标定；未覆盖处仍用原一级。
     { from: 0, to: H(20, 30), value: 1 },
     { from: H(20, 30), to: H(21, 40), value: 4 },
     { from: H(21, 40), to: Infinity, value: 1 },
@@ -128,14 +133,17 @@ const SERVICE_DATA: Record<DayType, ServiceData> = {
     peaks: { weekdayAM: {}, weekdayPM: { DN: H(17), UP: H(17, 24), upEnd: H(20, 20) } },
     overrides: [
       { dir: 'UP', from: H(18, 55), to: H(19, 25), template: 'weekdayNight', headway: 180, label: '西段退峰前三分钟连续大交路' }, // 【假设】由实拍S1/S2反推参考站波次
-      { dir: 'DN', from: H(19, 45), to: H(21, 20), template: 'weekdayNight', headway: 180, label: '西段东行三分钟延续' }, // 【假设】
-      { dir: 'DN', from: H(9, 45), to: H(10, 40), template: 'weekdayAMTail', headway: 200, headwayTo: 300, label: '东行早高峰退出' }, // 【假设】
+      // D173：10-16淞虹路东行PIS 20:55～21:07约3分钟（含两列淞虹路起机场车），21:07后3.6～4分钟；高德世纪公园3分钟至21:44。
+      { dir: 'DN', from: H(19, 45), to: H(21, 5), template: 'weekdayNight', headway: 180, label: '西段东行三分钟延续' },
+      // D173：官方早高峰到10:00。高德9:45–10:45东行核心段与西段外段车数相当（北新泾17、虹桥2号航站楼18～19），
+      // 即退峰时东行全开大交路、不再从淞虹路发小交路；起点取官方外段3'45"，渐变到平峰5'00"。
+      { dir: 'DN', from: H(10), to: H(10, 40), template: 'weekdayOff', headway: 225, headwayTo: 300, label: '东行早高峰退出' },
     ],
     // 【假设】 LYL depot origins fill the western opening wave while GLL is sparse.
     openingSupplements: [
       { from: 0, to: H(5, 35), headway: 450, terminal: 'PXL' },
       { from: H(5, 35), to: H(5, 50), headway: 225, terminal: 'PXL' },
-      { from: H(5, 50), to: H(6, 10), headway: 450, terminal: 'PXL' },
+      { from: H(5, 50), to: H(6, 10), headway: 225, terminal: 'PXL' },
       { from: H(6, 10), to: H(6, 30), headway: 225, terminal: 'PXL' },
       { from: H(6, 30), to: H(6, 40), headway: 225, terminal: 'SHR' },
       { from: H(6, 40), to: H(7, 10), headway: 150, terminal: 'SHR' },
@@ -188,13 +196,14 @@ export const SIMULATION: SimulationData = {
     },
     templates: TEMPLATES, dayPeriods: DAY_PERIODS, shownPeriods: SHOWN_PERIODS,
     dwellBands: DWELL_BANDS, runBands: RUN_BANDS, serviceData: SERVICE_DATA,
+    sectionRunBands: { weekday: OFFPEAK_SECTION_RUN_BANDS, weekend: OFFPEAK_SECTION_RUN_BANDS },
     opening: OPENING, outerBandMargin: 1200, overlays: OVERLAY_PRESETS,
     terminals: {
       core: ['SHR', 'GLL'], insertOrigin: 'LYL', overflowWithdrawal: 'YDD',
       circulate: ['SHR', 'GLL', 'GJH', 'LYL', 'YDD'],
       depot: { PXL: 'BZL', PDA: 'CSD', SHR: 'BZL', GLL: 'LYD', GJH: 'BZL', HQZ: 'BZL', LYL: 'LYD', YDD: 'CSD' },
-      capacity: { PXL: 3, PDA: 3, SHR: 3, GLL: 1, GJH: 3, HQZ: 2 },
-      maxPresent: { PXL: 3, PDA: 3, SHR: 2, GLL: 1, GJH: 3, HQZ: 2 },
+      capacity: { PXL: 3, PDA: 3, SHR: 3, GJH: 3, HQZ: 2 },
+      maxPresent: { PXL: 3, PDA: 3, SHR: 2, GJH: 3, HQZ: 2 },
     },
     firstOrigins: [
       { dir: 'UP', from: 'LYL', to: 'PXL', dep: H(5, 20) },

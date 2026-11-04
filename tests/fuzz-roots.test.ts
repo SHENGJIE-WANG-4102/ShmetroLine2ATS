@@ -145,7 +145,9 @@ describe('whole-movement resource admission', () => {
         routes: [], path: [{ link: body.link, from: body.from, to: body.to }], distance: body.to - body.from });
       virtual.options[0].sections.add(sim.topo.links[body.link].section);
     }
-    expect(sim.plan.blocks[41].svc).toBe('042');
+    // The virtual request -42 names block 41's service; read it from the plan.
+    const service = sim.plan.blocks[41].svc;
+    expect(service).toMatch(/^\d{3}$/);
     const result = arbitrateResources(sim, [frontRequest, rearRequest, virtual]);
     if (blocked) {
       expect(result.decisions.get(front.id)?.admitted).toBe(true);
@@ -154,7 +156,7 @@ describe('whole-movement resource admission', () => {
     } else {
       expect(result.decisions.get(-42)?.admitted).toBe(true);
       expect(result.decisions.get(front.id)).toMatchObject({ admitted: false, blocker: -42, code: 'REGULATION' });
-      expect(result.decisions.get(front.id)?.detail).toContain('042');
+      expect(result.decisions.get(front.id)?.detail).toContain(service);
     }
     expect(sim.integrity.violations).toEqual([]);
   });
@@ -971,9 +973,12 @@ describe('issued authority and shared restriction boundary',()=>{
     const {sim,rear,signal}=fixture();const route=signal.routes[0];
     expect(trySetRoute(sim,route,{fleeting:true}).ok).toBe(true);
     rear.off=6.02;rear.maSigs=[signal.id]; rear.v=.3;
+    // The refusal does not write a wait onto the rear train (it may already
+    // hold its own planned start-window wait from the world).
+    const waiting=rear.arsWait;
     const refused=cancelArsRoute(sim,rear,signal.id);
     expect(refused.ok).toBe(false);expect(refused.msg).toContain('允许速度曲线');
-    expect(rear.arsWait == null).toBe(true);
+    expect(rear.arsWait).toBe(waiting);
     expect(cancelRoute(sim,signal.id,{source:'ars',train:rear.id}).ok).toBe(true);
     expect(sim.integrity.violations).toContainEqual(expect.objectContaining({kind:'ARS_AUTHORITY_CANCEL',trains:[rear.id]}));
   });

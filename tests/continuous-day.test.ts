@@ -1,6 +1,7 @@
 import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {nextOperatingConfig,carryWorld,DAY_S} from '../src/sim/operatingDay';
+import {dayNumber} from '../src/sim/yard';
 import {capture,restore,DAY_STATE} from '../src/sim/state';
 import {exportDiagnostics,parseDiagnostics,stringifyDiagnostics,replayDiagnostics} from '../src/sim/diagnostics';
 import {computeBody,indexBodies} from '../src/sim/movement';
@@ -27,16 +28,28 @@ describe('continuous operating days',()=>{
   expect(s.vehicles.get(running.vehicle)!.km).toBeGreaterThan(0);
   const original={id:running.id,vehicle:running.vehicle,link:running.link,off:running.off,dir:running.dir};
   const yards=structuredClone(s.yards),oldIds=s.trainList.map(t=>t.id),stock=nextOperatingConfig(s).depotStock!;
-  expect(stock.reduce((a,b)=>a+b,0)).toBe(s.depotStock.reduce((a,b)=>a+b,0)+1);
+  // The 27:30 extra returns to its yard; D170 workshop cars finishing by
+  // tomorrow rejoin the supply as well.
+  const finishing=[...s.vehicles.values()].filter(v=>v.work&&v.until<=dayNumber(s.config)+1).length;
+  expect(stock.reduce((a,b)=>a+b,0)).toBe(s.depotStock.reduce((a,b)=>a+b,0)+1+finishing);
   const homes=s.trainList.filter(t=>!t.tasks.length).map(t=>({id:t.id,vehicle:t.vehicle}));
   // World transfer preserves every track; the subsequent maintenance step
   // explicitly performs the authorized night shunt.
   const transferred=new Sim(nextOperatingConfig(s));carryWorld(transferred,s);
   expect(transferred.yards).toEqual(yards);
+  const working=new Set([...s.vehicles].filter(([,v])=>v.work).map(([no])=>no));
   s=new Sim(nextOperatingConfig(s),s);
   expect(s.t).toBeCloseTo(3.75*3600,4);
   expect(s.trains.get(original.id)).toMatchObject(original);
-  expect(s.trainList.map(t=>t.id)).toEqual(oldIds);expect(s.yards.map(y=>y.tracks.flat().sort())).toEqual(yards.map(y=>y.tracks.flat().sort()));
+  expect(s.trainList.map(t=>t.id)).toEqual(oldIds);
+  // The night shunt only rotates the D170 workshop: a car due for work leaves
+  // its track for the shop and a finished one takes its place.
+  s.yards.forEach((yard,i)=>{
+   const after=yard.tracks.flat(),before=yards[i].tracks.flat();
+   expect(after.length).toBe(before.length);
+   for(const no of before.filter(no=>!after.includes(no)))expect(s.vehicles.get(no)!.work).not.toBe('');
+   for(const no of after.filter(no=>!before.includes(no)))expect(working.has(no)).toBe(true);
+  });
   for(const home of homes){expect(s.trains.get(home.id)?.vehicle).toBe(home.vehicle);expect(s.trains.get(home.id)?.block).toBeGreaterThanOrEqual(0);}
   const remaining=s.trains.get(original.id)!;
   for(const task of remaining.tasks)if(task.k==='stop'&&task.trip>=0)expect(s.plan.trips[task.trip].block).toBe(remaining.block);

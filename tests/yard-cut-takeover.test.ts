@@ -3,22 +3,47 @@ import { Sim } from '../src/sim/engine';
 import { newTrain } from '../src/sim/ats';
 import { blockTasks, platformBerth } from '../src/sim/timetable';
 import { computeBody, indexBodies } from '../src/sim/movement';
+import { findStandby } from '../src/sim/standby';
 
-function fixture() {
+/** `done`: index of the trip's last completed call (-1: not started). */
+function fixture(done = -1) {
   const sim = new Sim({ dayType: 'weekday', dateLabel: 'yard cut recovery', startTime: 14400, seed: 19, autoDispatch: true });
   for (const train of [...sim.trainList]) sim.removeTrain(train);
-  const block = sim.plan.blocks.find(b => b.end.kind === 'depot' && b.trips.some(id => sim.plan.trips[id].no === '2002'))!;
-  expect(block).toBeDefined();
-  block.trips = block.trips.slice(block.trips.findIndex(id => sim.plan.trips[id].no === '2002'));
-  const first = sim.plan.trips[block.trips[0]], nextId = block.trips[1];
-  const berth = sim.topo.berths[platformBerth(sim.topo, first.from, first.dir)];
+  // A depot-bound duty whose mid-morning revenue trip has a following revenue
+  // trip, with the train standing at its call `done`, where a yard standby
+  // can take the remaining calls. Its earlier trips are not part of the
+  // scenario; cancelled, they leave their paths free.
+  const { plan, topo } = sim;
   const vehicle = [...sim.vehicles.keys()][0];
-  const train = newTrain(sim, block, berth.link, berth.offset, berth.dir, [{ link: berth.link, dir: berth.dir }], vehicle);
-  Object.assign(train, { block: block.id, tripId: first.id, tripNo: first.no, svc: block.svc, phase: 'run',
-    lastStation: first.from, inService: true, lastCompletedCall: { trip: first.id, stopIndex: -1 } });
-  train.tasks = blockTasks(sim.topo, sim.plan, block);
-  block.train = train.id;
-  return { sim, block, first, nextId, train, vehicle };
+  for (const block of plan.blocks) for (let i = 0; i + 1 < block.trips.length; i++) {
+    if (block.end.kind !== 'depot') break;
+    const trips = block.trips, t = plan.trips[trips[i]], n = plan.trips[trips[i + 1]];
+    if (!t.revenue || !n.revenue || t.stops.length <= done + 2 || t.stops[0].dep < 9 * 3600 || t.stops[0].dep > 11 * 3600) continue;
+    for (const id of trips.slice(0, i)) plan.trips[id].cancelled = true;
+    block.trips = trips.slice(i);
+    const first = plan.trips[block.trips[0]], nextId = block.trips[1];
+    const at = first.stops[Math.max(done, 0)].st;
+    const berth = topo.berths[platformBerth(topo, at, first.dir)];
+    const train = newTrain(sim, block, berth.link, berth.offset, berth.dir, [{ link: berth.link, dir: berth.dir }], vehicle);
+    Object.assign(train, { block: block.id, tripId: first.id, tripNo: first.no, svc: block.svc, phase: 'run',
+      lastStation: at, inService: true, lastCompletedCall: { trip: first.id, stopIndex: done } });
+    const tasks = blockTasks(topo, plan, block);
+    train.tasks = done < 0 ? tasks
+      : tasks.slice(tasks.findIndex(t => t.k === 'stop' && t.trip === first.id && t.revenue && (t.stopIndex ?? -1) > done));
+    computeBody(sim, train); indexBodies(sim);
+    // The withdrawal cancels the duty's trips before it looks for a standby.
+    for (const id of block.trips) plan.trips[id].cancelled = true;
+    const standby = findStandby(sim, block.id, block.trips);
+    for (const id of block.trips) plan.trips[id].cancelled = false;
+    if (standby?.k === 0) {
+      block.train = train.id;
+      return { sim, block, first, nextId, train, vehicle };
+    }
+    sim.removeTrain(train);
+    for (const id of trips.slice(0, i)) plan.trips[id].cancelled = false;
+    block.trips = trips;
+  }
+  throw Error('No yard standby takeover fixture');
 }
 
 describe('yard standby after withdrawal', () => {
@@ -40,16 +65,10 @@ describe('yard standby after withdrawal', () => {
   });
 
   it('starts a real yard replacement after the last completed station', () => {
-    const { sim, block, first, train } = fixture();
-    const done = 2, next = first.stops[done + 1];
-    const berth = sim.topo.berths[platformBerth(sim.topo, first.stops[done].st, first.dir)];
-    Object.assign(train, { link: berth.link, off: berth.offset, dir: berth.dir,
-      hist: [{ link: berth.link, dir: berth.dir }], recentBody: undefined,
-      lastStation: first.stops[done].st, lastCompletedCall: { trip: first.id, stopIndex: done } });
-    const index = train.tasks.findIndex(t => t.k === 'stop' && t.trip === first.id && t.revenue && (t.stopIndex ?? -1) > done);
-    expect(index).toBeGreaterThanOrEqual(0);
-    train.tasks = train.tasks.slice(index);
-    computeBody(sim, train); indexBodies(sim);
+    const done = 2;
+    const { sim, block, first, train } = fixture(done);
+    const next = first.stops[done + 1];
+    expect(train.tasks[0]).toMatchObject({ k: 'stop', trip: first.id });
     const count = sim.plan.trips.length;
     const result = sim.command({ c: 'withdraw', train: train.id });
     expect(result.ok, result.msg).toBe(true);

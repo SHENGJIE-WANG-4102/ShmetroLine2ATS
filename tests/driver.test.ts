@@ -418,19 +418,26 @@ describe('driver controls and physical enable',()=>{
   expect(s.command({c:'atoButton',train:t.id,button:'g',down:true}).ok).toBe(true);updateTrainTasks(s,t);expect(t.phase).toBe('run');
  });
  it('spends the diagram running budget in the section, retaining the precision braking curve',()=>{
-  const plan=sectionPlan(1000,0,100,80/3.6);expect(plan.cutoff).toBeLessThanOrEqual(80/3.6);expect(plan.eta).toBeCloseTo(100,0);
+  const plan=sectionPlan(1000,0,100,80/3.6);expect(plan.cutoff).toBeLessThanOrEqual(80/3.6);
+  // D173 fixed ATO steps: never late, early by less than one step.
+  expect(plan.eta).toBeLessThanOrEqual(100.5);expect(plan.eta).toBeGreaterThan(95);
   expect(plan.completed).toBe(true);expect(plan.coastValid).toBe(true);
   expect(sectionCruise(1000,0,20,80/3.6)).toBe(80/3.6);
   expect(sectionCruise(20,10,50,80/3.6)).toBe(80/3.6);
   const slower=sectionPlan(1000,15,110,80/3.6);
   expect(slower.cutoff).toBeLessThan(15);expect(slower.eta).toBeCloseTo(110,0);expect(slower.completed).toBe(true);
-  expect(sectionCruise(1000,15,10000,80/3.6)).toBeCloseTo(OPERATIONS.sectionCruiseMinKmh/3.6,2);
+  // (D173 fixed steps: the lowest step at or above the minimum cruise)
+  const steps=OPERATIONS.atoSpeedStepsKmh,floor=steps?Math.min(...steps.filter(k=>k>=OPERATIONS.sectionCruiseMinKmh)):OPERATIONS.sectionCruiseMinKmh;
+  expect(sectionCruise(1000,15,10000,80/3.6)).toBeCloseTo(floor/3.6,2);
   expect(sectionCruise(1000,0,10000,5/3.6)).toBe(5/3.6);
   const s=make(),minimum=computeRunTimes(s.topo,186,Infinity,1,true);
   const capped=computeRunTimes(s.topo,186,50,1,true);
   // D136 airport 60 km/h already changed this physical gap in the frozen
   // baseline (3833.4 - 3692.8); D137 padding leaves both minimum tables intact.
-  expect(capped.dn.reduce((a,b)=>a+b,0)-minimum.dn.reduce((a,b)=>a+b,0)).toBeCloseTo(140.6, 1);
+  // D171 portal at 52500 m and the elevated 60/HTS–airport 50 limits: 148.4 s.
+  // D173 soft stop: the final release already approaches the platform slowly,
+  // so the 50 km/h platform cap costs less: 122.2 s.
+  expect(capped.dn.reduce((a,b)=>a+b,0)-minimum.dn.reduce((a,b)=>a+b,0)).toBeCloseTo(122.2, 1);
   expect(OPERATIONS.platformPassKmh).toBe(45);expect(OPERATIONS.platformStopKmh).toBe(Infinity);
  });
  it('RM retains the TBTC AM offer when CBTC is unavailable',()=>{
@@ -489,9 +496,13 @@ describe('driver controls and physical enable',()=>{
    arrivedAt:s.t-30,dwellUntil:s.t,depReadyAt:s.t-1,doorLockedAt:s.t-1,autoStartAt:s.t-1,
    maDist:0,maCode:'ROUTE_WAIT',maReason:'出站信号关闭',maTrain:-1});
   const stop={...t.tasks[0],dep:null} as typeof t.tasks[0];
+  const tail=s.topo.berths.find(x=>x.kind==='tail')!;
   const nexts=[t.tasks[1],{k:'stable',berth:platformBerth(s.topo,13,'DN'),reason:'存车'},
-   {k:'reverse',berths:[b.id],chosen:b.id,station:b.station,minTime:40},{k:'depot',depot:0}] as typeof t.tasks;
+   {k:'reverse',berths:[tail.id],chosen:tail.id,station:tail.station,minTime:40},{k:'depot',depot:0}] as typeof t.tasks;
   for(const next of nexts){t.tasks=[stop,next];expect(atoStartReady(s,t)).toMatchObject({ready:false,code:'ROUTE_WAIT'});}
+  // changing ends on the berth it stands at is no movement (D173)
+  t.tasks=[stop,{k:'reverse',berths:[b.id],chosen:b.id,station:b.station,minTime:40}] as typeof t.tasks;
+  expect(atoStartReady(s,t)).toMatchObject({ready:true});
   t.tasks=[{...stop,dep:s.t} as typeof stop,{k:'stable',berth:b.id,reason:'存车'}];
   expect(atoStartReady(s,t)).toMatchObject({ready:false,code:'ROUTE_WAIT'});
  });

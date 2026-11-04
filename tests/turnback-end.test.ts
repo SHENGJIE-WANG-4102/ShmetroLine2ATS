@@ -20,7 +20,8 @@ function turnbackFixture(continues:boolean,needsDepot=false,returnBehind=false) 
       const tr=newTrain(sim,null,berth.link,berth.offset,berth.dir,[{link:berth.link,dir:berth.dir}],'turnback-end');
       Object.assign(tr,{block:block.id,tripId:cur.id,phase:'run',inService:true,v:0,a:0,tasks:[]});
       computeBody(sim,tr);indexBodies(sim);
-      const station=turnbackOptions(sim,tr).find(st=>ahead(next.dir,st,next.to)&&!!turnbackAt(sim.topo,st,cur.dir)
+      // The command only cuts the current trip, so the station must be one of its calls.
+      const station=turnbackOptions(sim,tr).find(st=>cur.stops.some(s=>s.st===st)&&ahead(next.dir,st,next.to)&&!!turnbackAt(sim.topo,st,cur.dir)
         &&(!needsDepot||sim.topo.depots.some(d=>ahead(cur.dir,cur.from,d.station)&&ahead(cur.dir,d.station,st))));
       if(station===undefined){sim.removeTrain(tr);continue;}
       block.trips=continues?[cur.id,next.id,later.id]:[cur.id,next.id];

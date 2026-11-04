@@ -64,8 +64,9 @@ describe('field section measurement harness', () => {
     expect(row.peakKmh!).toBeGreaterThan(row.targetMedianKmh! - 5);
     // Arrival budgets now use the whole task path, while ATP retains its near scan.
     expect(row.stopDistanceUnavailableFraction).toBe(0);
-    // The stored cutoff stays above the falling coast reference.
-    expect(row.cruiseMedianKmh!).toBeGreaterThanOrEqual(row.targetMedianKmh!);
+    // The stored cutoff stays above the falling coast reference. Cruising
+    // samples ride the cutoff, so equal values may differ by rounding only.
+    expect(row.cruiseMedianKmh!).toBeGreaterThanOrEqual(row.targetMedianKmh! - 1e-9);
     expect(row.levels).toEqual([1]);
   });
 
@@ -88,7 +89,11 @@ describe('field section measurement harness', () => {
       expect(row.completed).toBe(true);
       expect(row.violations).toEqual([]);
       expect(row.stopDistanceUnavailableFraction).toBe(0);
-      expect(Math.abs(row.arrivalDeltaS!)).toBeLessThan(1);
+      // D173 fixed 5 km/h ATO steps (user): between two steps the longer coast
+      // ends at the 60 km/h coast floor, so the train may arrive early (measured
+      // 7.2 s at 75 km/h and 4.3 s at 70 km/h); it is never late.
+      expect(row.arrivalDeltaS!).toBeLessThan(1);expect(row.arrivalDeltaS!).toBeGreaterThan(-8);
+      expect(OPERATIONS.atoSpeedStepsKmh).toContain(Math.round(row.cruiseMedianKmh!));
     });
 
   it('keeps a full budget distance and live delay behind a red signal, without changing stopDist', () => {
@@ -159,7 +164,8 @@ describe('static task-path ETA', () => {
     const budget = eta + 20;
     const plan = sectionPlan(2000, 0, budget, fast, limits);
     expect(plan.completed).toBe(true);
-    expect(plan.eta).toBeCloseTo(budget, 0);
+    // D173 fixed ATO steps: never late, early by less than one step.
+    expect(plan.eta).toBeLessThanOrEqual(budget + .5); expect(budget - plan.eta).toBeLessThan(5);
     expect(plan.samples.every(p=>p.remaining>100 || p.speed<=slow+.1)).toBe(true);
   });
 

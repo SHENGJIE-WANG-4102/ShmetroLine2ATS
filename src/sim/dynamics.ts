@@ -10,6 +10,19 @@ import { profileOf, heightAt, gradeAccelAt, brakingSpeedH, type Profile } from '
 export const PERF = SIMULATION.physics.performance;
 const TRACTION = SIMULATION.physics.traction;
 
+/** Numerical standstill only; callers retain their own MA/task/mode guards.
+ * Lines without calibration keep each integration path's original tolerances. */
+export function atoStopReady(v: number, remaining: number, legacySpeed = .35, legacyDistance = .4): boolean {
+  const snap = PERF.atoStopSnap;
+  return Number.isFinite(v) && Number.isFinite(remaining) && v >= 0
+    && v < (snap?.speed ?? legacySpeed) && remaining < (snap?.distance ?? legacyDistance);
+}
+
+/** A normal stopping target's numerical margin, independent of ATP margins. */
+export function atoStopMargin(legacy: number): number {
+  return PERF.atoStopSnap?.margin ?? legacy;
+}
+
 // The startup-selected traction curve is immutable; acceleration remains a live key.
 let tractionCached = false, tractionV = 0, tractionAMax = 0, tractionValue = 0;
 
@@ -34,7 +47,11 @@ export function tractionAccel(v: number): number {
 }
 
 /** Automatic effort only: the manual master controller retains full traction. */
-export const atoTractionAccel = (v: number): number => Math.min(PERF.atoAccelMax, tractionAccel(v));
+export const atoTractionAccel = (v: number): number => {
+  const full = Math.min(PERF.atoAccelMax, tractionAccel(v)), soft = PERF.atoSoftStart;
+  // A comfortable start: the effort grows with speed up to the soft-start speed.
+  return soft && v < soft.speed ? Math.min(full, soft.accel + (full - soft.accel) * Math.max(0, v) / soft.speed) : full;
+};
 
 export type AtoPhase = 'traction' | 'hold' | 'coast' | 'brake';
 export interface AtoState {
@@ -80,8 +97,22 @@ function brakeShape(entrySpeed:number,grade=0):{r:number;average:number}{
   return{r,average:Math.min(PERF.bPlan,Math.sqrt(PERF.jerk*entrySpeed*r*(1-r)),netBrake*(1-r))};
 }
 
+/** Soft station stop: effort builds at the jerk limit to bPlan (less on a
+ * falling grade), holds, then releases linearly over `releaseS` at bPlan's
+ * release rate. The last phase is v = Jr·τ²/2 at τ seconds before standstill. */
+function softStopShape(entrySpeed:number,grade:number){
+  const J=PERF.jerk,release=PERF.bPlan/PERF.atoSoftStop!.releaseS;
+  let peak=Math.min(PERF.bPlan,Math.max(.05,PERF.bService-grade));
+  if(peak*peak/(2*J)+peak*peak/(2*release)>entrySpeed)peak=Math.sqrt(2*entrySpeed/(1/J+1/release));
+  const rise=peak/J,fall=peak/release;
+  const afterRise=entrySpeed-peak*peak/(2*J),beforeFall=peak*peak/(2*release);
+  const s1=entrySpeed*rise-J*rise**3/6,s2=Math.max(0,(afterRise*afterRise-beforeFall*beforeFall)/(2*peak)),s3=release*fall**3/6;
+  return{J,release,peak,rise,s1,s2,s3,distance:s1+s2+s3};
+}
+
 export function atoBrakeDistance(entrySpeed:number,grade=0):number{
   if(entrySpeed<=0)return 0;
+  if(PERF.atoSoftStop)return softStopShape(entrySpeed,grade).distance;
   return entrySpeed*entrySpeed/(2*brakeShape(entrySpeed,grade).average);
 }
 
@@ -89,6 +120,16 @@ export function atoBrakeProfile(entrySpeed: number, remaining: number, entryDist
   entryDistance??=atoBrakeDistance(entrySpeed,grade);
   if(entrySpeed<=0||entryDistance<=0||remaining<=0)return{speed:0,decel:0};
   if(remaining>=entryDistance)return{speed:entrySpeed,decel:0};
+  if(PERF.atoSoftStop){
+    const shape=softStopShape(entrySpeed,grade);
+    if(remaining<=shape.s3){const tau=Math.cbrt(6*remaining/shape.release);return{speed:shape.release*tau*tau/2,decel:shape.release*tau};}
+    if(remaining<=shape.s3+shape.s2){const end=shape.peak*shape.peak/(2*shape.release);return{speed:Math.sqrt(end*end+2*shape.peak*(remaining-shape.s3)),decel:shape.peak};}
+    // Building effort: solve the elapsed time for the distance already run.
+    const run=shape.distance-remaining;let t=Math.min(shape.rise,run/entrySpeed);
+    for(let i=0;i<6;i++)t-=(entrySpeed*t-shape.J*t**3/6-run)/(entrySpeed-shape.J*t*t/2);
+    t=Math.max(0,Math.min(shape.rise,t));
+    return{speed:entrySpeed-shape.J*t*t/2,decel:shape.J*t};
+  }
   const {r}=brakeShape(entrySpeed,grade),k=1/(1-r);
   const wanted=remaining/(2*entryDistance);
   let q:number;
@@ -124,7 +165,11 @@ export function atoControl(state: AtoState, input: AtoInput): number {
   const cutoff = Math.min(input.cruise, plan?.cutoff ?? input.cruise);
   const target = Math.min(input.target,cutoff);
   if(state.terminalApproachDistance!==undefined){
-    if(!Number.isFinite(stopDist)||stopDist>state.terminalApproachDistance+.3){
+    // A stop beyond the reach of the latched entry (e.g. a standstill short of
+    // it after an emergency brake) is no longer this approach: a shape latched
+    // there would hold its creep speed as the entry speed for the whole way.
+    const reach=atoStopApproachDistance(Math.max(v,state.brakeEntrySpeed??0),PERF.aMax,state.brakeEntryGrade??input.grade);
+    if(!Number.isFinite(stopDist)||stopDist>state.terminalApproachDistance+.3||stopDist>reach){
       state.terminalApproachDistance=undefined;
       state.brakeEntrySpeed=undefined;state.brakeEntryDistance=undefined;state.brakeEntryGrade=undefined;
       state.phase='coast';state.neutral=0;state.plannedCoast=false;
@@ -133,14 +178,15 @@ export function atoControl(state: AtoState, input: AtoInput): number {
   const terminal = state.phase==='brake' && state.brakeEntrySpeed!==undefined
     || state.terminalApproachDistance!==undefined
     || Number.isFinite(stopDist) && stopDist <= atoStopApproachDistance(v,a,input.grade);
-  const needsBrake = target < v - .2 || terminal && v > .1;
-  if (v < .05 && target > .1) {
+  const terminalMinSpeed = PERF.atoStopSnap?.speed ?? .1;
+  const needsBrake = target < v - .2 || terminal && v > terminalMinSpeed;
+  if (v < .05 && target > .1 && (!PERF.atoStopSnap || !terminal)) {
     state.phase = 'traction'; state.neutral = 0;
     state.brakeEntrySpeed=undefined;state.brakeEntryDistance=undefined;state.brakeEntryGrade=undefined;
     state.terminalApproachDistance=undefined;
   }
   if (input.protecting && target < v - .2) {
-    if(terminal&&v>.1){
+    if(terminal&&v>terminalMinSpeed){
       state.terminalApproachDistance=stopDist;state.phase='brake';
       if(state.brakeEntrySpeed===undefined){state.brakeEntrySpeed=v;state.brakeEntryGrade=input.grade??0;state.brakeEntryDistance=atoBrakeDistance(v,state.brakeEntryGrade);}
     }
@@ -365,7 +411,8 @@ function simulateRun(prof: LimitSeg[], hp: Profile, sgn: 1 | -1, start: number, 
   // Keep the level-1 bound unchanged; do not turn uncaptured marks into 20 s.
   const timeLimit = runLevel === 1 ? 3600 : Math.max(3600, totalDist / 5 + 120);
   let travelled = 0;
-  while (travelled < totalDist - 0.05 || (stopAtEnd && v > 0.01)) {
+  while (PERF.atoStopSnap && stopAtEnd ? !atoStopReady(v, totalDist - travelled, .5, .5)
+    : travelled < totalDist - 0.05 || (stopAtEnd && v > 0.01)) {
     // current limit: min over body
     let vLim = Infinity;
     for (let k = 0; k <= trainLen; k += 25) vLim = Math.min(vLim, limitAt(prof, x - sgn * k));
@@ -383,7 +430,7 @@ function simulateRun(prof: LimitSeg[], hp: Profile, sgn: 1 | -1, start: number, 
     let stopDist = Infinity;
     if (stopAtEnd) {
       stopDist = remaining;
-      vT = Math.min(vT, brakingSpeed(remaining - 0.3, 0, PERF.bPlan));
+      vT = Math.min(vT, brakingSpeed(remaining - atoStopMargin(.3), 0, PERF.bPlan));
     }
     // effort against the grade, as in movement.ts
     const aG = gradeAccelAt(hp, x, sgn, trainLen);
@@ -400,7 +447,7 @@ function simulateRun(prof: LimitSeg[], hp: Profile, sgn: 1 | -1, start: number, 
     for (let i = 0; i < marks.length; i++) {
       if (Number.isNaN(markTimes[i]) && (sgn > 0 ? x >= marks[i] : x <= marks[i])) markTimes[i] = t;
     }
-    if (stopAtEnd && remaining < 0.5 && v < 0.5) break;
+    if (stopAtEnd && atoStopReady(v, PERF.atoStopSnap ? totalDist - travelled : remaining, .5, .5)) break;
     if (t > timeLimit) break;
   }
   return { t, markTimes };
@@ -452,8 +499,11 @@ export interface SectionLimit { length: number; limit: number }
  * Kept in operational data rather than a station-specific control branch. */
 const coastFloor = (): number => OPERATIONS.sectionCoastMinKmh / 3.6;
 
+/** Gravity along the travel at `x` metres ahead of the planning point. */
+export type SectionGrade = (x: number) => number;
+
 function integrateSection(dist: number, initialV: number, initialA: number, cutoff: number, coastAt: number,
-  limits: readonly SectionLimit[] | undefined, margin: number, keepSamples: boolean): SectionPlan {
+  limits: readonly SectionLimit[] | undefined, margin: number, keepSamples: boolean, grade?: SectionGrade): SectionPlan {
   const plan: SectionPlan = { cutoff, coastAt, coastFloor: Math.min(cutoff, coastFloor()), eta: 0, samples: [], coastValid:true, completed:false };
   if (!(dist > 0) || !Number.isFinite(dist)) return plan;
   const dt = .1;
@@ -467,29 +517,34 @@ function integrateSection(dist: number, initialV: number, initialA: number, cuto
   if (keepSamples) plan.samples.push({remaining:dist,speed:v});
   while (plan.eta < maxTime) {
     const remaining = Math.max(0, dist - x);
-    if (remaining < .4 && v < .35) { plan.completed=x<=dist+.3; break; }
+    if (atoStopReady(v, remaining)) { plan.completed=x<=dist+.3; break; }
     while (segment + 1 < boundaries.length && boundaries[segment].end <= x) segment++;
-    let target = Math.min(cutoff, boundaries[segment].cap, brakingSpeed(remaining - .2, 0, PERF.bPlan));
+    let target = Math.min(cutoff, boundaries[segment].cap, brakingSpeed(remaining - atoStopMargin(.2), 0, PERF.bPlan));
     for (let i = segment + 1; i < boundaries.length; i++) {
       const d = boundaries[i-1].end - x;
       if (d > 1000) break;
       target = Math.min(target, atoLimitSpeed(d - 3, boundaries[i].cap, v, a));
     }
-    const command = atoControl(state,{v,a,target:Math.max(0,target),cruise:cutoff,stopDist:remaining,remaining,plan,dt});
+    const aG = grade?.(x) ?? 0;
+    const command = atoControl(state,{v,a,target:Math.max(0,target),cruise:cutoff,stopDist:remaining,remaining,plan,dt,grade:aG});
     // Only the scheduled slack-consuming coast has a coast-end floor. A
     // normal neutral transition at a lower static limit can be slower.
     if (state.phase === 'coast' && state.plannedCoast && remaining > v*v/(2*PERF.bPlan)+Math.max(3,v*.8) && v < plan.coastFloor-.1) plan.coastValid=false;
-    a = jerkLimited(a, Math.max(-PERF.bService, Math.min(atoTractionAccel(v), command)), dt);
-    const nextV = Math.max(0,v+a*dt);
+    // effort against the grade, as in movement.ts
+    const want = state.phase === 'coast' && command === -PERF.resist ? command : command > 0 ? Math.max(command - aG, command) : command - aG;
+    a = jerkLimited(a, Math.max(-PERF.bService, Math.min(atoTractionAccel(v), want)), dt);
+    const net = v === 0 && a <= Math.max(0, -aG) ? 0 : a + aG;
+    const nextV = Math.max(0,v+net*dt);
     const travelled = (v+nextV)*dt/2;
     x += travelled; v=nextV;
     plan.eta += dt;
     if (keepSamples && (plan.samples.length === 1 || dist-x < plan.samples.at(-1)!.remaining-10)) plan.samples.push({remaining:Math.max(0,dist-x),speed:v});
     // A restrictive plan can become unachievable from a moving initial state;
     // return its bounded physical estimate, never throw in the worker.
-    if (v < .001 && target <= 0 && remaining > .4) break;
+    if (v < .001 && target <= 0 && remaining > (PERF.atoStopSnap?.distance ?? .4)) break;
   }
-  if (keepSamples) plan.samples.push({remaining:0,speed:0});
+  if (keepSamples) plan.samples.push(PERF.atoStopSnap && !plan.completed
+    ? {remaining:Math.max(0,dist-x),speed:v} : {remaining:0,speed:0});
   return plan;
 }
 
@@ -542,34 +597,51 @@ export function sectionEta(dist: number, v: number, cruise: number, limits?: rea
 /** Spend slack on a longer coast first, then a lower cutoff. Night levels
  * retain continuous speed holding, with their existing lower-speed data. */
 export function sectionPlan(dist: number, v: number, budget: number, ceiling: number,
-  limits?: readonly SectionLimit[], margin = 0, a = 0, level = 1): SectionPlan {
+  limits?: readonly SectionLimit[], margin = 0, a = 0, level = 1, grade?: SectionGrade): SectionPlan {
   ceiling = levelCruise(level,ceiling);
-  const fast = integrateSection(dist,v,a,Math.max(.1,ceiling),-1,limits,margin,false);
+  const fast = integrateSection(dist,v,a,Math.max(.1,ceiling),-1,limits,margin,false,grade);
   if (!Number.isFinite(dist) || !(dist > 0) || budget <= fast.eta)
-    return integrateSection(dist,v,a,Math.max(.1,ceiling),-1,limits,margin,true);
+    return integrateSection(dist,v,a,Math.max(.1,ceiling),-1,limits,margin,true,grade);
   let cutoff = Math.max(.1,ceiling), coastAt = -1, lowerCutoff = level !== 1;
   const earliestLegal = (speed: number): SectionPlan => {
     let lo=0,hi=dist;
-    const earliest=integrateSection(dist,v,a,speed,hi,limits,margin,false);
+    const earliest=integrateSection(dist,v,a,speed,hi,limits,margin,false,grade);
     if(earliest.coastValid)return earliest;
-    for(let i=0;i<10;i++){const mid=(lo+hi)/2;if(integrateSection(dist,v,a,speed,mid,limits,margin,false).coastValid)lo=mid;else hi=mid;}
-    return integrateSection(dist,v,a,speed,lo,limits,margin,false);
+    for(let i=0;i<10;i++){const mid=(lo+hi)/2;if(integrateSection(dist,v,a,speed,mid,limits,margin,false,grade).coastValid)lo=mid;else hi=mid;}
+    return integrateSection(dist,v,a,speed,lo,limits,margin,false,grade);
   };
   if (level === 1) {
     const earliest = earliestLegal(cutoff);
     if (earliest.eta >= budget) {
       let lo = 0, hi = earliest.coastAt;
-      for (let i=0;i<11;i++) { const mid=(lo+hi)/2; if(integrateSection(dist,v,a,cutoff,mid,limits,margin,false).eta<budget)lo=mid;else hi=mid; }
+      for (let i=0;i<11;i++) { const mid=(lo+hi)/2; if(integrateSection(dist,v,a,cutoff,mid,limits,margin,false,grade).eta<budget)lo=mid;else hi=mid; }
       coastAt=hi;
     } else { coastAt=earliest.coastAt; lowerCutoff=true; }
   }
-  if (lowerCutoff) {
+  const steps = OPERATIONS.atoSpeedStepsKmh;
+  if (lowerCutoff && level === 1 && steps) {
+    // Fixed ATO speed-limit steps: the slowest one whose fastest run still
+    // keeps the budget, then the coast point at that step spends what slack
+    // remains. (Judging a step by its longest coast stopped one step high and
+    // arrived early by most of a step.)
+    const floor = Math.min(cutoff, OPERATIONS.sectionCruiseMinKmh / 3.6) - 1e-9;
+    for (const speed of steps.map(step => step / 3.6).filter(speed => speed > 0 && speed >= floor && speed < cutoff - 1e-9).sort((a, b) => b - a)) {
+      if (integrateSection(dist,v,a,speed,-1,limits,margin,false,grade).eta > budget) break;
+      cutoff = speed;
+    }
+    const earliest = earliestLegal(cutoff);
+    if (earliest.eta >= budget) {
+      let lo = 0, hi = earliest.coastAt;
+      for (let i=0;i<11;i++) { const mid=(lo+hi)/2; if(integrateSection(dist,v,a,cutoff,mid,limits,margin,false,grade).eta<budget)lo=mid;else hi=mid; }
+      coastAt=hi;
+    } else coastAt=earliest.coastAt;
+  } else if (lowerCutoff) {
     let lo = Math.min(cutoff,OPERATIONS.sectionCruiseMinKmh/3.6), hi = cutoff;
-    for(let i=0;i<11;i++){const mid=(lo+hi)/2;const candidate=level===1?earliestLegal(mid):integrateSection(dist,v,a,mid,-1,limits,margin,false);if(candidate.eta>budget)lo=mid;else hi=mid;}
+    for(let i=0;i<11;i++){const mid=(lo+hi)/2;const candidate=level===1?earliestLegal(mid):integrateSection(dist,v,a,mid,-1,limits,margin,false,grade);if(candidate.eta>budget)lo=mid;else hi=mid;}
     cutoff=(lo+hi)/2;
     coastAt=level===1?earliestLegal(cutoff).coastAt:-1;
   }
-  return integrateSection(dist,v,a,cutoff,coastAt,limits,margin,true);
+  return integrateSection(dist,v,a,cutoff,coastAt,limits,margin,true,grade);
 }
 
 /** Compatibility for callers needing only the solved traction cutoff. */

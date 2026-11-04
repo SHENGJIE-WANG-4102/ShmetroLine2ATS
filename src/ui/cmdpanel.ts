@@ -233,7 +233,9 @@ export class CommandPanel {
         void confirmAndSend(this.store, { title: `区段${on ? '封锁' : '解封'}：${names()}`, cmd: { c: 'sectionBlock', sections: pick(), on }, critical: true, detail: on ? '封锁后不能办理经过该区段的进路，列车不能进入。' : undefined });
       }, f0 & SEC.BLOCK ? '' : 'danger'),
     ));
-    const speed = h('select', {}, ...[15, 25, 35, 45, 60].map((v) => h('option', { value: v }, `${v} km/h`))) as HTMLSelectElement;
+    // The line's fixed speed steps where it has them (D173), within what a TSR can set.
+    const steps = (OPERATIONS.atoSpeedStepsKmh ?? [15, 25, 35, 45, 60]).filter((v) => v >= 5 && v <= 75);
+    const speed = h('select', {}, ...steps.map((v) => h('option', { value: v }, `${v} km/h`))) as HTMLSelectElement;
     speed.value = '25';
     this.el.append(h('div', { class: 'sect-title' }, '临时限速 TSR'));
     this.el.append(h('div', { class: 'form' },

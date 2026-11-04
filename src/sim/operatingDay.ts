@@ -136,7 +136,7 @@ export function carryTrains(sim: Sim, from: Sim) {
  * new day's clock). Returns the trip id map and the new block id. */
 function appendDuty(sim: Sim, from: Sim, tr: Train): { trips: Map<number, number>; block: number } {
   const old = from.plan.blocks[tr.block];
-  const own = new Set(tr.tasks.flatMap(t => t.k === 'stop' && t.trip >= 0 ? [t.trip] : []));
+  const own = new Set([...tr.tasks, ...(tr.rescueDuty?.tasks ?? [])].flatMap(t => t.k === 'stop' && t.trip >= 0 ? [t.trip] : []));
   const at = old.trips.indexOf(tr.tripId);
   const keep = old.trips.filter((id, i) => own.has(id) || (at >= 0 && i >= at && !from.plan.trips[id].cancelled));
   // Allocate the complete map first: both ends of a retained link may be later
@@ -187,6 +187,8 @@ function carryTrain(tr: Train, duty: { trips: Map<number, number>; block: number
     drv: { ...tr.drv, since: back(tr.drv.since), stops: [] },
     vfault: tr.vfault && { ...tr.vfault, until: back(tr.vfault.until) },
     tasks: tr.tasks.map(task),
+    rescueDuty: tr.rescueDuty && { ...tr.rescueDuty, tasks: tr.rescueDuty.tasks.map(task),
+      targetTurnback: tr.rescueDuty.targetTurnback && { ...tr.rescueDuty.targetTurnback } },
     ...(tr.pendingDeparture ? { pendingDeparture: task(tr.pendingDeparture) as StopTask } : {}),
     departureDisplay: tr.departureDisplay && { ...tr.departureDisplay, stop: task(tr.departureDisplay.stop),
       at: tr.departureDisplay.at === undefined ? undefined : back(tr.departureDisplay.at),

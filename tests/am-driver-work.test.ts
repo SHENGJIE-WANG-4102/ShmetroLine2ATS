@@ -91,11 +91,12 @@ describe('paper AM driver work',()=>{
    phase:'run',v:0,a:0,stopDist:0,doorsOpen:false,doorsAwait:false,doorSide:'',doorMotion:undefined});
   tr.tasks=[{k:'reverse',station:station.index,berths:[berth.id],chosen:berth.id,minTime:40}];
   computeBody(sim,tr);indexBodies(sim);updateTrainTasks(sim,tr);expect(tr.phase).toBe('reversing');
-  const began=tr.phaseSince;sim.t+=5;
+  // D171: a registered rear turnback changes ends on the shared reference, not the task minimum.
+  const began=tr.phaseSince,base=kind==='rear'?Math.max(40,OPERATIONS.rearTurnback!.changeEndsS):40;sim.t+=5;
   expect(sim.command({c:'manual',train:tr.id,mode:'AM'}).ok).toBe(true);
-  expect(tr.atoDriver).toBe(true);expect(tr.dwellUntil).toBe(began+40+45);
+  expect(tr.atoDriver).toBe(true);expect(tr.dwellUntil).toBe(began+base+45);
   sim.t+=1;expect(sim.command({c:'manual',train:tr.id,mode:'AM'}).ok).toBe(true);
-  expect(tr.dwellUntil).toBe(began+40+45);
+  expect(tr.dwellUntil).toBe(began+base+45);
  });
  it.each(['CM','RM']as const)('does not turn the previous stop lock into new door work on %s handback at a closed-door reversal',mode=>{
   const{sim,tr,b}=fixture('AM');sim.atoLine=true;
@@ -115,9 +116,11 @@ describe('paper AM driver work',()=>{
    expect(tr.autoStartAt).toBeUndefined();sim.t=tr.doorLockedAt!+elapsed;doorMotionTick(sim);
    const random=sim.rngState,lock=tr.doorLockedAt!;
    expect(sim.command({c:'manual',train:tr.id,mode:'AUTO'}).ok).toBe(true);
-   expect(tr.autoStartAt).toBe(lock+22.5);expect(sim.rngState).toBe(random);
-   tr.maDist=1000;updateTrainTasks(sim,tr);expect(tr.phase).toBe(elapsed<22.5?'dwell':'run');
-   if(elapsed<22.5){sim.t=lock+22.5;updateTrainTasks(sim,tr);expect(tr.phase).toBe('run');}
+   // Mean automatic start delay (D171 [2.5,3.5]) plus the AM driver's post-lock work.
+   const confirm=(OPERATIONS.autoStartDelay[0]+OPERATIONS.autoStartDelay[1])/2+OPERATIONS.atoDriverWork.postLockExtraS;
+   expect(tr.autoStartAt).toBe(lock+confirm);expect(sim.rngState).toBe(random);
+   tr.maDist=1000;updateTrainTasks(sim,tr);expect(tr.phase).toBe(elapsed<confirm?'dwell':'run');
+   if(elapsed<confirm){sim.t=lock+confirm;updateTrainTasks(sim,tr);expect(tr.phase).toBe('run');}
   }
  });
  it.each(['CM','RM']as const)('retains the original AM confirmation sample across a %s takeover and automatic handback',mode=>{

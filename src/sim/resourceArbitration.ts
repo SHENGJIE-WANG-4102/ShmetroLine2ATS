@@ -4,7 +4,7 @@
 import type { Sim } from './engine';
 import { STANDBY_CALL, type Task, type Train, type StopTask } from './model';
 import type { TrackPoint, RouteStep, WaitingStage } from './topology';
-import { berthFits, pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, topologyResourceLinks, sharedTransferLink } from './topology';
+import { berthFits, pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, topologyResourceLinks, sharedTransferLink, turnbackBerthsForConsist, occupiedTurnbackBerth, stablingBerth } from './topology';
 import { approachLocked, committedTrain } from './interlocking';
 import { canStopBeforeSignal } from './protection';
 import { SIGNAL_MARGIN } from './protection';
@@ -356,13 +356,10 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
     if (task.k === 'stop' && task.depotWork?.kind === 'in' && projected === undefined) {
       candidates = [task.berth, ...task.depotWork.berths.filter(b => b !== task.berth)];
     } else if (task.k === 'reverse') {
-      const kind = sim.topo.sections[sim.topo.links[point.link].section].kind;
-      const physical = (kind === 'tail' || kind === 'siding') && sim.topo.stations[task.station].turnbackBerths.find(id => {
-        const b = sim.topo.berths[id];
-        return b.dir === point.dir && (b.link === point.link || kind === 'tail' && b.kind === 'tail'
-          && sim.topo.links[b.link].track === sim.topo.links[point.link].track);
-      });
-      candidates = physical !== false && physical !== undefined ? [physical] : [task.chosen, ...task.berths.filter(b => b !== task.chosen)];
+      const choices = turnbackBerthsForConsist(sim.topo, task.station, task.berths, (tr?.coupledLen ?? 0) > 0);
+      const physical = occupiedTurnbackBerth(sim.topo, task.station, point, task.berths, (tr?.coupledLen ?? 0) > 0);
+      candidates = physical !== undefined ? [physical]
+        : choices.includes(task.chosen) ? [task.chosen, ...choices.filter(b => b !== task.chosen)] : [...choices];
     } else if (task.k === 'depot') {
       const dp = sim.topo.depots[task.depot];
       // Once physically on the selected branch it cannot change underneath us.
@@ -370,7 +367,7 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
       candidates = actual >= 0 ? [dp.entryBerths[actual]] : [depotBerth(sim.topo, task), ...dp.entryBerths.filter(b => b !== depotBerth(sim.topo, task))];
     } else if (task.k === 'stable' && task.berth < 0) {
       const station = task.station ?? sim.topo.sections[sim.topo.links[point.link].section].station;
-      candidates = sim.topo.stations[station]?.turnbackBerths ?? [];
+      candidates = (sim.topo.stations[station]?.turnbackBerths ?? []).map(id => stablingBerth(sim.topo, id));
     }
     const out: ResourceOption[] = [];
     for (const goal of candidates) {
@@ -766,10 +763,11 @@ function physicalOrder(sim: Sim, requests: ResourceRequest[]): PhysicalOrder {
   return order;
 }
 
-function physicallyNeeds(order: PhysicalOrder, train: number, owner: number, seen = new Set<number>()): boolean {
+function physicallyNeeds(order: PhysicalOrder, train: number, owner: number | ((id: number) => boolean), seen = new Set<number>()): boolean {
   if (seen.has(train)) return false;
   seen.add(train);
-  return [...order.get(train) ?? []].some(id => id === owner || physicallyNeeds(order, id, owner, seen));
+  const hit = typeof owner === 'number' ? (id: number) => id === owner : owner;
+  return [...order.get(train) ?? []].some(id => hit(id) || physicallyNeeds(order, id, hit, seen));
 }
 
 function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: PhysicalOrder, request: ResourceRequest, option: ResourceOption): { id: number } | undefined {
@@ -780,10 +778,22 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   // Rule 3 is per resource. Timetable order cannot make its occupant wait
   // for an entrant whose every reachable movement needs that occupied place.
   const needsThisOccupant = (id: number) => physicallyNeeds(physical, id, request.id);
-  const first = requests.find(other => other.id !== request.id && other.options.some(o => !o.unreachable) && other.options.some(o => {
+  const departsHere = (other: ResourceRequest, before: boolean) => other.options.some(o => {
     const candidate = optionOrigin(sim, o, other.tasks)?.task;
-    return candidate && candidate.dep! < origin.dep! && sim.topo.berths[candidate.berth].platform === platform;
-  })
+    return candidate && (before ? candidate.dep! < origin.dep! : candidate.dep! >= origin.dep!) && sim.topo.berths[candidate.berth].platform === platform;
+  });
+  // Precedence is real only if it can be taken: an earlier service queued
+  // physically behind a no-earlier entrant of this platform (which this rule
+  // orders behind the applicant) cannot reach it first. Waiting for it closes
+  // a loop: me -> it -> the train ahead of it -> me (D173).
+  const byId = new Map(requests.map(r => [r.id, r]));
+  const queuedBehindLater = (id: number) => physicallyNeeds(physical, id, z => {
+    const r = z === request.id ? undefined : byId.get(z);
+    // (a committed entrant goes regardless, and the queue behind it follows)
+    return !!r && !r.committed && !(r.inside && !r.safeHere) && departsHere(r, false);
+  });
+  const first = requests.find(other => other.id !== request.id && other.options.some(o => !o.unreachable) && departsHere(other, true)
+    && !queuedBehindLater(other.id)
     // A vehicle already occupying this movement must clear before scheduling
     // priority can apply, rather than waiting for someone queued behind it.
     && !other.train?.body.some(b => option.sections.has(sim.topo.links[b.link].section)) && !needsThisOccupant(other.id)
@@ -816,7 +826,7 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
       return t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
         && t.dep !== null && sim.topo.berths[t.berth].platform === platform;
     });
-    return !!task && task.dep! < origin.dep! && !needsThisOccupant(tr.id);
+    return !!task && task.dep! < origin.dep! && !needsThisOccupant(tr.id) && !queuedBehindLater(tr.id);
   });
 }
 
@@ -929,7 +939,7 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
       break;
     }
     if (!decision) continue;
-    if (!decision.admitted) decision.alternatives = alternatives;
+    decision.alternatives = alternatives;
     result.decisions.set(request.id, decision);
     if (decision.admitted && request.train) rememberTransit(sim, request.train, decision.option);
     else if (!sim.resourceTransit.get(request.id)?.entered) sim.resourceTransit.delete(request.id);

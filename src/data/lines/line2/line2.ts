@@ -248,6 +248,9 @@ export const DIRECTIONS = {
 
 
 
+/** 用户决定2026-11-02：沿用机场单车清咽喉停点合同，186+6+1 m。
+ * 只分离普通近位，不改变深位、道岔/中间线30km/h或轨道实长。 */
+const NORMAL_TURNBACK_DISTANCE_M = 193;
 export const LAYOUT = {
   /** terminal tail tracks (站后尾轨). Layout per the 配线图 PDF, see docs/layout-pdf.md */
   tails: [
@@ -257,14 +260,14 @@ export const LAYOUT = {
     // 航站楼: scissors right behind the platform, both mains on to buffers.
     // Assumed usable rescue length: two 186 m consists plus stopping margin.
     // 【假设】D164 视频标定正常折返；450 m 容量仍供连挂救援。
-    { station: 30, side: 'east', length: 450, bufferFromStation: 785, scissorsApproach: 2, scissorsSpacing: 55, scissorsHalfSpan: 10, turnbackDistance: 193 },
+    { station: 30, side: 'east', length: 450, bufferFromStation: 785, scissorsApproach: 2, scissorsSpacing: 55, scissorsHalfSpan: 10, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
   ] as TailDef[],
   /** two middle tracks behind a double Y (蟠祥路, 国家会展中心, 淞虹路, 上海科技馆) */
   // (PXL: 420 m, model value — holds a coupled rescue pair clear of the throat)
   pairs: [
     { id: 'PXL', station: 0, side: 'west', at: -205, stubs: [
-      { id: 'PXL1', name: '蟠祥路1道折返线', length: 420 },
-      { id: 'PXL2', name: '蟠祥路2道折返线', length: 420 },
+      { id: 'PXL1', name: '蟠祥路1道折返线', length: 420, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
+      { id: 'PXL2', name: '蟠祥路2道折返线', length: 420, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
     ] },
     { id: 'GJH', station: 1, side: 'west', at: -205, stubs: [
       { id: 'GJH1', name: '国家会展中心1道尽头线', length: 400 },
@@ -274,8 +277,8 @@ export const LAYOUT = {
     // 2道 onto the DN main (the diamond reaches the other one). They double as
     // the 淞虹路 turnback tracks.
     { id: 'SHR', station: 4, side: 'west', at: -205, stubs: [
-      { id: 'SHR1', name: '淞虹路1道（出入段线）', length: 260, lead: { depot: 'BZL' } },
-      { id: 'SHR2', name: '淞虹路2道（出入段线）', length: 260, lead: { depot: 'BZL' } },
+      { id: 'SHR1', name: '淞虹路1道（出入段线）', length: 260, lead: { depot: 'BZL' }, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
+      { id: 'SHR2', name: '淞虹路2道（出入段线）', length: 260, lead: { depot: 'BZL' }, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
     ] },
     { id: 'KJG', station: 17, side: 'east', at: 205, stubs: [
       { id: 'KJG1', name: '上海科技馆1道折返线', length: 350 },
@@ -355,8 +358,9 @@ export const SPEED_LIMITS: { from: number; to: number; kmh: number; reason: stri
   { from: 22500, to: 23400, kmh: 70, reason: '南京东路—陆家嘴（越江段）' },
   { from: 23400, to: 25600, kmh: 65, reason: '越江隧道及陆家嘴曲线' },
   { from: 30900, to: 31500, kmh: 65, reason: '龙阳路站曲线' },
-  // 用户确认（2026-10-23）：海天三路↔浦东1号2号航站楼双向60；站中心里程59653–61940m。
-  { from: 59653, to: 61940, kmh: 60, reason: '海天三路—机场（用户确认）' },
+  // 用户更正（2026-11-02）：出洞后的高架60，海天三路—机场50；两种范围重叠取严。
+  { from: 52500, to: 60900, kmh: 60, reason: '凌空路—远东大道出洞至海天三路（用户确认）' },
+  { from: 59653, to: 61940, kmh: 50, reason: '海天三路—机场（用户确认）' },
   { from: 61650, to: 63000, kmh: 55, reason: '终点站区域' },
 ];
 
@@ -383,13 +387,21 @@ const TERMINAL_STANDBY_WINDOWS = {
   weekend: [{ from: 6 * 3600, need: 21 * 3600, to: 21 * 3600 }],
 };
 
+/** D171：所有站后折返共用11-02机场视频的三段作业。 */
+const REAR_TURNBACK = { entryRunS: 41, changeEndsS: 56, exitRunS: 38 };
+// D171【规划预算假设】：用户确认30km/h近位的站后三段约150s（PIS约151s）。
+// 它已排除前清客60s和后始发22.7s；共同包络向上取10s为240，不按站另写物理时分。
+const REAR_TURNBACK_MIN = Math.ceil((60 + 22.7 + 150) / 10) * 10;
+
 export const OPERATIONS = {
   atoRandomOverrunProbability: 0,
   /** 【假设】均衡修简化：任何有列检能力的车场过夜即列检；正线过夜不算。
    * 交接资料：列检不超过15天、月检不超过3个月；月检计划60天、占库1天。
    * 交接来源：02A05首批23列（2025-02至2026-12）架修招标、解放日报2026-09-25均衡修报道；同时1列、30天为模拟假设。
    * 累计里程只显示，不据此停用；检修库不占停车列位（D112）。 */
-  maintenance: { dailyLimit: 15, monthlyPeriod: 60, monthlyLimit: 90, monthlyDays: 1, overhaulDays: 30, overhaulCount: 1 },
+  // D170 用户决定：检修库常年有车，不占停车列位。
+  // 【假设】100列/60天月检约1–2列/日，加常驻架修1列，通常2–3列在修；最低取2。
+  maintenance: { dailyLimit: 15, monthlyPeriod: 60, monthlyLimit: 90, monthlyDays: 1, overhaulDays: 30, overhaulCount: 1, minimumWorkshopStock: 2 },
   /** 【假设】每个方向的站间区间最多一列；过江段同样取一列。 */
   intervalTrainLimits: STATIONS.slice(0, -1).map((s, i) => ({ from: s.id, to: STATIONS[i + 1].id, limit: 1 })),
   /** 【假设】全天训练故障预算、相对权重与大部件故障日概率；不是实测故障率。 */
@@ -429,8 +441,11 @@ export const OPERATIONS = {
   /** minimum turnback (arrival → departure) at each terminal (approx) */
   // GLL reverses on its middle-track platform (配线图 PDF): a change of ends
   // on the platform without a run into a tail.
-  minTurnback: { PXL: 240, PDA: 240, SHR: 240, GLL: 100 } as Record<string, number>,
-  // 用户决定（2026-10-27）：广兰路长候班留在站台。
+  minTurnback: { ...Object.fromEntries([
+    ...LAYOUT.pairs, ...LAYOUT.tails.filter(tail => tail.turnback !== false), ...LAYOUT.sidings.filter(siding => siding.turnback !== false),
+  ].map(place => [STATIONS[place.station].id, REAR_TURNBACK_MIN])), GLL: 100 } as Record<string, number>,
+  rearTurnback: REAR_TURNBACK,
+  // 小交路折返在中间线站台换端候发；不作为日间或过夜存车点（D170）。
   longWaitPlatformStations: ['GLL'] as const,
   /** platform turnback track: minimum time from one turning train's departure
    *  to the next turning train's arrival on the same track (s). The leaving
@@ -450,12 +465,10 @@ export const OPERATIONS = {
     // 【假设】收车后的服务间隔不超过所跨原图最大间隔的两倍，随当日原图变化。
     { depot: 'CSD', dir: 'DN', station: 'YDD', service: { terminal: 'PDA', intervalMultiplier: 2 } },
   ] as { depot: string; dir: 'UP' | 'DN'; station: string; service?: { terminal: string; intervalMultiplier: number } }[],
-  /** 【假设】八列正线过夜车：端站留开班所需车，存车泊位依配线图。 */
+  /** 【假设】六列正线过夜车；D170：广兰路不存车，首班由车场开班前就位。 */
   overnightStabling: [
     { station: 'PXL', count: 2, departure: 'DN', kind: 'terminal' },
     { station: 'PDA', count: 1, departure: 'UP', kind: 'terminal' },
-    { station: 'GLL', count: 1, departure: 'UP', kind: 'platform', track: 'turnback' },
-    { station: 'GLL', count: 1, departure: 'DN', kind: 'platform' },
     { station: 'KJG', count: 2, departure: 'UP', kind: 'origin', origin: 'LYL', nightAfter: 21 * 3600 + 40 * 60 },
     { station: 'CXZ', count: 1, departure: 'DN', kind: 'feeder', nightAfter: 22 * 3600 + 30 * 60 },
   ] as { station: string; count: number; departure: 'UP' | 'DN'; kind: 'terminal' | 'platform' | 'origin' | 'feeder'; origin?: string; track?: 'turnback'; nightAfter?: number }[],
@@ -502,14 +515,18 @@ export const OPERATIONS = {
   // the actual entry path. Other yards retain their existing slot model.
   depotLeadConflictScope: { CSD: 'path' } as const,
   /** Fixed seconds allowance over the minimum ATO run per stopping section (s). */
-  sectionRunAllowanceS: 22.5, // 用户决定（2026-10-23）：停站区间统一固定富余秒数。
+  // 用户决定（2026-10-23）：停站区间统一固定富余秒数（当时22.5 s，与原最短走行合成实测/官方区间时分）。
+  // D173：软起步、软停车让最短 ATO 走行每区间平均多 3.8 s（2.6～4.1 s），富余相应减为 18.7 s，图上区间时分不变。
+  sectionRunAllowanceS: 18.7,
   // 【假设】沿用原ATS试探规则的12km/h，避免用极低速消耗富余；非ATP最低速度。
   sectionCruiseMinKmh: 12,
+  /** D173 用户决定（2026-11-04）：ATO 限速调整与临时限速只用固定档，5 km/h 步进；进站制动曲线不套档位。 */
+  atoSpeedStepsKmh: [80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 10, 5, 0],
   /** 【假设】改造后录音短封锁窗约62–64km/h再次通电，未识别真实下限；取60，不是 ATP 下限。 */
   sectionCoastMinKmh: 60,
   passRunMargin: 0.16, // 通过站速度仍45km/h，沿用通过走行余量
   /** DTO锁闭后起步；保留同一份种子采样，AM司机作业在它之上增加。 */
-  autoStartDelay: [1.5, 3.5] as const,
+  autoStartDelay: [2.5, 3.5] as const,
   /** 用户决定（2026-10-23），孟锦程/袁月2026论文，D138：AM非玩家
    * 司机锁门后确认比DTO多约20s；折返到站→下班发出总差取论文中值。
    * 物理关门5.7s另计，折返总差包含清客/发车门作业，不能再重复叠加。
@@ -549,11 +566,9 @@ export const EXPOSED: { from: number; to: number; kind: 'elevated' | 'ground'; n
   { from: 60900, to: 63000, kind: 'ground', name: '浦东1号2号航站楼 地面段' },
 ];
 
-/** Historical D65 vertical-profile anchors used by the calibrated running
- * model, not surface classifications. Keep them independent of weather
- * exposure: correcting tunnel portals must not silently recalibrate running
- * times. 【假设】heights/grades remain synthetic pending a profile-specific task. */
-export const PROFILE_ANCHORS = { elevatedFrom:37400, groundFrom:60900 };
+/** D171：高架起点与用户确认的凌空路—远东大道出洞位置一致。
+ * 【假设】高程和坡度仍为合成纵断面，不代表实测纵断面。 */
+export const PROFILE_ANCHORS = { elevatedFrom:52500, groundFrom:60900 };
 
 /**
  * Weather restrictions for exposed sections (approximation of typical

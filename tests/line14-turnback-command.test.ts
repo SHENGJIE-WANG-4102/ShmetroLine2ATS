@@ -182,8 +182,11 @@ describe('line 14 dispatcher turnback continuation',()=>{
     next.stops=next.stops.map(stop=>({...stop,stop:false}));
     const originalEnding=sim.plan.blocks.find(b=>b.end.kind==='stable'&&b.end.station===14)!.end;
     if(originalEnding.kind!=='stable'||originalEnding.berth===undefined)throw new Error('Missing planned overnight arrival');
-    const parking=sim.topo.berths[originalEnding.berth];
-    block.end=structuredClone(originalEnding);
+    // The fixture's feeder arrives from the west (DN): park on the same
+    // siding at the berth facing that arrival, whichever end the plan used.
+    const siding=sim.topo.berths[originalEnding.berth].link;
+    const parking=sim.topo.berths.find(b=>b.link===siding&&b.station===14&&b.dir===1)!;
+    block.end={...structuredClone(originalEnding),berth:parking.id};
     const ending=structuredClone(block.end);
     Object.assign(tr,{link:berth.link,off:berth.offset,dir:berth.dir,hist:[{link:berth.link,dir:berth.dir}],
       recentBody:undefined,lastStation:1});

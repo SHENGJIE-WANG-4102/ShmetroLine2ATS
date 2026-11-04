@@ -170,6 +170,13 @@ export interface TBerth {
   name: string;
   /** A fixed-position berth may be limited by clearance behind the train. */
   maxLength?: number;
+  /** Original deep position for parking when ordinary turning uses a near point. */
+  stablingBerth?: number;
+}
+
+/** A parking task keeps its physical deep position, without another slot. */
+export function stablingBerth(topo: Pick<Topology, 'berths'>, berth: number): number {
+  return topo.berths[berth]?.stablingBerth ?? berth;
 }
 
 /** The position must clear its physical limit for the whole consist. */
@@ -179,6 +186,30 @@ export function berthFits(topo: Topology, berth: number, length: number): boolea
 }
 
 export interface RouteStep { link: number; dir: Dir }
+
+/** A coupled rake uses the registered rescue positions. Ordinary requests
+ * keep their own role, including an explicit deep overnight cab change. */
+export function turnbackBerthsForConsist(topo: Topology, station: number, requested: readonly number[], coupled: boolean): readonly number[] {
+  return coupled ? topo.stations[station].rescueBerths : requested;
+}
+
+/** Once inside a tail or siding, the actual track fixes the available branch.
+ * Use the same physical matcher for ATS and resource admission. */
+export function occupiedTurnbackBerth(topo: Topology, station: number, point: TrackPoint,
+  requested: readonly number[], coupled = false): number | undefined {
+  const link = topo.links[point.link], kind = topo.sections[link.section].kind;
+  if (kind !== 'tail' && kind !== 'siding') return;
+  const primary = turnbackBerthsForConsist(topo, station, requested, coupled);
+  // An explicit deep cab change keeps that role. Otherwise an already-entered
+  // ordinary track still fixes its normal point even after an earlier choice.
+  const candidates = coupled ? primary : [...primary,
+    ...topo.stations[station].turnbackBerths.filter(id => !primary.includes(id))];
+  return candidates.find(id => {
+    const berth = topo.berths[id];
+    return berth.dir === point.dir && (berth.link === point.link
+      || kind === 'tail' && berth.kind === 'tail' && topo.links[berth.link].track === link.track);
+  });
+}
 
 export interface TRoute {
   id: number;
@@ -775,7 +806,7 @@ export function buildTopology(): Topology {
     main.reverse = c2.id;
     return [c1.id, c2.id];
   };
-  const sidingBerthInfo: { name: string; station: number; turnback: boolean; link: number; offset: number; dir: Dir; exitNode: number; exitLink: number; bidirectional?: boolean }[] = [];
+  const sidingBerthInfo: { name: string; station: number; turnback: boolean; link: number; offset: number; dir: Dir; exitNode: number; exitLink: number; bidirectional?: boolean; turnbackDistance?: number }[] = [];
   /**
    * A stub from `bnd` running `s`-wards: either to a buffer, or (a depot lead)
    * on through a transfer track to the yard gate. Returns the stub link that
@@ -901,7 +932,7 @@ export function buildTopology(): Topology {
       const ls = links[far ? far.links![0] : end];
       if (far) (i === 0 ? pb.inner.U : pb.inner.D).push(end);
       pb.stubs.push({ link: ls.id, exitNode: bnd.id, exitLink: lt.id, bnd: bnd.id, lead: st.lead ? leads[leads.length - 1] : undefined });
-      sidingBerthInfo.push({ name: st.name, station: pb.def.station, turnback: st.turnback ?? true, link: ls.id, offset: ls.len - 15, dir: 1, exitNode: bnd.id, exitLink: lt.id, bidirectional: !!far });
+      sidingBerthInfo.push({ name: st.name, station: pb.def.station, turnback: st.turnback ?? true, link: ls.id, offset: ls.len - 15, dir: 1, exitNode: bnd.id, exitLink: lt.id, bidirectional: !!far, turnbackDistance: st.turnbackDistance });
     });
   }
 
@@ -1269,6 +1300,7 @@ export function buildTopology(): Topology {
   const stationRescue: number[][] = chains.map(() => []);
   const stationStorage: number[][] = chains.map(() => []);
   const stationShunts: { storageLink: number; incoming: 'UP' | 'DN'; berth: number }[][] = chains.map(() => []);
+  const nearSidingPoints: { deep: number; distance: number }[] = [];
   for (const p of platforms) {
     const l = links[p.link];
     const stopOff = (LINE_INFO.platformLength / 2) + (PLAT_HALF - LINE_INFO.platformLength / 2); // head at platform end
@@ -1319,6 +1351,7 @@ export function buildTopology(): Topology {
   for (const b of sidingBerthInfo) {
     const id = addBerth({ kind: 'siding', link: b.link, offset: b.offset, dir: b.dir, platform: -1, station: b.station, depot: -1, reverse: false, name: b.name });
     if (b.turnback) stationTurnback[b.station].push(id);
+    if (b.turnback && b.turnbackDistance !== undefined) nearSidingPoints.push({ deep: id, distance: b.turnbackDistance });
     if (b.bidirectional) addBerth({ kind: 'siding', link: b.link, offset: b.offset - LINE_INFO.trainLength, dir: -1,
       platform: -1, station: b.station, depot: -1, reverse: false, name: b.name });
   }
@@ -1467,6 +1500,19 @@ export function buildTopology(): Topology {
         dir: -1, platform: -1, station: depot.station, depot: depot.id, reverse: false,
         name: `${depot.name}出段固定作业` });
     }
+  }
+
+  // Append only after every original berth: old deep, storage, shunt and
+  // depot IDs/coordinates stay put. A near turning point is the same slot,
+  // with parking and rescue still referring to the original deep berth.
+  for (const point of nearSidingPoints) {
+    const deep = berths[point.deep], station = deep.station;
+    if (!stationRescue[station].length) stationRescue[station].push(...stationTurnback[station]);
+    const index = stationTurnback[station].indexOf(deep.id);
+    const near = addBerth({ ...deep, offset: point.distance,
+      maxLength: point.distance - SIGNAL_MARGIN, stablingBerth: deep.id });
+    deep.name = `${deep.name}(深位)`;
+    if (index >= 0) stationTurnback[station][index] = near;
   }
 
   // ------------------------------------------------------------------ routes

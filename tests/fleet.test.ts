@@ -74,7 +74,9 @@ describe('fleet maintenance and assignment',()=>{
    const stock=fleet.depotStock.map((v,i)=>v+complete.filter(r=>r.depot===i).length);
    const key=`${fleet.config.dayType}-${stock}`;
    let plan=cache.get(key);if(!plan){plan=generatePlan({...sim.planCtx,dayType:fleet.config.dayType,initialStock:stock});cache.set(key,plan);}
-   expect(validatePlan({...sim.planCtx,dayType:fleet.config.dayType,initialStock:stock},plan).filter(i=>i.severity==='error'),`day ${n} morning plan`).toEqual([]);
+   // This provisional supply includes workshop completions and only provides
+   // yardNeed. They enter parking after the next workshop admissions, as in Sim.
+   expect(fleet.depotStock.every((count,depot)=>count<=fleet.topo.depots[depot].capacity),`day ${n} actual morning parking`).toBe(true);
    fleet.plan=structuredClone(plan);
    const before=fleet.depotStock.reduce((a,b)=>a+b,0)+complete.length;
    const maintained=n===0?{monthly:[...fleet.vehicles.values()].filter(r=>r.work==='monthly').length,deferred:0,need:yardNeed(sim.topo,fleet.plan)}:maintainFleet(fleet,true);

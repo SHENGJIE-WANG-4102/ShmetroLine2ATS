@@ -43,7 +43,10 @@ describe('continuous independent tail tracks', () => {
 
   it('keeps separate normal and coupled-rescue stopping points where configured', () => {
     const topo = buildTopology();
-    const station = topo.stations.find(s => s.rescueBerths.some(id => !s.turnbackBerths.includes(id)));
+    // This test exercises a split continuous tail's incoming history. Siding
+    // near/deep capacity has its own contract and tests.
+    const station = topo.stations.find(s => s.turnbackBerths.some(id => topo.berths[id].kind === 'tail')
+      && s.rescueBerths.some(id => !s.turnbackBerths.includes(id)));
     if (!station) return; // Lines without a separate rescue berth retain their original layout.
     for (const normalId of station.turnbackBerths) {
       const normal = topo.berths[normalId], link = topo.links[normal.link];
@@ -95,13 +98,17 @@ describe('continuous independent tail tracks', () => {
 
   it('releases an entered route at its actual turnback, but not at an intermediate stop', () => {
     const sim = new Sim({ dayType: 'weekday', dateLabel: 'tail route completion', startTime: 14400, seed: 7, noPossessions: true });
-    const station = sim.topo.stations.find(s => s.rescueBerths.some(id => !s.turnbackBerths.includes(id)));
+    // D172 near turnback berths end their routes in their own tail section; pick
+    // a station whose turnback berth still lies before the route's last section.
+    const routedBeyond = (id: number) => sim.topo.routes.some(r => r.berths.includes(id)
+      && r.sections.at(-1) !== sim.topo.links[sim.topo.berths[id].link].section);
+    const station = sim.topo.stations.find(s => s.rescueBerths.some(id => !s.turnbackBerths.includes(id))
+      && s.turnbackBerths.some(routedBeyond));
     if (!station) return;
     const tr = sim.trainList[0];
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim, id);
-    const berth = station.turnbackBerths.map(id => sim.topo.berths[id]).find(b =>
-      sim.topo.routes.some(r => r.berths.includes(b.id) && r.sections.at(-1) !== sim.topo.links[b.link].section))!;
+    const berth = sim.topo.berths[station.turnbackBerths.find(routedBeyond)!];
     expect(berth).toBeDefined();
     const route = sim.topo.routes.find(r => r.berths.includes(berth.id)
       && r.sections.at(-1) !== sim.topo.links[berth.link].section)!;

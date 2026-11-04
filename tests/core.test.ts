@@ -7,7 +7,7 @@ import { MACHINES, MODE, EB, allowed } from '../src/sim/fsm';
 import type { Command, Task, Train, Trip } from '../src/sim/model';
 import { openCall, answerCall, unsafeAhead, rescuerFor, callRescue, radioTick } from '../src/sim/radio';
 import { trySetRoute, cancelRoute, committedTrain, bindRouteApproach, updateInterlocking, releaseRoute, computeOccupancy } from '../src/sim/interlocking';
-import { setMode, grantRM, updateOnboard, applyEB, ebCauseCleared, answerEbRelease, authoriseEBRelease } from '../src/sim/onboard';
+import { setMode, grantRM, updateOnboard, applyEB, ebCauseCleared, answerEbRelease, authoriseEBRelease, turnbackDwell, driverTurnbackKind, calibratedRearTurnback } from '../src/sim/onboard';
 import { parseTime } from '../src/sim/calendar';
 import { computeBody, indexBodies, rescueRouteReady, scanAhead } from '../src/sim/movement';
 import { distanceToBerth, updateTrainTasks, rescueApproach, trainDesire, runARS, spawnDue, setTripFromTasks, intervalDepartureHold, cancelArsRoute, arsReadyAt } from '../src/sim/ats';
@@ -779,14 +779,19 @@ describe('multiple-failure maintenance escalation', () => {
     for(const id of [...sim.routes.keys()])releaseRoute(sim,id);
     for(const block of sim.plan.blocks)sim.blockDone.add(block.id);
     failed.tasks=[];rescuer.tasks=[];failed.hold=rescuer.hold=true;
-    const pullout=sim.topo.routes.find(r=>r.name==='S3116→S3112(侧向)')!;
+    // Straight tail pull-out: both scissors points lie normal beneath the body,
+    // so no rescuer can cross over from the opposite platform (the airport
+    // throat was redrawn; S3110 is the UP-tail exit signal).
+    const pullout=sim.topo.routes.find(r=>r.name==='S3110→S3106')!;
     expect(trySetRoute(sim,pullout.id,{manual:true,train:failed.id}).ok).toBe(true);advance(sim,5);
-    // Real airport scissors footprint from the failing seed; the point
-    // positions were established before this body occupied their sections.
+    // Airport scissors footprint: the head stands in the second point section,
+    // the body back over the first one and the UP platform. The point positions
+    // were established before this body occupied their sections.
     // (links found by track and chainage: their ids move with the layout)
-    const at=(track:string,a:number,b:number)=>sim.topo.links.find(l=>l.track===track&&Math.abs(l.chainA-a)<.2&&Math.abs(l.chainB-b)<.2)!.id;
-    const up=[[61835,62045],[62045,62125],[62125,62140],[62140,62155],[62155,62195],[62195,62210]].map(([a,b])=>at('UP',a,b));
-    const dn=[at('DN',61419.6,61835),at('DN',61835,62045)];
+    const platformLink=sim.topo.links[sim.topo.berths[platformBerth(sim.topo,30,'UP')].link];
+    const up=sim.topo.links.filter(l=>l.track==='UP'&&l.chainA>=platformLink.chainA-.2).sort((a,b)=>a.chainA-b.chainA).slice(0,6).map(l=>l.id);
+    const dnPlatform=sim.topo.links[sim.topo.berths[platformBerth(sim.topo,30,'DN')].link];
+    const dn=[sim.topo.links.find(l=>l.track==='DN'&&Math.abs(l.chainB-dnPlatform.chainA)<.2)!.id,dnPlatform.id];
     failed.link=up[5];failed.off=4.17072387;failed.dir=1;
     failed.hist=up.map(link=>({link,dir:1 as const}));
     rescuer.link=dn[1];rescuer.off=203.6220205;rescuer.dir=1;
@@ -1023,9 +1028,12 @@ describe('paper-based turnback and depot procedures', () => {
     const platform = sim.topo.berths.find(b => b.station === 0 && b.kind === 'platform' && b.dir === 1)!;
     tr.link = berth.link; tr.off = berth.offset; tr.dir = berth.dir; tr.hist = [{ link: berth.link, dir: berth.dir }];
     // This fixture starts after the driver's change of ends; it exercises the signal/RM procedure.
-    tr.v = 0; tr.phase = 'reversing'; tr.phaseSince = sim.t - OPERATIONS.atoDriverWork.legacyEndChangeS; tr.dwellUntil = sim.t; tr.tbStage = 'arrive';
+    const reverse = { k: 'reverse' as const, berths: [berth.id], chosen: berth.id, station: 0, minTime: 0 };
+    // The same change-of-ends budget the mode change re-applies (D171 rear reference included).
+    const endChange = turnbackDwell('AM', 0, driverTurnbackKind(sim.topo, reverse), false, calibratedRearTurnback(sim.topo, reverse));
+    tr.v = 0; tr.phase = 'reversing'; tr.phaseSince = sim.t - endChange; tr.dwellUntil = sim.t; tr.tbStage = 'arrive';
     tr.forceLevel = 'TBTC'; tr.block = -1; tr.tripId = -1;
-    tr.tasks = [{ k: 'reverse', berths: [berth.id], chosen: berth.id, station: 0, minTime: 0 },
+    tr.tasks = [reverse,
       { k: 'stop', berth: platform.id, station: 0, trip: -1, arr: null, dep: sim.t + 300, doors: false, revenue: false }];
     computeBody(sim, tr); indexBodies(sim); setMode(sim, tr, 'AM', 'TBTC', 'test'); checkSafety(sim);
     tr.tbStage = 'reverse'; advance(sim, 20);
@@ -1613,7 +1621,10 @@ describe('ATO with a driver under CBTC (D52)', () => {
           // Paper whole-turn increments include one/two 20s door departures:
           // front 30-20=10s, rear 67.5-40=27.5s at the reversal itself.
           const increment = sim.topo.berths[task.chosen].kind === 'platform' ? 10 : 27.5;
-          expect(t.dwellUntil - sim.t).toBeCloseTo(task.minTime + increment, 6);
+          // D171: a registered rear turnback changes ends on the shared reference.
+          const base = calibratedRearTurnback(sim.topo, task) && driverTurnbackKind(sim.topo, task) === 'rear'
+            ? Math.max(task.minTime, OPERATIONS.rearTurnback!.changeEndsS) : task.minTime;
+          expect(t.dwellUntil - sim.t).toBeCloseTo(base + increment, 6);
         }
       }
     }

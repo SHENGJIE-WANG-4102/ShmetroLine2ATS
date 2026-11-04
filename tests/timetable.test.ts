@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/engine';
-import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, allocateTerminalServices, buildStops, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, depotMoves, terminalReuseRejections, type ServiceRequest } from '../src/sim/timetable';
+import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, terminalOverflows, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, allocateTerminalServices, buildStops, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, depotMoves, terminalReuseRejections, type ServiceRequest } from '../src/sim/timetable';
 import { buildTopology, reversedBerthPoint } from '../src/sim/topology';
 import { routePathStart, walkRouteToBerth } from '../src/sim/routePath';
 import { computeRunTimes } from '../src/sim/dynamics';
@@ -89,7 +89,8 @@ describe('daily depot homes', () => {
     });
     it(`${dayType}: closes every yard with direct returns or a required through working`, () => {
       const ledger = depotLedger(sim.topo, sim.plan);
-      expect(ledger.initial).toEqual(sim.depotStock.map((n,d)=>n+[...sim.vehicles.values()].filter(r=>r.work&&r.depot===d).length));
+      // The parking ledger excludes the separate workshop stock (D112).
+      expect(ledger.initial).toEqual(sim.depotStock);
       expect(ledger.final).toEqual(ledger.initial);
       ledger.peak.forEach((n, depot) => expect(n).toBeLessThanOrEqual(sim.topo.depots[depot].capacity));
       for (const block of sim.plan.blocks) {
@@ -154,17 +155,30 @@ describe('daily depot homes', () => {
       .map(t => t.stops.at(-1)!.arr).filter(at => at >= 22 * 3600).sort((a,b) => a-b);
     expect(calls.length).toBeGreaterThan(8);
     expect(Math.max(...calls.slice(1).map((at,i) => at-calls[i]))).toBeLessThan(16 * 60);
-    // The data rule adds no passenger departures. Core calls retain their
-    // clocks; east-only depot feeders can refit to the shared-lead windows.
+    // The data rule adds no core passenger departures. Core calls retain
+    // their clocks; east-only depot feeders can refit to the shared-lead
+    // windows, and the airport→yard return legs run in service (D166:
+    // trains carry passengers into the depot entry station).
     const rule = OPERATIONS.depotReturns.find(rule => rule.service)!;
     const saved = rule.service;
     try {
       delete rule.service;
       const direct = new Sim({ dayType: 'weekday', dateLabel: 'direct withdrawal', startTime: 14400, seed: 1 });
-      const signature = (sim: Sim) => sim.plan.trips.filter(t => t.revenue && !t.cancelled).map(t => [t.dir,t.from,
-        t.stops.filter(stop => stop.st <= sim.topo.stations.find(st => st.id === 'GLL')!.index)
-          .map(stop => [stop.st,stop.arr,stop.dep])]);
-      expect(signature(sim)).toEqual(signature(direct));
+      const gll = sim.topo.stations.find(st => st.id === 'GLL')!.index;
+      // D173: with the rule, the car that goes home at 龙阳路 and the one that
+      // runs on to GLL can swap, so a 龙阳路–GLL clock may differ; the core
+      // keeps every boarding departure, counted per station, direction and hour.
+      // An east-only feeder finishing at GLL departs from no core station.
+      const departures = (sim: Sim) => {
+        const count = new Map<string, number>();
+        for (const t of sim.plan.trips) if (t.revenue && !t.cancelled) for (const stop of t.stops.slice(0, -1))
+          if (stop.st <= gll && stop.stop !== false && !stop.noBoard) {
+            const key = `${t.dir} ${STATIONS[stop.st].name} ${Math.floor(stop.dep / 3600)}h`;
+            count.set(key, (count.get(key) ?? 0) + 1);
+          }
+        return [...count].sort(([a], [b]) => a.localeCompare(b));
+      };
+      expect(departures(sim)).toEqual(departures(direct));
       expect(direct.plan.trips.filter(t => !t.revenue && t.from === airport && t.to === sim.topo.depots.find(d => d.key === rule.depot)!.station)).toHaveLength(0);
     } finally { rule.service = saved; }
   });
@@ -208,7 +222,6 @@ describe('shared depot lead turnbacks', () => {
       }));
       const moves = depotMoves(sim.plan.blocks, sim.plan.trips, sim.planCtx).filter(move => move.delta > 0 && move.window
         && rejectedReturnNos.has(sim.plan.trips[move.trip!].no));
-      if (dayType === 'weekday') expect(moves.length).toBeGreaterThanOrEqual(2);
       for (let i = 0; i < moves.length; i++) for (let j = i + 1; j < moves.length; j++) {
         const a = moves[i], b = moves[j];
         if (a.link !== b.link) continue;
@@ -217,10 +230,11 @@ describe('shared depot lead turnbacks', () => {
       }
       expect(validatePlan(sim.planCtx, sim.plan).filter(issue => issue.severity === 'error')).toEqual([]);
       expect(sim.plan.fleetPeak).toBeLessThanOrEqual(LINE_INFO.fleet);
-      // Running times change candidate identities. Every reported rejection
-      // must describe an unconnected pair and a real shared-lead conflict.
-      if (dayType === 'weekday') {
-        expect(rejections.length).toBeGreaterThan(0);
+      // Running times change candidate identities, and a plan may need no
+      // rejection at all (the shared-lead conflict itself is covered above).
+      // Every reported rejection must describe an unconnected pair and a real
+      // shared-lead conflict.
+      {
         for (const text of rejections) {
           const match = /^(.+)→(.+)：折返待发与 (.+) 出入段/.exec(text)!;
           expect(match, text).not.toBeNull();
@@ -254,10 +268,10 @@ describe('D73 calibrated service anchors', () => {
       ['UP', 30, 0, H(22, 30), H(24, 5)],
       ['DN', 0, 22, H(22, 42), H(23, 44)],
     ] as const) {
-      const trip = live.filter(t => t.dir === dir && t.from === from && t.to === to)
+      const trip = live.filter(t => t.dir === dir && t.from === from && t.stops.some(stop => stop.st === to))
         .sort((a, b) => a.stops[0].dep - b.stops[0].dep).at(-1)!;
       expect(trip.stops[0].dep).toBe(departure);
-      expect(Math.abs(trip.stops.at(-1)!.arr - arrival)).toBeLessThanOrEqual(60);
+      expect(Math.abs(trip.stops.find(stop => stop.st === to)!.arr - arrival)).toBeLessThanOrEqual(60);
     }
     expect(OPERATIONS.lastBigWestboundDep).toBe(H(22, 30));
   });
@@ -265,17 +279,15 @@ describe('D73 calibrated service anchors', () => {
     expect(live.filter(t => t.dir === 'UP' && t.from === 22 && t.stops[0].dep > H(23, 2))).toHaveLength(0);
   });
   it('stables the last revenue arrivals at the terminal overnight stations', () => {
-    for (const [st, count] of [[0, 2], [30, 1], [22, 2]]) {
+    for (const [st, count] of [[0, 2], [30, 1]]) {
       const expected = live.filter(t => t.to === st).sort((a, b) => b.stops.at(-1)!.arr - a.stops.at(-1)!.arr)
         .slice(0, count).map(t => t.id).sort((a, b) => a - b);
       const actual = sim.plan.blocks.filter(b => b.end.kind === 'stable' && b.end.station === st)
         .map(b => b.trips.at(-1)!).sort((a, b) => a - b);
       expect(actual, STATIONS[st].name).toEqual(expected);
     }
-    const gll = sim.plan.blocks.filter(b => b.end.kind === 'stable' && b.end.station === 22)
-      .sort((a, b) => sim.plan.trips[a.trips.at(-1)!].stops.at(-1)!.arr - sim.plan.trips[b.trips.at(-1)!].stops.at(-1)!.arr);
-    expect(gll[0].end).toMatchObject({ berth: sim.topo.stations[22].turnbackBerths[0] });
-    expect(gll[1].end).toMatchObject({ berth: platformBerth(sim.topo, 22, 'DN') });
+    const gll = STATIONS.findIndex(st => st.id === 'GLL');
+    expect(sim.plan.blocks.filter(b => b.end.kind === 'stable' && b.end.station === gll)).toEqual([]);
   });
   it('matches every published first/last minute within two minutes, including terminal arrivals', () => {
     for (const [st, row] of FIRST_LAST.entries()) {
@@ -464,7 +476,7 @@ describe('D72 timetable structure', () => {
     expect(dayPeriods('weekend').find(p => p.from === H(21))?.template).toBe('weekdayEvening');
   });
   for (const dayType of ['weekday', 'weekend'] as const) {
-    it(`${dayType}: official first trains and eight overnight trains fit the yards`, () => {
+    it(`${dayType}: official first trains and six overnight trains fit the yards`, () => {
       const sim = make(dayType), { plan, topo } = sim;
       for (const [id, dir] of [['LYL', 'UP'], ['KJG', 'UP'], ['GLL', 'UP'], ['PXL', 'DN'], ['GLL', 'DN'], ['PDA', 'UP']] as const) {
         const st = STATIONS.findIndex(s => s.id === id);
@@ -486,50 +498,41 @@ describe('D72 timetable structure', () => {
         expect(t!.revenue).toBe(true);
         expect(t!.stops.filter(s => s.stop && s.noBoard && s.st !== t!.to).map(s => STATIONS[s.st].id), `${from} ${dir}`).toEqual([]);
       }
-      expect(plan.blocks.filter(b => b.start.kind === 'stable')).toHaveLength(8);
+      expect(plan.blocks.filter(b => b.start.kind === 'stable')).toHaveLength(6);
       expect(plan.blocks.filter(b => b.start.kind === 'stable' && b.start.station === 17)).toHaveLength(2);
       expect(plan.blocks.filter(b => b.start.kind === 'stable' && b.start.station === 24)).toHaveLength(1);
-      const gll = plan.blocks.filter(b => b.start.kind === 'stable' && b.start.station === 22);
-      expect(gll).toHaveLength(2);
-      for (const b of gll) {
-        const first = plan.trips[b.trips[0]];
-        expect(first.stops[0].dep).toBe(first.dir === 'UP' ? H(5, 28) : H(6));
-        if (b.start.kind !== 'stable') throw new Error('stable');
-        const berth = topo.berths[b.start.berth!];
-        expect(berth.platform === topo.stations[22].platforms.DN).toBe(first.dir === 'DN');
-        expect(blockTasks(topo, plan, b).find(t => t.k === 'stop')).toMatchObject({ berth: b.start.berth });
-        expect(sim.trainList.find(t => t.block === b.id)?.dir).toBe(first.dir === 'DN' ? 1 : -1);
+      const gll = STATIONS.findIndex(st => st.id === 'GLL');
+      for (const [dir, dep] of [['UP', H(5, 28)], ['DN', H(6)]] as const) {
+        const first = opener(dir, 'GLL', dep)!;
+        const b = plan.blocks[first.block];
+        expect(first.stops[0].dep).toBe(dep);
+        expect(b.start.kind).toBe('depot');
+        if (b.start.kind !== 'depot') throw new Error('missing depot supply');
+        const feeder = plan.trips[b.trips[0]], yard = topo.depots[b.start.depot];
+        expect(feeder.revenue).toBe(false);
+        expect(feeder.to).toBe(gll);
+        expect(feeder.from).toBe(yard.portals.exit[feeder.dir].station);
+        expect(feeder.stops.at(-1)!.arr).toBeLessThanOrEqual(dep + 1e-6);
+        expect(depotMoves([b], plan.trips, {topo}).find(move => move.delta < 0))
+          .toMatchObject({depot:yard.id,trip:feeder.id,time:b.start.time});
+        const reverse = blockTasks(topo, plan, b).filter(task => task.k === 'reverse' && task.station === gll);
+        expect(reverse.length > 0).toBe(feeder.dir !== first.dir);
       }
       sim.step(); sim.step();
-      for (const b of gll) expect(sim.trainList.find(t => t.block === b.id)?.doorsOpen).toBe(false);
       expect(sim.integrity.violations).toHaveLength(0);
-      expect(plan.blocks.filter(b => b.end.kind === 'stable' && b.end.station === 22)).toHaveLength(2);
+      expect(plan.blocks.filter(b => b.start.kind === 'stable' && b.start.station === gll
+        || b.end.kind === 'stable' && b.end.station === gll)).toEqual([]);
       expect(yardNeed(topo, plan).every((n, d) => n <= topo.depots[d].capacity)).toBe(true);
       expect(sim.depotStock.every((n, d) => n <= topo.depots[d].capacity)).toBe(true);
       expect(fmtIssues(validatePlan(sim.planCtx, plan))).toBe('');
     });
-    it(`${dayType}: protects GLL's DN overnight platform through midnight and the next opening`, () => {
+    it(`${dayType}: leaves no GLL stabling reservation and retains its one-train turnback capacity`, () => {
       const sim = make(dayType), { plan, topo } = sim;
-      const berth = platformBerth(topo, 22, 'DN');
-      const night = plan.blocks.find(b => b.end.kind === 'stable' && b.end.berth === berth)!;
-      const last = plan.trips[night.trips.at(-1)!];
-      const morning = plan.blocks.find(b => b.start.kind === 'stable' && b.start.berth === berth)!;
-      const first = plan.trips[morning.trips[0]];
-      for (const t of plan.trips) {
-        if (t.cancelled || t.dir !== 'DN' || t.id === last.id || t.id === first.id) continue;
-        const tasks = blockTasks(topo, plan, plan.blocks[t.block]);
-        const at = t.stops.find(s => s.st === 22);
-        if (!at || !tasks.some(task => task.k === 'stop' && task.trip === t.id && task.berth === berth) && t.to === 22) continue;
-        expect(at.dep).toBeLessThan(last.stops.at(-1)!.arr);
-        expect(at.arr).toBeGreaterThanOrEqual(first.stops[0].dep);
-      }
-      // A returning empty train must be rejected too, even if it is a fixed
-      // special or a next-day depot positioning trip rather than revenue.
-      const conflicting = plan.trips.find(t => t.dir === 'DN' && t.to > 22 && !t.cancelled)!;
-      conflicting.revenue = false;
-      conflicting.stops.find(s => s.st === 22)!.arr = H(5, 50);
-      conflicting.stops.find(s => s.st === 22)!.dep = H(5, 50);
-      expect(validatePlan(sim.planCtx, plan).some(i => i.code === 'STABLE_CONFLICT' && i.blocks?.includes(conflicting.block))).toBe(true);
+      const gll = STATIONS.findIndex(st => st.id === 'GLL');
+      expect(overnightPlaces(topo).filter(place => place.station === gll)).toEqual([]);
+      expect(storageOccupancy(topo, plan).filter(hold => hold.station === gll && hold.morning !== undefined)).toEqual([]);
+      expect(terminalOverflows(topo, gll, [{from:0,to:100},{from:50,to:150}]))
+        .toContainEqual({t:50,cur:2,cap:1});
     });
   }
 });

@@ -8,6 +8,7 @@ import {makeSim,runFor,assertIntegrity,assertNoCollision} from './helpers';
 import {envTick} from '../src/sim/env';
 import {newTrain} from '../src/sim/ats';
 import {checkSafety} from '../src/sim/invariants';
+import {STATIONS} from '../src/data/current';
 
 const H=(h:number,m=0)=>h*3600+m*60;
 const create=(dayType:'weekday'|'weekend'='weekday')=>new Sim({dayType,dateLabel:'round3',startTime:H(4),seed:1});
@@ -44,7 +45,7 @@ describe('registered storage positions',()=>{
   });
   it.each(['weekday','weekend'] as const)('%s: holds overnight heads at their spawn berths',day=>{
     const sim=create(day), positions=sim.trainList.map(tr=>({id:tr.id,link:tr.link,off:tr.off}));
-    expect(positions.length).toBe(8);
+    expect(positions.length).toBe(6);
     while(sim.t<H(4,2)) sim.step();
     for(const p of positions) {
       const tr=sim.trains.get(p.id)!;
@@ -64,10 +65,12 @@ describe('registered storage positions',()=>{
   });
   it('rejects an overnight reservation on a platform-kind middle track against a turn',()=>{
     const sim=create(),plan=structuredClone(sim.plan);
-    const overnight=plan.blocks.find(b=>b.end.kind==='stable'&&b.end.station===22&&b.end.berth!==undefined
-      &&sim.topo.stations[22].turnbackBerths.includes(b.end.berth))!;
-    const turn=storageOccupancy(sim.topo,plan).find(o=>o.station===22&&o.block!==overnight.id&&o.from>H(8)&&o.to<H(20))!;
-    const last=plan.trips[overnight.trips.at(-1)!];
+    // Deliberately inject a forbidden reservation; the normal D170 plan has none.
+    const gll=STATIONS.findIndex(st=>st.id==='GLL');
+    const turn=storageOccupancy(sim.topo,plan).find(o=>o.station===gll&&o.from>H(8)&&o.to<H(20))!;
+    const last=plan.trips.find(t=>!t.cancelled&&t.to===gll&&t.block!==turn.block)!;
+    const overnight=plan.blocks[last.block];
+    overnight.trips=[last.id];overnight.end={kind:'stable',station:gll,berth:sim.topo.stations[gll].turnbackBerths[0]};
     last.stops.at(-1)!.arr=turn.from-1;
     expect(validatePlan(sim.planCtx,plan).some(i=>i.code==='STABLE_CONFLICT'&&i.blocks?.includes(overnight.id)&&i.blocks.includes(turn.block))).toBe(true);
   });
@@ -96,14 +99,16 @@ describe('early and late added-service reservations',()=>{
     const sim=create(),plan=structuredClone(sim.plan);
     const result=applyOverlay(sim.planCtx,plan,{...OVERLAY_PRESETS.find(p=>p.id==='ciie')!,from:H(5),to:H(6),headway:600},{now:H(4,43),canExtend:()=>true});
     const through=plan.trips.filter(t=>t.overlay&&!t.cancelled&&t.revenue&&t.from===1&&t.to>22&&t.stops[0].dep<=H(6));
-    // D119's physical timings, then D135/D138, changed the feasible slots.
-    // Pin the current full-plan result without dropping any requested calls.
+    // D119's physical timings, then D135/D138, D171 and D173 (denser official
+    // opening: GLL full at 05:44, no withdrawal slot at 06:04) changed the
+    // feasible slots. Pin the current full-plan result without dropping any
+    // requested calls; every omitted request still reports its reason.
     expect(through).toHaveLength(1);
     for(const trip of through) for(let station=1;station<=22;station++)
       expect(trip.stops.find(s=>s.st===station)?.stop).toBe(true);
-    expect(result.skipped).toBe(3);
+    expect(result.skipped).toBe(4);
     const omitted=plan.trips.filter(t=>t.overlay&&t.cancelled&&t.revenue);
-    expect(omitted).toHaveLength(3);
+    expect(omitted).toHaveLength(4);
     expect(omitted.every(t=>!!t.cancelReason)).toBe(true);
     expect(validatePlan(sim.planCtx,plan).filter(i=>i.severity==='error')).toEqual([]);
   });
@@ -131,7 +136,8 @@ describe('early and late added-service reservations',()=>{
       expect(validatePlan(sim.planCtx,plan).filter(i=>i.severity==='error')).toEqual([]);
       expect(depotLedger(sim.topo,plan).final).toEqual(depotLedger(sim.topo,plan).initial);
       expect(plan.trips.slice(0,original.length).map(t=>({from:t.from,to:t.to,stops:t.stops}))).toEqual(original);
-      expect(plan.blocks.filter(b=>b.end.kind==='stable'&&b.end.station===22&&b.trips.some(id=>!plan.trips[id].cancelled))).toHaveLength(2);
+      const gll=STATIONS.findIndex(st=>st.id==='GLL');
+      expect(plan.blocks.filter(b=>b.end.kind==='stable'&&b.end.station===gll&&b.trips.some(id=>!plan.trips[id].cancelled))).toHaveLength(0);
     });
   }
 });

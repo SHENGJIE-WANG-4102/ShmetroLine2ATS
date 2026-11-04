@@ -12,7 +12,6 @@ import { callRescue, callPecu, callTrackPerson } from './radio';
 import { psdRepaired } from './psd';
 import { allowed, FAULT } from './fsm';
 import { recordTransition } from './invariants';
-import { reverseTrain } from './movement';
 import { dtoAllowed as dtoAllowedFor } from './onboard';
 
 function stage(sim: Sim, fault: Fault, next: Fault['stage']) {
@@ -265,13 +264,6 @@ export function faultsTick(sim: Sim) {
         sim.clearAlarm(`tfr-${tr.id}`);
         if (f.maintenanceAt !== undefined) {
           sim.log('C','列车',`列车 ${tr.svc} 现场抢修完成，恢复牵引能力，清客回段`);
-          const rescuer=sim.trains.get(tr.rescueBy);
-          const first=tr.tasks[0];
-          const reversedForRescue=tr.rescueReverse || rescuer && first?.k==='stop'
-            && sim.topo.berths[first.berth].dir!==tr.dir && ['arrive','depart','manual'].includes(tr.tbStage);
-          tr.rescueBy=-1;
-          if(reversedForRescue){reverseTrain(sim,tr);tr.rescueReverse=false;tr.tbStage='depart';}
-          if(rescuer){rescuer.rescuing=-1;sim.command({c:'withdraw',train:rescuer.id,reason:`救援解除：故障列车${tr.svc}现场抢修完成`},'现场抢修后解除救援');}
           const result = sim.command({c:'withdraw',train:tr.id,reason:'列车故障：现场抢修后回段检修'},'现场抢修');
           if (!result.ok) sim.log('A','列车',`抢修后回段需调度处理：${result.msg}`);
         }

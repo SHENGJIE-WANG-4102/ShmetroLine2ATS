@@ -95,7 +95,7 @@ export interface Block {
 
 export interface Plan {
   dayType: DayType;
-  /** Actual inventory inherited at rollover, absent for the normal initial day. */
+  /** Ready yard inventory after reserving workshop vehicles, including at rollover. */
   initialStock?: number[];
   trips: Trip[];
   blocks: Block[];
@@ -129,6 +129,8 @@ export interface StopTask {
   minDwell?: number;
   /** Physical fixed work on a depot movement, including its possible leads. */
   depotWork?: { kind: 'in' | 'out'; depot: number; berths: number[] };
+  /** Rescue clear-out: the failed rake alone, or all remaining passengers. */
+  rescueClear?: 'failed' | 'all';
   note?: string;
   /** set-down only (定点班车): nobody boards here */
   noBoard?: boolean;
@@ -323,7 +325,9 @@ export interface Train {
    * Geometry and phase survive checkpoints; changing the stop or driving mode
    * replaces the plan instead of carrying a previous section's coasting latch. */
   ato?: { state: AtoState; plan: SectionPlan; berth: number; arrival: number | null;
-    level: number; ceiling: number; manual: boolean; distance: number; obstructed: boolean };
+    level: number; ceiling: number; manual: boolean; distance: number; obstructed: boolean;
+    /** A rear leg starts its physical clock at first motion, not while waiting for a route. */
+    turnbackLeg?: 'entry' | 'exit'; started?: boolean };
   /** The same phase latch for moves without a scheduled arrival budget. */
   atoMove?: AtoState;
   /** train status flags */
@@ -334,6 +338,11 @@ export interface Train {
   /** Stationary change of ends made for an opposing terminal-tail rescue. */
   rescueReverse?: boolean;
   rescuing: number;
+  /** Original duty remains live until coupling; train-owned carry state. */
+  rescueDuty?: { tasks: Task[]; inService: boolean; tripNo: string; mode: Mode; peak: boolean; cleared?: boolean;
+    targetTurnback?: { stage: TurnbackState; exitSignal: number } };
+  /** Passenger load still aboard the failed rake after physical coupling. */
+  rescueFailedLoad?: number;
   coupledLen: number;
   inService: boolean;
   /** next signal ahead (for display / ARS) */

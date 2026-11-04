@@ -56,6 +56,9 @@ export interface PairStubDef {
     id: string;
     name: string;
     length: number;
+    /** Ordinary single-train head distance from the stub entry joint, beyond its outer throat.
+     * The original deep stop and usable track length remain available. */
+    turnbackDistance?: number;
     turnback?: boolean;
     lead?: LeadDef;
 }
@@ -205,6 +208,8 @@ export interface CoreLineData {
         monthlyDays: number;
         overhaulDays: number;
         overhaulCount: number;
+        /** Minimum ongoing workshop occupancy; absent keeps the existing due-only policy. */
+        minimumWorkshopStock?: number;
     };
     intervalTrainLimits: {
         from: string;
@@ -234,6 +239,8 @@ export interface CoreLineData {
     lastBigWestboundArrival: number;
     peakCoreHeadway: number;
     minTurnback: Record<string, number>;
+    /** Shared physical rear-turnback legs and cab work; absent retains the existing timing. */
+    rearTurnback?: { entryRunS: number; changeEndsS: number; exitRunS: number };
     /** Station IDs where long turnback waits remain at the platform. */
     longWaitPlatformStations?: readonly string[];
     platformTurnClear: Record<string, number>;
@@ -294,6 +301,8 @@ export interface CoreLineData {
     depotLeadConflictScope?: Record<string, 'path' | 'yard'>;
     sectionRunAllowanceS: number;
     sectionCruiseMinKmh: number;
+    /** Fixed ATO speed-limit steps (km/h) used to spend running slack; absent: continuous. */
+    atoSpeedStepsKmh?: readonly number[];
     sectionCoastMinKmh: number;
     passRunMargin: number;
     autoStartDelay: readonly [number, number];

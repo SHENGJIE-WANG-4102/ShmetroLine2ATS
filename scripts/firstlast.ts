@@ -46,9 +46,11 @@ for (const r of FIRST_LAST) {
 }
 
 // section times along the last trains: official (minute-truncated, ±1) vs planned
-const lastTrip = (dir: 'DN' | 'UP', to: number) => rev.filter((t) => t.dir === dir && t.to === to).sort((a, b) => a.stops[0].dep - b.stops[0].dep).at(-1)!;
-const cols = [[labels[0], 'lastE', lastTrip('DN', E)], [labels[1], 'lastW', lastTrip('UP', 0)], ...(GLL >= 0 ? [[labels[2], 'lastG', lastTrip('DN', GLL)] as const] : [])] as const;
+const lastTrip = (dir: 'DN' | 'UP', to: number, through = false) => rev.filter((t) => t.dir === dir
+  && (through ? t.stops.some(stop => stop.st === to) : t.to === to)).sort((a, b) => a.stops[0].dep - b.stops[0].dep).at(-1);
+const cols = [[labels[0], 'lastE', lastTrip('DN', E)], [labels[1], 'lastW', lastTrip('UP', 0)], ...(GLL >= 0 ? [[labels[2], 'lastG', lastTrip('DN', GLL, true)] as const] : [])] as const;
 for (const [name, key, trip] of cols) {
+  if (!trip) { console.log(`\n=== ${name}: no matching train`); continue; }
   const rows = FIRST_LAST.filter((r) => r[key] && trip.stops.some((x) => x.st === idx(r.station)));
   const ord = trip.dir === 'DN' ? rows : [...rows].reverse();
   console.log(`\n=== ${name}: ours ${trip.no} dep ${hm(trip.stops[0].dep)}, official ${ord[0][key]}`);

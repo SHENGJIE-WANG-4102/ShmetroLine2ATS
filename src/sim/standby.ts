@@ -50,7 +50,8 @@ const HOT_PULL_OUT = 90;
  * trip it stands for; null for any other train. */
 export function hotStandby(sim: Sim, tr: Train): { station: number; trip: number; parked?: boolean } | null {
   const t0 = tr.tasks[0];
-  if (tr.failed || tr.manual || tr.withdrawn || tr.coupledLen > 0 || tr.block < 0 || tr.relievedBy) return null;
+  if (tr.failed || tr.manual || tr.withdrawn || tr.coupledLen > 0 || tr.block < 0 || tr.relievedBy
+    || tr.rescuing >= 0 || tr.rescueBy >= 0) return null;
   if(tr.phase==='stabled'&&!tr.tasks.length){
     const block=sim.plan.blocks[tr.block],last=block?.trips.map(id=>sim.plan.trips[id]).filter(t=>!t.cancelled).at(-1);
     if(block?.end.kind!=='stable'||block.end.berth===undefined||!last?.standby)return null;
@@ -381,7 +382,8 @@ export function lateForStabler(sim: Sim, r: Train): Train | null {
   if (!hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady)) return null;
   let worst: { tr: Train; late: number } | null = null;
   for (const tr of sim.trainList) {
-    if (tr === r || tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn || tr.relievedBy) continue;
+    if (tr === r || tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn || tr.relievedBy
+      || tr.rescuing >= 0 || tr.rescueBy >= 0) continue;
     const next = sim.plan.trips[dutyTail(sim, tr)[0]];
     if (!next || next.from !== T || !stablesAt(sim, r, T, next.dir)) continue;
     const late = predictedLateness(sim, tr);
@@ -412,7 +414,8 @@ function firstReadySwap(sim: Sim, tr: Train, tail: number[], minK: number, late:
     }
     let best: { r: Train; index: number; trip: number; dep: number } | undefined;
     for (const r of sim.trainList) {
-      if (r === tr || r.block < 0 || r.block === tr.block || r.failed || r.manual || r.withdrawn || r.relievedBy || r.coupledLen > 0) continue;
+      if (r === tr || r.block < 0 || r.block === tr.block || r.failed || r.manual || r.withdrawn || r.relievedBy || r.coupledLen > 0
+        || r.rescuing >= 0 || r.rescueBy >= 0) continue;
       const index = r.tasks.findIndex(t => t.k === 'stop' && t.station === T && t.arr === null && t.dep !== null && t.trip >= 0);
       if (index < 0) {
         if (!best && stablesAt(sim, r, T, D.dir)) best = { r, index: 0, trip: -1, dep: Infinity };
@@ -495,7 +498,7 @@ export function predictedLateness(sim: Sim, tr: Train): number {
 export function cmdStandbyRelief(sim: Sim, tr: Train) {
   const expired = expiredStablingExchange(sim, tr);
   if (expired) return expired;
-  if (tr.failed || tr.manual || tr.coupledLen > 0 || !tr.inService || tr.block < 0)
+  if (tr.failed || tr.manual || tr.coupledLen > 0 || !tr.inService || tr.block < 0 || tr.rescuing >= 0 || tr.rescueBy >= 0)
     return { ok: false, msg: '仅对正常载客运行的计划列车办理备车接替' };
   if (tr.relievedBy) return { ok: false, msg: `已由备车表号${tr.relievedBy}接替` };
   const tail = dutyTail(sim, tr);

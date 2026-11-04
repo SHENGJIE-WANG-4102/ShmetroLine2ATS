@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { PERF, atoBrakeDistance, atoBrakeProfile, atoControl, atoLimitSpeed, atoStopApproachDistance, atoTractionAccel, jerkLimited, levelAccel, levelCruise, sectionEta, sectionPlan, sectionRecommended, tractionAccel, type AtoState } from '../src/sim/dynamics';
 import {createProbeWorld,probeSection}from'../scripts/audio/field-model';
-import {STATIONS}from'../src/data/current';
+import {OPERATIONS,STATIONS}from'../src/data/current';
 import {capture,restore}from'../src/sim/state';
 
 describe('section ATO trajectory', () => {
-  it('eases both ends of a normal stop while preserving the nominal average and distance', () => {
-    const entry=17,distance=atoBrakeDistance(entry);
-    expect(distance).toBe(entry*entry/(2*PERF.bPlan));
+  it('eases both ends of a normal stop: jerk-limited build, planned brake, a slow final release', () => {
+    // D173 (user): the last metres must not drop from 2 km/h straight to 0.
+    // Build at the jerk limit, hold bPlan, release linearly over atoSoftStop.releaseS.
+    const entry=17,distance=atoBrakeDistance(entry),release=PERF.atoSoftStop!.releaseS;
+    expect(distance).toBeGreaterThan(entry*entry/(2*PERF.bPlan));
     expect(atoBrakeProfile(entry,distance).decel).toBe(0);
     const middle=atoBrakeProfile(entry,distance/2),tail=atoBrakeProfile(entry,.05);
-    expect(middle.decel).toBeGreaterThan(PERF.bPlan);expect(middle.decel).toBeLessThanOrEqual(PERF.bService);
+    expect(middle.decel).toBeCloseTo(PERF.bPlan,9);expect(middle.decel).toBeLessThanOrEqual(PERF.bService);
     expect(tail.decel).toBeLessThan(middle.decel/2);
-    let remaining=distance,seconds=0;
-    while(remaining>1e-6&&seconds<30){remaining-=atoBrakeProfile(entry,remaining).speed*.001;seconds+=.001;}
-    expect(Math.abs(seconds-entry/PERF.bPlan)).toBeLessThan(.05);
+    let remaining=distance,seconds=0;const trace:number[]=[];
+    while(remaining>1e-6&&seconds<40){const speed=atoBrakeProfile(entry,remaining).speed;trace.push(speed);remaining-=speed*.001;seconds+=.001;}
+    // Each ramp costs half its duration against a constant bPlan stop.
+    expect(Math.abs(seconds-(entry/PERF.bPlan+(PERF.bPlan/PERF.jerk+release)/2))).toBeLessThan(.05);
+    // One second before standstill the train still moves, below 0.5 km/h.
+    const oneSecond=trace[trace.length-1000];
+    expect(oneSecond*3.6).toBeGreaterThan(.1);expect(oneSecond*3.6).toBeLessThan(.5);
   });
   it('fits its brake shape within the actual downhill net force and jerk limits',()=>{
     for(const grade of[-.15,0,.214547])for(const v of[1,3,6.11,17,22]){
@@ -29,8 +35,11 @@ describe('section ATO trajectory', () => {
       }
     }
     const grade=.214547;
-    expect(atoBrakeDistance(22,grade)).toBe(22*22/(2*PERF.bPlan)); // A feasible nominal stop only changes its ramp.
-    expect(atoBrakeDistance(6.11,grade)).toBeGreaterThan(atoBrakeDistance(6.11));
+    expect(atoBrakeDistance(22,grade)).toBe(atoBrakeDistance(22)); // A feasible nominal stop keeps the level shape.
+    // D173 soft stop: the shape holds bPlan, which this grade's net capacity
+    // (bService−grade) still covers; only a steeper downhill lowers the hold.
+    expect(atoBrakeDistance(6.11,grade)).toBe(atoBrakeDistance(6.11));
+    expect(atoBrakeDistance(6.11,.3)).toBeGreaterThan(atoBrakeDistance(6.11));
   });
   it('stops from a full downhill depot acceleration with the real motor brake force clamped',()=>{
     const grade=.214547,goal=215;
@@ -53,8 +62,12 @@ describe('section ATO trajectory', () => {
   });
   it('caps automatic requests without reducing the manual traction characteristic', () => {
     expect(tractionAccel(0)).toBe(PERF.aMax);
+    const soft = PERF.atoSoftStart!;
+    expect(atoTractionAccel(0)).toBe(soft.accel); // D173 (user): start gently below 10 km/h
+    expect(atoTractionAccel(soft.speed / 2)).toBeCloseTo((soft.accel + Math.min(PERF.atoAccelMax, tractionAccel(soft.speed / 2))) / 2, 9);
     for (const v of [0, 5, 10, 15, 20]) {
-      expect(atoTractionAccel(v)).toBe(Math.min(PERF.atoAccelMax, tractionAccel(v)));
+      if (v >= soft.speed) expect(atoTractionAccel(v)).toBe(Math.min(PERF.atoAccelMax, tractionAccel(v)));
+      else expect(atoTractionAccel(v)).toBeLessThan(Math.min(PERF.atoAccelMax, tractionAccel(v)));
       const state: AtoState={phase:'traction',recovered:false,neutral:0};
       expect(atoControl(state,{v,a:0,target:22,cruise:22,stopDist:5000,remaining:5000})).toBeLessThanOrEqual(PERF.atoAccelMax);
     }
@@ -97,7 +110,9 @@ describe('section ATO trajectory', () => {
     const input={v:5.82866,a:-.55428,target:5.5618,cruise:6.1111111112,stopDist:19.037,remaining:19.037};
     const normal=atoControl({...state},input),protectedState={...state};
     const protectedRequest=atoControl(protectedState,{...input,protecting:true});
-    expect(normal).toBeLessThan(-PERF.bPlan);
+    // D171: with the 25% jerk ramp this point, 6 m into the brake, is still on
+    // the build-up; the required service brake is already being applied.
+    expect(normal).toBeLessThan(-PERF.bPlan*.5);
     expect(protectedRequest).toBeLessThanOrEqual(normal);
     expect(protectedState.phase).toBe('brake');
     expect(protectedState.brakeEntrySpeed).toBe(state.brakeEntrySpeed);
@@ -164,7 +179,11 @@ describe('section ATO trajectory', () => {
     const plan=sectionPlan(2000,0,budget,PERF.vMax,limits);
     expect(plan.completed).toBe(true);
     expect(plan.samples.filter(s=>s.remaining<=100).every(s=>s.speed<=slow+.1)).toBe(true);
-    expect(Math.abs(plan.eta-budget)).toBeLessThan(.5);
+    // D173 fixed 5 km/h ATO steps (user): 65 km/h with the longest coast above
+    // the 60 km/h coast floor is 1.6 s early, 60 km/h is already late. Never
+    // late, early by less than one step.
+    expect(plan.eta).toBeLessThanOrEqual(budget+.5);expect(budget-plan.eta).toBeLessThan(5);
+    expect(OPERATIONS.atoSpeedStepsKmh).toContain(Math.round(plan.cutoff*3.6));
   });
   it('keeps an ordinary neutral transition below a terminal static limit out of the planned-coast floor check',()=>{
     // Actual YDD→HTS profile: the last 198 m are 60 km/h. Its normal ATO
@@ -215,8 +234,11 @@ describe('section ATO trajectory', () => {
       peaks.push(row.peakKmh!);
     }
     // On-time speed follows the remaining arrival budget, without a minimum
-    // peak-speed requirement. The old false coast rejection split these by 5.
-    expect(Math.abs(peaks[0]-peaks[1])).toBeLessThan(1);
+    // peak-speed requirement. D171 directed data give YDD→HTS no allowance
+    // (still ~16 s slower than recorded) and HTS→YDD the usual allowance, so the
+    // tighter direction runs faster; both stay under the elevated 60 limit.
+    expect(peaks[0]).toBeGreaterThan(peaks[1]);
+    for(const peak of peaks)expect(peak).toBeLessThanOrEqual(60.5);
   });
   it('keeps the restriction envelope continuous as coasting effort becomes braking effort',()=>{
     const before=atoLimitSpeed(30,14.4,15,-PERF.resist+.001);
@@ -234,9 +256,15 @@ describe('section ATO trajectory', () => {
     };
     const row=probeSection(sim,from,to,dir,clock);
     expect(row.completed).toBe(true);expect(row.violations).toEqual([]);
-    expect(phases.length).toBeLessThanOrEqual(9);
+    // D172 near berth at PXL: after braking to the approach restriction the
+    // train holds it before the final stop brake (…brake,coast,hold,brake).
+    expect(phases.length).toBeLessThanOrEqual(10);
     expect(phases.filter(p=>p==='traction').length).toBeLessThanOrEqual(2);
-    if(expectCeilingChange)expect(ceilings.size).toBeGreaterThan(1);
+    // D173: replans choose among fixed ATO steps; a line without steps still
+    // retunes its continuous ceiling during the approach.
+    const top=Math.max(...ceilings);
+    if(OPERATIONS.atoSpeedStepsKmh){for(const c of ceilings)if(c<top-1e-9)expect(OPERATIONS.atoSpeedStepsKmh).toContain(Math.round(c*3.6*1e6)/1e6);}
+    else if(expectCeilingChange)expect(ceilings.size).toBeGreaterThan(1);
     expect(phases.join(',')).not.toContain('brake,coast,brake,coast,brake');
   });
   it('keeps a full live section to a few stages and respects the coast-end floor', () => {

@@ -34,7 +34,7 @@ import type { Sim } from './engine';
 import type { Command, Train } from './model';
 import { unsafeAhead, rescuerFor } from './radio';
 import { goalBerth } from './movement';
-import { routeLeadsTo, rescueBlockedByConsist, exchangePartner } from './ats';
+import { routeLeadsTo, rescueBlockedByConsist, exchangePartner, taskGoal } from './ats';
 import { canExchangeStabling, lateForStabler, predictedLateness, RELIEF_DELAY } from './standby';
 
 /** reaction time before answering a call / starting a procedure (s) */
@@ -127,7 +127,10 @@ function axleProcedures(sim: Sim) {
       || tr.v > 0.05 || tr.failed || tr.eb || sim.t - tr.halt.since < GUIDE_AFTER) continue;
     const sig = tr.nextSignal;
     if (sig < 0 || tr.nextSignalDist > 60 || sim.sig[sig].route >= 0) continue;
-    const goal = goalBerth(tr) >= 0 ? goalBerth(tr) : sim.rescueGoal(tr);
+    // The sweep follows the actual movement, including its final depot entry.
+    // goalBerth is an ATO stop target and deliberately excludes depot tasks.
+    const target = taskGoal(sim, tr.tasks[0]);
+    const goal = target >= 0 ? target : sim.rescueGoal(tr);
     const rid = goal >= 0 ? sim.routeTable.next.get(goal)?.[sig] ?? -1 : -1;
     if (rid < 0) continue;
     const route = sim.topo.routes[rid];
@@ -216,7 +219,7 @@ function recoveryRegulation(sim: Sim) {
   for (const tr of sim.trainList) {
     if (tr.halt.train>=0 && sim.trains.get(tr.halt.train)?.phase==='stabled' && due(sim, `expired-slot-${tr.id}`, 30)
       && canExchangeStabling(sim,tr) && cmd(sim,{c:'standby',train:tr.id}).ok) continue;
-    if (tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn) continue;
+    if (tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn || tr.rescuing >= 0 || tr.rescueBy >= 0) continue;
     // D156: a train arriving to stable at a first-ready terminal is offered
     // at once to the train most late for a departure there.
     const waiting = due(sim, `stabler-${tr.id}`, 30) ? lateForStabler(sim, tr) : null;

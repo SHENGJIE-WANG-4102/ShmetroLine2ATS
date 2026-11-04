@@ -15,7 +15,7 @@ export const SIMULATION_EXTRAS: SimulationExtras = {
       weekday: { stationWeights: STATIONS.map((_, i) => i <= 12 ? 1 : i >= 17 ? -1 : 0), amplitude: .72, morning: 8, evening: 18, width: 2 },
       weekend: { stationWeights: [], amplitude: 0, morning: 8, evening: 18, width: 2 },
     },
-    plannedDoorBudget: 15, plannedCloseBudget: 12, minDwell: 22,
+    plannedDoorBudget: 15, plannedCloseBudget: 10, minDwell: 22,
     maxEarlyHold: 10, maxDwellBusy: 85, maxDwell: 70, doorsPerSide: 40, exchangePerDoor: 2.2,
   },
   gradient: {

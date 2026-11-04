@@ -130,14 +130,18 @@ export function vehicleTick(sim: Sim) {
   for (const tr of sim.trainList) {
     // A minor fault carries its passengers on and comes off at the first
     // station where it can leave for a yard, or at its terminus (用户决定 D150).
-    if (tr.withdrawAtEnd && tr.phase === 'dwell') {
+    // Routine withdrawal must not replace one side of an active rescue.
+    // Keep the pending instruction; the fault procedures below still run.
+    if (tr.withdrawAtEnd && tr.phase === 'dwell' && tr.rescuing < 0 && tr.rescueBy < 0) {
       const t = tr.tasks[0];
       const dir = t?.k === 'stop' && t.trip >= 0 ? sim.plan.trips[t.trip].dir : undefined;
       const yard = dir !== undefined && t?.k === 'stop' && sim.topo.depots.some((_, d) => entryStation(sim.topo, d, dir) === t.station);
       if (t?.k === 'stop' && t.trip >= 0 && (t.dep === null || yard)) {
-        tr.withdrawAtEnd = false;
-        cmdWithdraw(sim, tr, '车辆故障：就近回段站下线');
-        sim.log('I', '调度', `列车 ${trainLabel(tr)} 车辆故障，${STATIONS[t.station].name}下线回段`, { train: tr.id });
+        const result = cmdWithdraw(sim, tr, '车辆故障：就近回段站下线');
+        if (result.ok) {
+          tr.withdrawAtEnd = false;
+          sim.log('I', '调度', `列车 ${trainLabel(tr)} 车辆故障，${STATIONS[t.station].name}下线回段`, { train: tr.id });
+        }
       }
     }
     const f = tr.vfault;

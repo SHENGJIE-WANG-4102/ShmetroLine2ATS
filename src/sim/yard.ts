@@ -28,7 +28,7 @@ export function initYards(sim: Pick<Sim, 'topo'>, stock: number[], firstVehicle:
 export function yardCount(y: YardState): number { return y.tracks.reduce((n, t) => n + t.length, 0); }
 
 /** Own seeded stream: initialization/migration must not consume passenger or fault randomness. */
-export function initVehicles(sim: Pick<Sim, 'config' | 'vehicles'>) {
+export function initVehicles(sim: FleetState, opening = false) {
   const today = dayNumber(sim.config);
   let seed = sim.config.seed >>> 0;
   const shuffled = FLEET.map(v => v.no);
@@ -39,6 +39,27 @@ export function initVehicles(sim: Pick<Sim, 'config' | 'vehicles'>) {
   shuffled.forEach((no, i) => {
     if (!sim.vehicles.has(no)) sim.vehicles.set(no, { daily: today, monthly: today - Math.floor(i * RULE.monthlyPeriod / (shuffled.length - 1)), km: 0, work: '', depot: -1, until: 0 });
   });
+  // Only a new world's initial placement may change. Checkpoint migration
+  // keeps real positions and inspection histories, even at an incapable yard.
+  if (opening && (RULE.minimumWorkshopStock ?? 0) > 0) {
+    const need = yardNeed(sim.topo, sim.plan);
+    for (const source of sim.topo.depots.filter(depot => !depot.work.monthly)) {
+      for (const track of sim.yards[source.id].tracks) for (let i = 0; i < track.length; i++) {
+        const no = track[i], record = sim.vehicles.get(no)!;
+        if (record.work || today - record.monthly < RULE.monthlyPeriod) continue;
+        const candidates = sim.topo.depots.filter(depot => depot.work.monthly && yardCount(sim.yards[depot.id]) > need[depot.id])
+          .flatMap(depot => sim.yards[depot.id].tracks.flatMap(other => other.map((vehicle, index) => ({ depot, other, index, vehicle }))))
+          .filter(candidate => { const r = sim.vehicles.get(candidate.vehicle)!; return !r.work && today - r.monthly < RULE.monthlyPeriod; });
+        const excess = (depot: typeof source) => Math.max(0, yardCount(sim.yards[depot.id]) - depot.capacity - (depot.work.overhaul ? RULE.overhaulCount : 0));
+        const target = candidates.sort((a, b) => excess(b.depot) - excess(a.depot)
+          || sim.vehicles.get(b.vehicle)!.monthly - sim.vehicles.get(a.vehicle)!.monthly || a.vehicle.localeCompare(b.vehicle))[0];
+        if (!target) { sim.log('B', '车辆', `${no} 初始月检位置未安排：具备月检能力车场无备车余量`); continue; }
+        track[i] = target.vehicle; target.other[target.index] = no;
+        record.depot = target.depot.id; sim.vehicles.get(target.vehicle)!.depot = source.id;
+        sim.log('I', '车辆运用', `初始月检停放：${no} 在${target.depot.name}，${target.vehicle} 在${source.name}`);
+      }
+    }
+  }
 }
 
 /** One rule for live dispatch, overnight shunting and multi-day projection.
@@ -116,19 +137,29 @@ export function arrangeYard(sim: FleetState, depot: number) {
 }
 
 export interface FleetDayResult { monthly: number; overhaul: number; deferred: number; need: number[] }
-/** Release completed work before reserving today's spare vehicles. No diagram or capacity edits. */
+/** Turn over real workshop cars and reserve today's spare vehicles, without
+ * treating workshops as parking or changing the diagram or capacity. */
 export function maintainFleet(sim: FleetState, overnight: boolean, reorder = overnight): FleetDayResult {
   const today = dayNumber(sim.config), need = yardNeed(sim.topo, { ...sim.plan, blocks: sim.plan.blocks.filter(b=>b.train === undefined) });
   const result: FleetDayResult = { monthly: 0, overhaul: 0, deferred: 0, need };
+  const minimum = RULE.minimumWorkshopStock ?? 0;
   if (overnight) for (const [depot, yard] of sim.yards.entries()) for (const no of yard.tracks.flat()) {
     const r = sim.vehicles.get(no)!; if (sim.topo.depots[depot].work.daily) r.daily = today;
     r.depot = depot;
   }
   if (overnight) for (const r of sim.vehicles.values()) if (r.work && sim.topo.depots[r.depot].work.daily) r.daily = today;
-  for (const [no, r] of sim.vehicles) if (r.work && r.until <= today) {
+  const completed = [...sim.vehicles].filter(([, record]) => record.work && record.until <= today);
+  const release = (no: string, r: VehicleRecord) => {
     r.work = ''; r.monthly = today; r.daily = today; r.until = 0;
     putVehicle(sim, r.depot, no);
-  }
+  };
+  // An ongoing workshop programme exchanges cars before its completed cars
+  // enter parking. Its next admission must leave room for those real returns.
+  if (!minimum) for (const [no, record] of completed) release(no, record);
+  const pending = minimum ? completed : [];
+  const ready = (depot: number) => yardCount(sim.yards[depot]) + pending.filter(([, record]) => record.depot === depot).length;
+  const spare = (depot: number) => ready(depot) > need[depot];
+  const excess = (depot: number) => Math.max(0, ready(depot) - sim.topo.depots[depot].capacity);
   const reserve = (depot: number, no: string, work: 'monthly' | 'overhaul') => {
     const y = sim.yards[depot], track = y.tracks.find(t => t.includes(no))!;
     track.splice(track.indexOf(no), 1);
@@ -136,10 +167,10 @@ export function maintainFleet(sim: FleetState, overnight: boolean, reorder = ove
     r.until = today + (work === 'monthly' ? RULE.monthlyDays : RULE.overhaulDays);
     sim.depotStock[depot] = yardCount(y);result[work]++;
   };
-  let overhaul = [...sim.vehicles.values()].filter(r => r.work === 'overhaul').length;
+  let overhaul = [...sim.vehicles.values()].filter(r => r.work === 'overhaul' && r.until > today).length;
   for (const d of sim.topo.depots) if (d.work.overhaul) {
     const candidates = sim.yards[d.id].tracks.flat().sort((a,b) => sim.vehicles.get(a)!.monthly - sim.vehicles.get(b)!.monthly || a.localeCompare(b));
-    while (overhaul < RULE.overhaulCount && candidates.length && yardCount(sim.yards[d.id]) > need[d.id]) {
+    while (overhaul < RULE.overhaulCount && candidates.length && spare(d.id)) {
       reserve(d.id, candidates.shift()!, 'overhaul');overhaul++;
     }
   }
@@ -148,12 +179,28 @@ export function maintainFleet(sim: FleetState, overnight: boolean, reorder = ove
     const due = sim.yards[d.id].tracks.flat().filter(no => today - sim.vehicles.get(no)!.monthly >= RULE.monthlyPeriod)
       .sort((a,b) => sim.vehicles.get(a)!.monthly - sim.vehicles.get(b)!.monthly || a.localeCompare(b));
     for (const no of due) {
-      if (yardCount(sim.yards[d.id]) <= need[d.id]) {
+      if (!spare(d.id)) {
         result.deferred++;sim.log('B','车辆',`${no} 月检推迟：${d.name} 可用 ${yardCount(sim.yards[d.id])} 列，当天 yardNeed ${need[d.id]} 列`);
       } else reserve(d.id, no, 'monthly');
     }
   }
-  // First-day numbering/positions remain the established opening placement.
+  let occupied = [...sim.vehicles.values()].filter(record => record.work && record.until > today).length;
+  while (occupied < minimum || minimum > 0 && sim.topo.depots.some(depot => depot.work.monthly && excess(depot.id) > 0)) {
+    const candidates = sim.topo.depots.filter(depot => depot.work.monthly && spare(depot.id) && (occupied < minimum || excess(depot.id) > 0))
+      .flatMap(depot => sim.yards[depot.id].tracks.flat().map(no => ({ depot, no, record: sim.vehicles.get(no)! })))
+      .filter(candidate => !candidate.record.work)
+      .sort((a, b) => excess(b.depot.id) - excess(a.depot.id)
+        || a.record.monthly - b.record.monthly || a.no.localeCompare(b.no));
+    const next = candidates[0];
+    if (!next) {
+      result.deferred++;
+      sim.log('B', '车辆', `检修计划推迟：在修 ${occupied} 列，需至少 ${minimum} 列；具备月检能力车场的可用车不足当天 yardNeed`);
+      break;
+    }
+    reserve(next.depot.id, next.no, 'monthly'); occupied++;
+  }
+  for (const [no, record] of pending) release(no, record);
+  // Reordering is explicit: restoration never silently moves a real vehicle.
   if (reorder) for (const d of sim.topo.depots) arrangeYard(sim, d.id);
   sim.log('I','车辆运用',`车辆运用：可用 ${sim.depotStock.reduce((a,b)=>a+b,0)} 列在段，月检 ${[...sim.vehicles.values()].filter(r=>r.work==='monthly').length} 列，架修 ${overhaul} 列，推迟 ${result.deferred} 列；各段最低备车 ${need.join('/')}`);
   return result;

@@ -5,7 +5,7 @@ type Day = 'weekday' | 'weekend';
 type Direction = 'DN' | 'UP';
 type HolidayClock = number | 'closure';
 export interface SimulationExtras {
-  physics: { performance: { aMax: number; atoAccelMax: number; atoSpeedHysteresis: number; atoNeutralS: number; atoBrakeRampFraction: number; jerk: number; bService: number; bPlan: number; bEbGuaranteed: number; bPermit: number; bEb: number; vMax: number; vRM: number; vCouple: number; atoMargin: number; atoFastMargin: number; atpTolerance: number; resist: number }; traction: [number, number][]; levelBands: Record<number, { band: number; lower: number }> };
+  physics: { performance: { aMax: number; atoAccelMax: number; atoSpeedHysteresis: number; atoNeutralS: number; atoBrakeRampFraction: number; atoStopSnap?: { speed: number; distance: number; margin: number }; atoSoftStart?: { speed: number; accel: number }; atoSoftStop?: { releaseS: number }; jerk: number; bService: number; bPlan: number; bEbGuaranteed: number; bPermit: number; bEb: number; vMax: number; vRM: number; vCouple: number; atoMargin: number; atoFastMargin: number; atpTolerance: number; resist: number }; traction: [number, number][]; levelBands: Record<number, { band: number; lower: number }> };
   energy: { mass: number; passengerMass: number; tractionEfficiency: number; regenEfficiency: number; sectionLength: number; levelLate: number };
   calibration: {
     /** Optional explicit station dwell budget; default retains the demand model. */

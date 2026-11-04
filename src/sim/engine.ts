@@ -47,7 +47,7 @@ import { updateOnboard, setManual, cmdTrainLevel, cmdTrainDto, cmdLineAto, autho
 import { psdTick, psdOpen, setBypass, doorMotionTick } from './psd';
 import { updateHalts, HALT } from './halt';
 import { newIntegrity, checkSafety, checkLiveness, type IntegrityState } from './invariants';
-import { LINE_INFO, STATIONS, supportsSignalSystem, unattended } from '../data/current';
+import { LINE_INFO, OPERATIONS, STATIONS, supportsSignalSystem, unattended } from '../data/current';
 import { assertScope, currentScope } from '../data/scope';
 import { validateCommand } from './commands';
 import { preparePlan } from './planning';
@@ -245,16 +245,21 @@ export class Sim {
     this.yards = initYards(this, this.depotStock, stabled + 1);
     this.t = this.dayStart;
     const carried = from ? carryWorld(this, from) : undefined;
-    if (!from) initVehicles(this);
+    if (!from) initVehicles(this, true);
     maintainFleet(this, !!from, false);
+    // Workshops do not occupy parking berths (D112). Both the opening day
+    // and rollover allocate against the actual ready stock after reserving work.
+    const stock = from ? availableStock(this) : this.depotStock.slice();
+    this.planCtx = { ...this.planCtx, initialStock: stock };
+    this.plan = generatePlan(this.planCtx);
     if (from) {
-      const stock = availableStock(this);
       this.config = { ...this.config, depotStock: stock };
-      this.planCtx = { ...this.planCtx, initialStock: stock };
-      this.plan = generatePlan(this.planCtx);
       carryTrains(this, from);
-      for (const depot of this.topo.depots) arrangeYard(this, depot.id);
     }
+    // Opening workshop admissions can free a car away from an overfull
+    // individual track. Arrange the ready stock against the published duties.
+    if (from || (OPERATIONS.maintenance.minimumWorkshopStock ?? 0) > 0)
+      for (const depot of this.topo.depots) arrangeYard(this, depot.id);
     // night possessions use their own random stream so the passenger model is unaffected
     {
       const keep = this.rngState;

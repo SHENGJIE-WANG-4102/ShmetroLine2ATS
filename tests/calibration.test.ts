@@ -1,9 +1,9 @@
 import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
-import {platformBerth,dayPeriods,OUTER_BAND_MARGIN,TEMPLATES,dwellFactorAt,buildStops,tripTasks,officialTimingPoints} from '../src/sim/timetable';
+import {platformBerth,dayPeriods,OUTER_BAND_MARGIN,TEMPLATES,dwellFactorAt,buildStops,tripTasks,officialTimingPoints,plannedRunLevel,plannedRunProfile} from '../src/sim/timetable';
 import {DOOR_CYCLE, DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, PLANNED_DOOR_BUDGET, MIN_DWELL, MAX_DWELL_BUSY, plannedDwell, passengerMinimum, RIDERSHIP_TARGET} from '../src/sim/calibration';
 import {RIDE_LOG} from '../src/data/audio/ridelog';
-import {OPERATIONS,STATIONS} from '../src/data/current';
+import {OPERATIONS,STATIONS,SIMULATION} from '../src/data/current';
 import {updateTrainTasks,newTrain} from '../src/sim/ats';
 import {releaseRoute} from '../src/sim/interlocking';
 import {computeBody,indexBodies} from '../src/sim/movement';
@@ -12,8 +12,87 @@ import {computeDmi} from '../src/sim/dmi';
 import {trainLevel,LEVEL_LATE,levelAccel,levelBand} from '../src/sim/energy';
 import {PERF,type AtoState} from '../src/sim/dynamics';
 import {capture,restore} from '../src/sim/state';
+import {buildTopology} from '../src/sim/topology';
 
 const advance=(s:Sim,t:number)=>{const end=s.t+t;while(s.t<end-1e-6)s.step();};
+
+describe('low-demand first and last passenger work',()=>{
+ it.each(['weekday','weekend'] as const)('%s shortens passenger work across all stations, retaining the door floor',day=>{
+  const low=dwellFactorAt(day,5.5*3600),normal=dwellFactorAt(day,12*3600);
+  expect(low).toBeLessThan(normal);
+  for(let station=0;station<STATIONS.length;station++)for(const dir of ['DN','UP'] as const){
+   const shortened=plannedDwell(day,station,dir,5.5*3600,low);
+   expect(shortened).toBeGreaterThanOrEqual(MIN_DWELL);
+   expect(shortened).toBeGreaterThan(PLANNED_DOOR_BUDGET);
+   expect(shortened).toBeLessThan(plannedDwell(day,station,dir,5.5*3600,normal));
+  }
+ });
+});
+
+describe('directed section running bands',()=>{
+ it('selects a section only inside its clock window and keeps reverse and default callers separate',()=>{
+  const original=SIMULATION.timetable.sectionRunBands;
+  const from=0,to=1,at=12*3600;
+  try{
+   SIMULATION.timetable.sectionRunBands={weekday:[{from:STATIONS[from].id,to:STATIONS[to].id,
+    bands:[{from:11*3600,to:16*3600,value:3,allowanceS:5}]}]};
+   const fallback=plannedRunLevel('weekday',at);
+   expect(plannedRunLevel('weekday',at,from,to)).toBe(3);
+   expect(plannedRunProfile('weekday',at,from,to)).toEqual({level:3,allowanceS:5});
+   expect(plannedRunLevel('weekday',at,to,from)).toBe(fallback);
+   expect(plannedRunLevel('weekday',16*3600,from,to)).toBe(plannedRunLevel('weekday',16*3600));
+   expect(plannedRunLevel('weekend',at,from,to)).toBe(plannedRunLevel('weekend',at));
+   expect(plannedRunLevel('weekday',at,from,2)).toBe(fallback);
+   expect(plannedRunProfile('weekday',16*3600,from,to).allowanceS).toBe(OPERATIONS.sectionRunAllowanceS);
+   SIMULATION.timetable.sectionRunBands.weekday![0].bands[0].allowanceS=-1;
+   expect(plannedRunProfile('weekday',at,from,to).allowanceS).toBe(0);
+  }finally{SIMULATION.timetable.sectionRunBands=original;}
+ });
+ it('replaces the precomputed stop margin once and leaves peak and pass timing on their existing contracts',()=>{
+  const original=SIMULATION.timetable.sectionRunBands;
+  const start=12*3600,from=0,to=1,n=STATIONS.length-1;
+  const base={dn:Array(n).fill(100),up:Array(n).fill(100),passDn:Array(n).fill(70),passUp:Array(n).fill(70)};
+  const slower={dn:Array(n).fill(150),up:Array(n).fill(150),passDn:Array(n).fill(90),passUp:Array(n).fill(90)};
+  const ctx={topo:buildTopology(),dayType:'weekday' as const,rt:{...base,byLevel:{3:slower}}};
+  try{
+   SIMULATION.timetable.sectionRunBands={weekday:[{from:STATIONS[from].id,to:STATIONS[to].id,
+    bands:[{from:11*3600,to:16*3600,value:3,allowanceS:5}]}]};
+   const stopped=buildStops(ctx,'DN',from,to,start,true,1);
+   expect(stopped[1].arr-start).toBeCloseTo(150-OPERATIONS.sectionRunAllowanceS+5,9);
+   expect(stopped[0].runLevel).toBe(3);
+   const peak=18*3600;
+   expect(buildStops(ctx,'DN',from,to,peak,true,1)[1].arr-peak).toBe(100);
+   const passed=buildStops(ctx,'DN',from,2,start,true,1,()=>false);
+   expect(passed[1].arr-start).toBe(base.passDn[0]+10);
+   expect(passed[0].runLevel).toBe(1);
+  }finally{SIMULATION.timetable.sectionRunBands=original;}
+ });
+ it('returns only the selected margin before falling back to level one, never below the physical floor',()=>{
+  const original=SIMULATION.timetable.sectionRunBands,from=0,to=1,n=STATIONS.length-1;
+  const start=OPERATIONS.firstWestTerminusDep;
+  const base={dn:Array(n).fill(100),up:Array(n).fill(100),passDn:Array(n).fill(70),passUp:Array(n).fill(70)};
+  // Level-3 runs are given relative to the line's allowance (written for 22.5 s):
+  // 200 keeps its physical run 2.5 s inside the 180 s point, 220 lies 17.5 s past it.
+  const level3=(run:number)=>run-22.5+OPERATIONS.sectionRunAllowanceS;
+  const slower={dn:Array(n).fill(level3(200)),up:Array(n).fill(level3(200)),passDn:Array(n).fill(90),passUp:Array(n).fill(90)};
+  const ctx={topo:buildTopology(),dayType:'weekday' as const,rt:{...base,byLevel:{3:slower}}};
+  try{
+   SIMULATION.timetable.sectionRunBands={weekday:[{from:STATIONS[from].id,to:STATIONS[to].id,
+    bands:[{from:start,to:start+3600,value:3,allowanceS:5}]}]};
+   const point=officialTimingPoints('DN',from,to,start).get(to)!;
+   expect(point-start).toBe(180);
+   const withinMargin=buildStops(ctx,'DN',from,to,start,true,1);
+   expect(withinMargin[1].arr).toBe(point);expect(withinMargin[0].runLevel).toBe(3);
+   slower.dn.fill(level3(220));
+   const usesFaster=buildStops(ctx,'DN',from,to,start,true,1);
+   expect(usesFaster[1].arr).toBe(point);expect(usesFaster[0].runLevel).toBe(1);
+   ctx.rt.dn.fill(250);slower.dn.fill(300);
+   const unreachable=buildStops(ctx,'DN',from,to,start,true,1);
+   expect(unreachable[1].arr-start).toBeCloseTo(250-OPERATIONS.sectionRunAllowanceS,9);
+   expect(unreachable[1].arr).toBeGreaterThan(point);
+  }finally{SIMULATION.timetable.sectionRunBands=original;}
+ });
+});
 
 describe('D74 diagram ATO levels',()=>{
  const make=()=>new Sim({dayType:'weekday',dateLabel:'night levels',startTime:14400,seed:1,noPossessions:true});
@@ -21,16 +100,18 @@ describe('D74 diagram ATO levels',()=>{
  const slowTrip=(s:Sim)=>s.plan.trips.find(t=>t.revenue&&!t.cancelled&&t.from===30&&t.stops[0].dep>=20.6*3600&&t.stops[0].dep<20.9*3600)!;
  it('keeps the recalibrated continuous night-grade tables and unchanged level data',()=>{
   const s=make();
-  // D137: each stopping interval adds the same 22.5 s; the airport 60 km/h
+  // D137: each stopping interval adds the same allowance (22.5 s; D173 18.7 s,
+  // the soft start/stop adds ~3.8 s to the physical run); the airport 60 km/h
   // limit and continuous night-grade performance data stay in the physical run.
-  for(const [level,dn,up] of [[3,4763.2,4765.4],[4,4897.1,4900.4]]){
+  // D171: portal at 52500 m, elevated 60 and HTS–airport 50 limits add ~300 s.
+  for(const [level,dn,up] of [[3,5063.8,5065.7],[4,5223.3,5224.2]]){
    const rt=s.rt.byLevel![level];
    expect(Math.abs(rt.dn.reduce((a,b)=>a+b,0)-dn),`level ${level} DN`).toBeLessThanOrEqual(10);
    expect(Math.abs(rt.up.reduce((a,b)=>a+b,0)-up),`level ${level} UP`).toBeLessThanOrEqual(10);
   }
   expect(levelBand(1)).toEqual({band:0,lower:0});expect(levelBand(2)).toEqual({band:5/3.6,lower:0});
   expect(levelBand(3)).toEqual({band:10/3.6,lower:6.5/3.6});expect(levelBand(4)).toEqual({band:10/3.6,lower:9.5/3.6});
-  expect(OPERATIONS.sectionRunAllowanceS).toBe(22.5);
+  expect(OPERATIONS.sectionRunAllowanceS).toBe(18.7);
  });
  it('chooses levels at interval departure, including a trip crossing into the night band',()=>{
   const s=make(),departure=20*3600+29*60+55;
@@ -91,7 +172,7 @@ describe('D74 diagram ATO levels',()=>{
   const b=s.topo.berths[platformBerth(s.topo,30,'UP')];
   const tr=newTrain(s,s.plan.blocks[trip.block],b.link,b.offset,b.dir,[{link:b.link,dir:b.dir}],'0200');
   tr.tripId=trip.id;tr.tripNo=trip.no;tr.inService=true;tripTasks(s.topo,trip,tr.tasks,false);computeBody(s,tr);indexBodies(s);
-  let samples=0,worst=0;const end=s.t+900;
+  let samples=0,worst=0;const end=trip.stops[2].arr!+300;
   while(tr.stopsMade<3&&s.t<end){s.step();if(tr.phase==='run'&&tr.v>.1){samples++;worst=Math.max(worst,tr.delay);expect(trainLevel(s,tr)).toBe(4);}}
   expect(tr.stopsMade).toBe(3);expect(samples).toBeGreaterThan(100);expect(worst).toBeLessThan(LEVEL_LATE);
   expect(s.integrity.violations).toHaveLength(0);
@@ -120,7 +201,8 @@ function fixture(station:number,delay:number,dwell:number,waiting=0,load=0){
 }
 describe('automatic dwell and ATO regulation',()=>{
  it('uses the recorded lock and expected random opening/start times with the preserved dwell floor',()=>{
-  expect(DOOR_CLOSE_S).toBeCloseTo(5.7,12);expect(DOOR_CYCLE).toBeCloseTo(1+3+5.7+2.5,12);
+  // D171: automatic start delay [2.5,3.5] s, mean 3.0 s.
+  expect(DOOR_CLOSE_S).toBeCloseTo(5.7,12);expect(DOOR_CYCLE).toBeCloseTo(1+3+5.7+3,12);
   expect(PLANNED_DOOR_BUDGET).toBe(15);expect(MIN_DWELL).toBe(22);
   expect(passengerMinimum(0,0,false)).toBe(MIN_DWELL);
  });
@@ -271,12 +353,13 @@ describe('calibrated plan structure',()=>{
   // The west end lags (UP) or leads (DN) the core by its running time.
   for(const peak of peaks)for(const dir of ['DN','UP'] as const)for(let st=0;st<=3;st++){
    const hw=TEMPLATES[peak.template].headway;
-   const all=s.plan.trips.filter(t=>!t.cancelled&&t.dir===dir).flatMap(t=>t.stops.filter(p=>p.st===st).map(p=>t.to===st?p.arr:p.dep)).sort((a,b)=>a-b);
+   const calls=s.plan.trips.filter(t=>!t.cancelled&&t.dir===dir).flatMap(t=>t.stops.filter(p=>p.st===st).map(p=>({t:t.to===st?p.arr:p.dep,trip:t}))).sort((a,b)=>a.t-b.t);
    const firstAirport=s.plan.trips.find(t=>t.dir==='UP'&&t.from===30&&Math.abs(t.stops[0].dep-6*3600)<1)!;
    const openingEnd=Math.max(...s.plan.trips.filter(t=>!t.cancelled&&t.dir==='UP'&&t.kind==='ins'&&t.from===22&&t.to===0&&t.stops[0].dep<7*3600).map(t=>t.stops.at(-1)!.arr));
    const start=dir==='UP'&&peak.template==='weekdayAM'?Math.max(8.75*3600,firstAirport.stops.at(-1)!.arr+2*hw,openingEnd+2*hw):peak.template==='weekdayAM'?8.75*3600:peak.from+OUTER_BAND_MARGIN;
    const end=peak.to-OUTER_BAND_MARGIN;
-   const times=all.filter(t=>t>=start&&t<end);
+   const within=calls.filter(c=>c.t>=start&&c.t<end);
+   const times=within.map(c=>c.t);
    const gaps=times.slice(1).map((t,i)=>t-times[i]);
    // Outer service runs only on the full-route slots. Its count depends on
    // the phase of the pattern, so use the minimum whole cycles in the window.
@@ -292,7 +375,13 @@ describe('calibrated plan structure',()=>{
     // D79/D80 portal-origin services preserve core slots while omitting an
     // outer leg; accept a doubled headway, but never a third headway.
     expect(gaps[i],where).toBeGreaterThanOrEqual(hw-tol);
-    expect(gaps[i],where).toBeLessThanOrEqual(2*hw+tol);
+    // D173 用户决定（2026-11-04）：高峰和回库难免超出。只有缺的那一班确实
+    // 在入段口回段（图里有那趟回段车），才放行三倍间隔，再多不行。
+    const [a,b]=[within[i].trip,within[i+1].trip];
+    const home=s.plan.trips.some(w=>!w.cancelled&&w.dir===dir&&w.kind==='wd'&&!w.stops.some(p=>p.st===st)
+      &&[a,b].every(x=>x.stops.some(p=>p.st===w.to))
+      &&a.stops.find(p=>p.st===w.to)!.dep<w.stops.at(-1)!.arr&&w.stops.at(-1)!.arr<b.stops.find(p=>p.st===w.to)!.dep);
+    expect(gaps[i],where).toBeLessThanOrEqual((home?3:2)*hw+tol);
    }
   }
   expect(intervals).toBeGreaterThan(150);

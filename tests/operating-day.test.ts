@@ -6,7 +6,8 @@ import {preparePlan} from '../src/sim/planning';
 import {OPERATING_DAY} from '../src/sim/dayRandom';
 import {scheduleInstructorEvents} from '../src/sim/scenario';
 import {exportDiagnostics,parseDiagnostics,stringifyDiagnostics,replayDiagnostics} from '../src/sim/diagnostics';
-import {initialDepotStock,yardNeed,depotLedger} from '../src/sim/timetable';
+import {initialDepotStock,yardNeed,depotLedger,validatePlan} from '../src/sim/timetable';
+import {LINE_INFO} from '../src/data/current';
 
 describe('operating day boundaries and replay',()=>{
  let sim:Sim;
@@ -22,9 +23,9 @@ describe('operating day boundaries and replay',()=>{
   const stock=sim.depotStock.slice();stock[0]+=transfer;stock[2]-=transfer;
   const next=new Sim({...config,depotStock:stock});
   expect(next.depotStock.map((n,d)=>n+[...next.vehicles.values()].filter(r=>r.work&&r.depot===d).length)).toEqual(stock);
-  expect(initialDepotStock(next.topo,next.plan)).toEqual(stock);
+  expect(initialDepotStock(next.topo,next.plan)).toEqual(next.depotStock);
   expect(yardNeed(next.topo,next.plan).every((n,d)=>n<=next.depotStock[d])).toBe(true);
-  expect(depotLedger(next.topo,next.plan).final).toEqual(stock);
+  expect(depotLedger(next.topo,next.plan).final).toEqual(next.depotStock);
  },60000);
  it('accepts a service crossing the rollover without a removal warning',()=>{
   const preview=preparePlan(sim,{c:'addTrain',depot:0,dir:'DN',to:12,time:27.5*3600});
@@ -33,8 +34,17 @@ describe('operating day boundaries and replay',()=>{
   expect(preview.plan.trips.some(t=>t.revenue&&t.stops.at(-1)!.arr>OPERATING_DAY.to)).toBe(true);
  });
  it('accepts the opening overnight cars at their legal departure or arrival berths',()=>{
-  expect(sim.trainList).toHaveLength(8);
+  expect(sim.trainList).toHaveLength(6);
   expect(unfinishedAtRollover(sim)).toEqual([]);
+ });
+ it('excludes workshop vehicles from the ready-stock ledger and still reports actual parking overflow',()=>{
+  const workshop=[...sim.vehicles.values()].filter(record=>record.work).length;
+  expect(workshop).toBeGreaterThan(0);
+  expect(initialDepotStock(sim.topo,sim.plan)).toEqual(sim.depotStock);
+  expect(sim.depotStock.reduce((sum,n)=>sum+n,0)+workshop+sim.plan.blocks.filter(b=>b.start.kind==='stable').length)
+   .toBe(LINE_INFO.fleet);
+  const full=structuredClone(sim.plan);full.initialStock![0]=sim.topo.depots[0].capacity+1;
+  expect(validatePlan(sim.planCtx,full).some(issue=>issue.code==='YARD_CAPACITY'&&issue.depot===0)).toBe(true);
  });
  it('counts a storage shunt as unfinished once its scheduled release arrives',()=>{
   const saved=capture(sim),tr=sim.trainList.find(t=>t.tasks[0]?.k==='reverse'

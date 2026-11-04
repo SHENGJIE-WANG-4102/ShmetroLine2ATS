@@ -10,17 +10,18 @@ import type { Sim } from './engine';
 import { cancelTrip, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import { settleDroppedCalls } from './connections';
 import type { Dir, Topology, TrackPoint, RouteStep } from './topology';
-import { berthFits, nextLink, travelDirection, ahead, reversedBerthPoint } from './topology';
+import { berthFits, nextLink, travelDirection, ahead, linkChain, reversedBerthPoint, occupiedTurnbackBerth, stablingBerth } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, signalPassed, type CmdResult } from './interlocking';
-import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission, retreatRouteBlocker } from './movement';
+import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission, retreatRouteBlocker, withdrawAuthority } from './movement';
 import { takeVehicle, putVehicle, peekVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
-import { applyEB, grantRM, setMode, distToNextSignal, turnbackDwell, simulatedAmDriver, driverTurnbackKind } from './onboard';
+import { applyEB, grantRM, setMode, autoMode, cbtcAvailable, distToNextSignal, turnbackDwell, simulatedAmDriver, driverTurnbackKind, calibratedRearTurnback } from './onboard';
 import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
-import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
+import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, TEMPLATES, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/current';
 import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
 import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRange } from './calibration';
+import { PERF, atoStopReady } from './dynamics';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, rootCause, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
 import { standsAt } from './operatingDay';
@@ -70,6 +71,11 @@ export function trainLabel(tr: Train) {
 function curStop(tr: Train): StopTask | null {
   const t = tr.tasks[0];
   return t && t.k === 'stop' ? t : null;
+}
+
+/** Replacing one train's tasks cannot cancel the other side of a rescue. */
+function rescuePending(tr: Train): boolean {
+  return tr.coupledLen === 0 && (tr.rescuing >= 0 || tr.rescueBy >= 0);
 }
 
 /** first signal ahead of an arbitrary point (following switch positions) */
@@ -338,15 +344,8 @@ function resolveChoice(sim: Sim, tr: Train, task0: Task): Task {
     // Beyond the scissors the occupied physical track fixes the choice. A
     // rescue may have entered it under the failed train's existing route;
     // a reservation on the parallel tail cannot move it across afterwards.
-    const link = sim.topo.links[tr.link];
-    const kind = sim.topo.sections[link.section].kind;
-    if (kind === 'tail' || kind === 'siding') {
-      const station = sim.topo.stations[task.station];
-      const physical = (tr.coupledLen > 0 ? station.rescueBerths : station.turnbackBerths).find(id => {
-        const berth = sim.topo.berths[id];
-        return berth.dir === tr.dir && (berth.link === tr.link
-          || kind === 'tail' && berth.kind === 'tail' && sim.topo.links[berth.link].track === link.track);
-      });
+    {
+      const physical = occupiedTurnbackBerth(sim.topo, task.station, tr, task.berths, tr.coupledLen > 0);
       if (physical !== undefined && physical !== task.chosen) {
         if (sim.berthRes.get(task.chosen) === tr.id) sim.berthRes.delete(task.chosen);
         task = cowTask(tr, task); task.chosen = physical; task.berths = [physical];
@@ -364,7 +363,7 @@ export function depotBerth(topo: Topology, task: { depot: number; berth?: number
   return task.berth !== undefined && task.berth >= 0 ? task.berth : topo.depots[task.depot].berth;
 }
 
-function taskGoal(sim: Sim, task: Task | undefined): number {
+export function taskGoal(sim: Sim, task: Task | undefined): number {
   if (!task) return -1;
   if (task.k === 'stop') return task.berth;
   if (task.k === 'reverse') return task.chosen;
@@ -376,6 +375,32 @@ function taskGoal(sim: Sim, task: Task | undefined): number {
     return -2;
   }
   return -1;
+}
+
+/** Physical rear-turn legs only. No clocks or grants are created here: movement
+ * starts its existing trajectory budget when the train can actually move. */
+export function rearTurnbackLeg(sim: Sim, tr: Train): { kind: 'entry' | 'exit'; seconds: number; goal: number } | undefined {
+  const timing = OPERATIONS.rearTurnback, task = tr.tasks[0];
+  if (!timing || tr.phase !== 'run' || tr.rescuing >= 0 || tr.rescueBy >= 0 || tr.coupledLen > 0) return;
+  if (task?.k === 'reverse') {
+    const berth = sim.topo.berths[task.chosen];
+    if (berth && calibratedRearTurnback(sim.topo, task))
+      return { kind: 'entry', seconds: timing.entryRunS, goal: berth.id };
+  }
+  if (tr.tbStage !== 'depart' || task?.k !== 'stop' || task.depotWork || task.station !== tr.lastStation
+    || sim.topo.berths[task.berth]?.kind !== 'platform') return;
+  // Body history is trimmed once the tail clears a link. The physical exit
+  // keeps its clock until this same platform target is reached or replaced.
+  if (tr.ato?.turnbackLeg === 'exit' && tr.ato.berth === task.berth)
+    return { kind: 'exit', seconds: timing.exitRunS, goal: task.berth };
+  // History establishes a new exit; a platform/depot cab change must not
+  // acquire a rear-turn running budget.
+  const tails = sim.topo.stations[task.station].turnbackBerths
+    .filter(id => calibratedRearTurnback(sim.topo, { chosen: id, station: task.station })).map(id => sim.topo.berths[id]);
+  if (tr.hist.some(step => tails.some(b => b.link === step.link
+    || b.kind === 'tail' && sim.topo.sections[sim.topo.links[step.link].section].kind === 'tail'
+      && sim.topo.links[b.link].track === sim.topo.links[step.link].track)))
+    return { kind: 'exit', seconds: timing.exitRunS, goal: task.berth };
 }
 
 function plannedTime(task: Task | undefined, now: number): number {
@@ -484,7 +509,7 @@ function spawnStabled(sim: Sim, b: Block) {
     .map(t => effectiveStops(t)[0]?.dep).find(dep => dep !== undefined) ?? Infinity;
   const rank = sim.plan.blocks.filter((x) => x.start.kind === 'stable' && x.start.station === at && x.trips.some((id) => !sim.plan.trips[id].cancelled))
     .sort((x, y) => firstDep(x) - firstDep(y)).indexOf(b);
-  const places = [...st.turnbackBerths, ...st.storageBerths];
+  const places = [...new Set([...st.turnbackBerths.map(id => stablingBerth(topo, id)), ...st.storageBerths])];
   // a storage tail holds a train on each of its links
   const placeFree = (x: number) => st.storageBerths.includes(x)
     ? !(sim.linkBodies.get(topo.berths[x].link) ?? []).length : !berthBusy(sim, x, -1);
@@ -654,6 +679,16 @@ export function intervalDepartureHold(sim: Sim, tr: Train, st: StopTask): Train[
   }
 }
 
+/** Calibrated physical standstill belongs only to an ordinary automatic
+ * platform stop. MA/position permission remains the caller's live check. */
+export function preciseAtoStationStop(topo: Topology, tr: Train): boolean {
+  const task = tr.tasks[0];
+  return !!PERF.atoStopSnap && tr.phase === 'run' && task?.k === 'stop' && !task.depotWork
+    && (topo.berths[task.berth]?.platform ?? -1) >= 0 && !tr.manual && tr.mode !== 'RM'
+    && !tr.eb && !tr.failed && !tr.overrun && !tr.retreat && !tr.uto?.retreat && !tr.randomOverrunM
+    && tr.rescuing < 0 && tr.rescueBy < 0 && tr.coupledLen === 0;
+}
+
 export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
   const { topo } = sim;
   const departureAlarm = `turnback-departure-train-${tr.id}`;
@@ -700,7 +735,12 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
       const err = cur.k === 'stop' ? stopError(sim, tr) : 0;
       if (cur.k === 'stop' && err < -0.8) {
         if (!tr.overrun) atoOverrun(sim, tr, cur, err);
-      } else if (tr.stopDist < 0.8) arriveAtBerth(sim, tr, cur);
+      } else if (tr.stopDist < 0.8) {
+        // A nearby EOA is a protection stop, not permission to enter dwell.
+        // Keep the old overrun/manual/fault paths and their position checks.
+        if (!preciseAtoStationStop(topo, tr) || Number.isFinite(tr.stopDist) && tr.stopDist <= tr.maDist
+          && atoStopReady(tr.v, tr.stopDist, .05, .8)) arriveAtBerth(sim, tr, cur);
+      }
     }
     if (cur.k === 'depot') {
       const b = topo.berths[depotBerth(topo, cur)];
@@ -777,10 +817,10 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     }
     // a brake that does not release, a door being dealt with (vehicle.ts)
     if (departureHold(sim, tr)) return;
-    // A fixed work stop at the same berth is a continuation of this stand,
+    // Fixed work or the second rescue clear-out at the same berth continues this stand,
     // not a train departure. Close and lock the doors above, then begin the
     // work without requiring a movement authority or ATO start buttons.
-    if (nx?.k === 'stop' && nx.depotWork && nx.berth === st.berth) {
+    if (nx?.k === 'stop' && (nx.depotWork || nx.rescueClear) && nx.berth === st.berth) {
       if (tr.eb || tr.pendingMode) return;
       tr.tasks.shift();
       tr.atoButtons = { f: false, g: false };
@@ -930,7 +970,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
     tr.phase = 'reversing';
     tr.phaseSince = sim.t;
     // DTO reverses unattended; with a driver (ATO / TBTC backup) the driver changes ends
-    tr.dwellUntil = sim.t + turnbackDwell(tr.mode, task.minTime,driverTurnbackKind(topo,task),simulatedAmDriver(tr));
+    tr.dwellUntil = sim.t + turnbackDwell(tr.mode, task.minTime,driverTurnbackKind(topo,task),simulatedAmDriver(tr),calibratedRearTurnback(topo,task));
     tr.lastStation = task.station;
     // reversed at a platform track: the next departure here leaves from it
     // (set now: the pull-out route is taken from tasks[1] while reversing)
@@ -962,8 +1002,10 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
  */
 function platformTurn(topo: Topology, tr: Train, st: StopTask): boolean {
   const rev = tr.tasks[1], next = tr.tasks[2];
+  // Fixed depot work requires closed doors; it is not the next passenger
+  // exchange that can inherit this open-door cab change.
   return st.dep === null && rev?.k === 'reverse' && rev.berths.every((b) => b === st.berth)
-    && next?.k === 'stop' && next.station === st.station && topo.berths[next.berth]?.kind === 'platform';
+    && next?.k === 'stop' && !next.depotWork && next.station === st.station && topo.berths[next.berth]?.kind === 'platform';
 }
 
 /** change ends at the platform with the doors open, straight into the next trip's stop */
@@ -991,12 +1033,12 @@ function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
   setTripFromTasks(sim, tr);
   arriveAtBerth(sim, tr, tr.tasks[0]);
   // no departure before the driver is in the other cab
-  tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + turnbackDwell(tr.mode, rev.minTime,driverTurnbackKind(sim.topo,rev),simulatedAmDriver(tr)));
+  tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + turnbackDwell(tr.mode, rev.minTime,driverTurnbackKind(sim.topo,rev),simulatedAmDriver(tr),calibratedRearTurnback(sim.topo,rev)));
 }
 
 /** the stop has a door cycle: passengers, or a clear-out (清客) */
 function stopNeedsDoors(tr: Train, task: StopTask): boolean {
-  return task.doors || (!task.revenue && tr.load > 0);
+  return task.doors || (!task.revenue && (task.rescueClear === 'failed' ? tr.rescueFailedLoad ?? 0 : tr.load) > 0);
 }
 
 /** Driver departure work follows an actual door cycle, not a closed-door
@@ -1043,13 +1085,22 @@ function startDoorCycle(sim: Sim, tr: Train, task: StopTask, p: number, noLink =
     const before = tr.load;
     boardAndAlight(sim, tr, p, task, tr.doorExchange);
     if (tr.delay > 120) sim.metrics.boardedDelayed += Math.max(0, tr.load - before) + Math.round(before * 0.3);
-  } else if (!task.revenue && tr.load > 0) {
-    openDoors(sim, tr, p, noLink);
-    sim.passengersCleared += tr.load;
-    sim.metrics.cleared += tr.load;
-    tr.load = 0;
+  } else if (!task.revenue && (tr.load > 0 || task.rescueClear)) {
+    if (stopNeedsDoors(tr, task)) openDoors(sim, tr, p, noLink);
+    clearRescuePassengers(sim, tr, task);
   }
   tr.doorExchange = undefined;
+}
+
+/** The existing physical door-opening event is also the clear-out event. */
+function clearRescuePassengers(sim: Sim, tr: Train, task: StopTask) {
+  const cleared = task.rescueClear === 'failed' ? Math.min(tr.load, tr.rescueFailedLoad ?? 0) : tr.load;
+  sim.passengersCleared += cleared;
+  sim.metrics.cleared += cleared;
+  tr.load -= cleared;
+  if (tr.rescueFailedLoad !== undefined) tr.rescueFailedLoad = 0;
+  if (tr.rescueDuty && !tr.coupledLen) tr.rescueDuty = { ...tr.rescueDuty, cleared: true };
+  if (task.rescueClear === 'all') tr.inService = false;
 }
 
 /** side of a platform ('L' / 'R' looking forward) for a train standing at it */
@@ -1118,10 +1169,13 @@ export function atoStartReady(sim: Sim, tr: Train): { ready: boolean; code: Halt
   if (nx?.k === 'reverse' && nx.berths.every(b => berthBusy(sim, b, tr.id)))
     return no('BERTH_WAIT', '折返泊位均被占用/预约', berthHolder(sim, nx.berths[0], tr.id));
   if (departureHold(sim, tr, false)) return no('FAILED', '等待列车门故障处置或制动缓解');
-  // Closing a terminal service into this same berth has no traction movement.
+  // Closing a terminal service into this same berth, or changing ends on it,
+  // has no traction movement: ATS sets no route for a goal already reached,
+  // so asking for a movement authority here would wait forever (D173).
   // The door/dwell guards above still apply; a different berth or depot does.
-  const stableHere = st.dep === null && nx?.k === 'stable' && nx.berth === st.berth;
-  if (!stableHere && tr.maDist < 15) {
+  const inPlace = st.dep === null && (nx?.k === 'stable' && nx.berth === st.berth
+    || nx?.k === 'reverse' && nx.berths.every(b => b === st.berth));
+  if (!inPlace && tr.maDist < 15) {
     const w = tr.arsWait && sim.t - tr.arsWait.t <= 2.5 ? tr.arsWait : undefined;
     return no(w?.code ?? (tr.maCode === 'NONE' ? 'ROUTE_WAIT' : tr.maCode),
       w?.detail || tr.maReason || '等待有效发车授权', w?.train ?? tr.maTrain);
@@ -1738,7 +1792,10 @@ function nearestBerthAhead(sim: Sim, f: Train): number {
   let d = f.dir;
   for (let i = 0; i < 40; i++) {
     for (const b of topo.berths) if (b.link === l && b.dir === d && (b.offset - (l === f.link ? f.off : d === 1 ? 0 : topo.links[l].len)) * d >= -1) return b.id;
-    const nx = nextLink(topo, l, d, (sw) => swPos(sim, sw));
+    // A trailing movement has one physical continuation; a point currently set
+    // for another move only blocks the route, which rescue routing sets anyway.
+    const node = topo.nodes[d === 1 ? topo.links[l].b : topo.links[l].a];
+    const nx = nextLink(topo, l, d, (sw) => node.normal === l ? 'N' : node.reverse === l ? 'R' : swPos(sim, sw));
     if (!nx) return -1;
     l = nx.link;
     d = nx.dir;
@@ -1936,6 +1993,7 @@ function candidateCut(trip: Trip, tr: Train, station: number, cause: NonNullable
 /** 人工折返 */
 export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   const { topo, plan } = sim;
+  if (rescuePending(tr)) return { ok: false, msg: '列车正参与救援，连挂前不能单独改办折返', reasonCode: 'RESCUE_PENDING' };
   const d = dirOf(tr, topo);
   if (existingTurnbackSatisfied(sim, tr, station))
     return { ok: true, msg: `列车 ${trainLabel(tr)} 已在 ${STATIONS[station].name} 完成或正在执行所需折返`, reasonCode: 'TURNBACK_ALREADY_SATISFIED' };
@@ -2120,8 +2178,25 @@ function depotsAhead(sim: Sim, tr: Train, d: TrackDir, clearChain: number): { dp
 }
 
 /** 退出服务（清客回段） */
+/** The platform berth at `station` where this train will really stop: its
+ * own planned stop there, else the direction's platform if its path still
+ * leads there, else the platform its path does lead into (the middle track of
+ * a three-track station). A clear-out stop on a track the train is not routed
+ * into is never reached: the train runs past it and waits for nothing (D173). */
+function stopBerthOnPath(sim: Sim, tr: Train, station: number, d: TrackDir): number {
+  const { topo } = sim;
+  const own = tr.tasks.find((t): t is StopTask => t.k === 'stop' && t.station === station);
+  if (own && topo.berths[own.berth].kind === 'platform') return own.berth;
+  const normal = platformBerth(topo, station, d);
+  const reachable = (berth: number) => Number.isFinite(distanceToBerthFrom(sim, tr.link, tr.off, tr.dir, berth));
+  if (reachable(normal)) return normal;
+  return topo.berths.find(b => b.kind === 'platform' && b.station === station && reachable(b.id))?.id ?? normal;
+}
+
 export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   const { topo, plan } = sim;
+  if (rescuePending(tr))
+    return { ok: false, msg: '列车正参与救援，连挂前不能单独退出服务' };
   if (tr.tasks[0]?.k === 'depot') {
     tr.inService = false;
     tr.withdrawn = true;
@@ -2145,11 +2220,12 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     const cur = { ...curStop(tr)! };
     cur.revenue = false;
     cur.doors = true;
+    if (tr.coupledLen > 0) cur.rescueClear = 'all';
     cur.dep = null;
     cur.minDwell = 60;
     tasks.push(cur);
   } else if (next !== undefined && tr.inService) {
-    tasks.push({ k: 'stop', berth: platformBerth(topo, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 60, note: '清客' });
+    tasks.push({ k: 'stop', berth: stopBerthOnPath(sim, tr, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 60, note: '清客' });
   }
   if (reachable) depotTasks(topo, depot, d, tasks);
   else {
@@ -2202,7 +2278,10 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     const unfinished = tr.tripId >= 0 && !plan.trips[tr.tripId].completed ? [tr.tripId] : [];
     standbyTakeover(sim, b.id, [...unfinished, ...tail], `列车${tr.svc}退出服务`);
   }
-  if (tr.phase === 'dwell' && tr.load > 0) { sim.passengersCleared += tr.load; sim.metrics.cleared += tr.load; tr.load = 0; }
+  if (tr.phase === 'dwell' && tr.load > 0) {
+    sim.passengersCleared += tr.load; sim.metrics.cleared += tr.load; tr.load = 0;
+    if (tr.rescueFailedLoad !== undefined) tr.rescueFailedLoad = 0;
+  }
   tr.tasks = tasks;
   tr.inService = false;
   tr.tripNo = '回段';
@@ -2235,6 +2314,7 @@ export const SEVERE_DELAY = 600;
  *  depot only when its duty has no departure left.
  */
 export function cmdRecoverService(sim: Sim, tr: Train) {
+  if (rescuePending(tr)) return { ok: false, msg: '列车正参与救援，连挂前不能单独重排原任务' };
   if (tr.tasks[0]?.k === 'depot' || tr.depotStage === 'in')
     return { ok: false, msg: '已在回段，不能改接载客始发时隙' };
   if (tr.tasks[0]?.k === 'reverse') return { ok: false, msg: '列车正在进入折返线，换端完成后再办理' };
@@ -2484,11 +2564,18 @@ export function rescueApproach(sim: Sim, failed: Train, rescuer: Train): { goal:
 export function cmdRescue(sim: Sim, failed: Train, rescuer: Train) {
   if (!failed.failed) return { ok: false, msg: '被救援列车未处于故障状态' };
   if (rescuer.failed) return { ok: false, msg: '救援列车本身故障' };
+  if (failed.rescueBy >= 0) return { ok: false, msg: '故障列车已有救援列车' };
   // Validate the planned physical path, rather than geographic proximity on
   // parallel tracks. A stopped terminal-tail train may change ends for rescue.
   const approach = rescueApproach(sim, failed, rescuer);
   if (!approach) return { ok: false, msg: '救援列车须为故障列车后方同向列车（中间无其他列车）' };
   const { topo } = sim;
+  const peak = sim.plan.periods.some(p => p.from <= sim.t && sim.t < p.to && TEMPLATES[p.template]?.peak);
+  // Keep the original live duty until coupling actually removes this rake
+  // from service. An order alone can still be cancelled by self-recovery.
+  rescuer.rescueDuty = { tasks: rescuer.tasks.slice(), inService: rescuer.inService,
+    tripNo: rescuer.tripNo, mode: rescuer.mode, peak,
+    ...(approach.reverseFailed ? { targetTurnback: { stage: failed.tbStage, exitSignal: failed.tbExitSig } } : {}) };
   if (approach.reverseFailed) {
     // Cancel the failed train's unused pull-out through normal CI checks. Its
     // route can otherwise keep both tail tracks and the rescue approach locked.
@@ -2500,7 +2587,7 @@ export function cmdRescue(sim: Sim, failed: Train, rescuer: Train) {
   }
   const d = dirOf(rescuer, topo);
   const tasks: Task[] = [];
-  // clear-out at the next station before the failed train, if any
+  // Off-peak, clear at the next safe station before the failed train.
   const failedCh = sim.trainChain(failed);
   const nextSt = stationsAhead(sim, rescuer).find(st => {
     const berth = topo.berths[platformBerth(topo,st,d)];
@@ -2508,35 +2595,42 @@ export function cmdRescue(sim: Sim, failed: Train, rescuer: Train) {
     const stop = link.chainA + (link.chainB-link.chainA)*berth.offset/link.len;
     // The train's head stops beyond the station centre. Clearing first is
     // possible only when the full stop keeps the normal train separation.
-    return d==='DN' ? stop < failedCh-failed.len-25 : stop > failedCh+failed.len+25;
+    return ahead(d, stop, failedCh - (d === 'DN' ? 1 : -1) * (failed.len + 25));
   });
-  if (rescuer.inService && rescuer.phase !== 'dwell' && nextSt !== undefined) {
-    tasks.push({ k: 'stop', berth: platformBerth(topo, nextSt, d), station: nextSt, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 90, note: '救援清客' });
-  } else if (rescuer.phase === 'dwell') {
-    const cur = cowTask(rescuer, curStop(rescuer)!);
-    cur.revenue = false; cur.dep = null; cur.minDwell = 90;
+  if (!peak && rescuer.inService && rescuer.phase !== 'dwell' && nextSt !== undefined) {
+    tasks.push({ k: 'stop', berth: stopBerthOnPath(sim, rescuer, nextSt, d), station: nextSt, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 90, note: '救援清客' });
+  } else if (rescuer.phase === 'dwell' && curStop(rescuer)) {
+    const cur = { ...curStop(rescuer)! };
+    if (!peak) {
+      cur.revenue = false; cur.doors = false; cur.dep = null; cur.minDwell = 90; cur.note = '救援清客';
+      // The current stop may already have its doors open when ordered.
+      if (rescuer.doorsOpen) clearRescuePassengers(sim, rescuer, cur);
+      rescuer.dwellUntil = Math.max(rescuer.dwellUntil, sim.t + 90);
+    }
     tasks.push(cur);
   }
   tasks.push({ k: 'rescue', target: failed.id });
-  if (rescuer.block >= 0) {
-    const b = sim.plan.blocks[rescuer.block];
-    const idx = b.trips.indexOf(rescuer.tripId);
-    const why = `救援：列车${rescuer.svc}担任故障列车${failed.svc}的救援车`;
-    const tail = liveTail(sim, b, idx);
-    for (const tid of b.trips.slice(idx + 1)) cancelTrip(sim.plan.trips[tid], why);
-    if (rescuer.tripId >= 0) {
-      if (!sim.plan.trips[rescuer.tripId].completed) cancelTrip(sim.plan.trips[rescuer.tripId], why);
-    }
-    const unfinished = rescuer.tripId >= 0 && !sim.plan.trips[rescuer.tripId].completed ? [rescuer.tripId] : [];
-    standbyTakeover(sim, b.id, [...unfinished, ...tail], `列车${rescuer.svc}担任救援`);
-  }
   rescuer.tasks = tasks;
-  rescuer.inService = false;
+  rescuer.inService = peak && rescuer.inService;
   rescuer.tripNo = '救援';
   rescuer.rescuing = failed.id;
   failed.rescueBy = rescuer.id;
-  sim.planDirty = true;
   return { ok: true, msg: `组织列车 ${rescuer.svc}（${rescuer.vehicle}）救援故障列车 ${failed.svc}（${failed.vehicle}）` };
+}
+
+/** Commit the service loss only once the physical rake becomes a rescue consist. */
+function commitRescueDuty(sim: Sim, rescuer: Train, failed: Train) {
+  if (rescuer.block >= 0) {
+    const b = sim.plan.blocks[rescuer.block], idx = b.trips.indexOf(rescuer.tripId);
+    const why = `救援：列车${rescuer.svc}担任故障列车${failed.svc}的救援车`;
+    const tail = liveTail(sim, b, idx);
+    for (const tid of b.trips.slice(idx + 1)) if (!sim.plan.trips[tid].completed) cancelTrip(sim.plan.trips[tid], why);
+    const current = sim.plan.trips[rescuer.tripId];
+    if (current && !current.completed) cancelTrip(current, why);
+    standbyTakeover(sim, b.id, [...(current && !current.completed ? [current.id] : []), ...tail], `列车${rescuer.svc}担任救援`);
+  }
+  rescuer.rescueDuty = undefined;
+  sim.planDirty = true;
 }
 
 /** id of the first train ahead of `tr` (same direction path), or -1 */
@@ -2576,6 +2670,7 @@ export function trainAheadOf(sim: Sim, tr: Train, maxDist: number, goal = -1): n
 function rescueStep(sim: Sim, tr: Train, target: number) {
   const f = sim.trains.get(target);
   if (!f) { tr.tasks.shift(); return; }
+  if (!f.failed) { cancelRescue(sim, f); return; }
   if(tr.mode!=='RM'&&tr.v<.05&&tr.nextSignalDist<40&&rescueRouteReady(sim,tr,tr.nextSignal)){
     const route=sim.topo.routes[sim.sig[tr.nextSignal].route];
     if(relockRescueApproach(sim,tr,tr.nextSignal).ok)
@@ -2601,12 +2696,36 @@ function rescueStep(sim: Sim, tr: Train, target: number) {
   }
 }
 
+/** A failed train still owns its physical doors until they are locked. The
+ * coupling transition and its halt diagnosis read this same live condition. */
+export function rescueCouplingDoorWait(sim: Sim, tr: Train): { code: 'PSD_FAULT' | 'DWELL'; detail: string } | undefined {
+  const task = tr.tasks[0];
+  const failed = task?.k === 'rescue' ? sim.trains.get(task.target) : undefined;
+  if (!failed) return;
+  const p = sim.plat.findIndex(ps => ps.psdTrain === failed.id);
+  if (p >= 0 && !psdSafe(sim.plat[p]))
+    return { code: 'PSD_FAULT', detail: `${sim.topo.platforms[p].name}：连挂前等待站台门关闭锁紧` };
+  if (failed.doorsOpen || failed.doorSide || failed.doorMotion || sim.t < (failed.doorLockedAt ?? 0))
+    return { code: 'DWELL', detail: `故障列车 ${trainLabel(failed)}：连挂前等待车门关闭锁闭` };
+}
+
 function completeCoupling(sim: Sim, tr: Train) {
   const { topo } = sim;
   const task = tr.tasks[0];
   const f = task && task.k === 'rescue' ? sim.trains.get(task.target) : undefined;
+  if (f) {
+    // updateTrainTasks deliberately leaves a failed train's passenger cycle
+    // alone. Finish its real closing sequence before removing that door owner;
+    // otherwise an open PSD outlives the train and blocks every later arrival.
+    f.doorsAwait = false; f.autoOpenAt = undefined;
+    if ((f.doorsOpen || f.doorSide) && !f.doorMotion)
+      closeDoors(sim, f, sim.plat.findIndex(ps => ps.psdTrain === f.id));
+    if (rescueCouplingDoorWait(sim, tr)) return;
+  }
   tr.tasks.shift();
   if (!f) { tr.phase = 'run'; return; }
+  const peak = !!tr.rescueDuty?.peak;
+  commitRescueDuty(sim, tr, f);
   // merge consists: head moves to the failed train's head
   const rh = tr.hist.slice(tr.hist.length - tr.body.length);
   const fh = f.hist.slice(f.hist.length - f.body.length);
@@ -2619,6 +2738,7 @@ function completeCoupling(sim: Sim, tr: Train) {
   tr.len = tr.len + f.len + 1;
   tr.coupledLen = f.len;
   tr.coupledVehicle = f.vehicle;
+  tr.rescueFailedLoad = f.load;
   tr.load += f.load;
   computeBody(sim, tr);
   sim.passengersStranded += 0;
@@ -2629,7 +2749,7 @@ function completeCoupling(sim: Sim, tr: Train) {
     const idx = b.trips.indexOf(f.tripId);
     const why = `列车故障：列车${f.svc}不能恢复，由${tr.svc}连挂救援回段`;
     const tail = liveTail(sim, b, idx);
-    for (const tid of b.trips.slice(idx + 1)) cancelTrip(sim.plan.trips[tid], why);
+    for (const tid of b.trips.slice(idx + 1)) if (!sim.plan.trips[tid].completed) cancelTrip(sim.plan.trips[tid], why);
     if (f.tripId >= 0) {
       if (!sim.plan.trips[f.tripId].completed) cancelTrip(sim.plan.trips[f.tripId], why);
     }
@@ -2664,8 +2784,8 @@ function completeCoupling(sim: Sim, tr: Train) {
     if (berths.length) {
       tasks.push({ k: 'reverse', berths, chosen: berths[0], station: tailStation, minTime: 40 });
       const back = d === 'DN' ? 'UP' : 'DN';
-      tasks.push({ k: 'stop', berth: platformBerth(topo, tailStation, back), station: tailStation, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 120, note: '故障车清客' });
-      depotTasks(topo, fittingDepot(sim, tailStation, back, tr.len), back, tasks);
+      tasks.push({ k: 'stop', berth: platformBerth(topo, tailStation, back), station: tailStation, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 120, rescueClear: peak ? 'failed' : 'all', note: '故障车清客' });
+      rescueDepotTasks(topo, fittingDepot(sim, tailStation, back, tr.len), back, tasks, peak);
       tr.tasks = tasks; setTurnbackStage(sim, tr, 'arrive');
       sim.log('B', '列车', '终点折返股道救援连挂完成，换端后清客回段');
       return;
@@ -2680,12 +2800,12 @@ function completeCoupling(sim: Sim, tr: Train) {
     const mark = link.chainA + (link.chainB - link.chainA) * berth.offset / link.len;
     return d === 'DN' ? sim.trainChain(tr) > mark + 1 : sim.trainChain(tr) < mark - 1;
   };
-  if (next !== undefined && !passed(next)) tasks.push({ k: 'stop', berth: platformBerth(topo, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 120, note: '故障车清客' });
+  if (next !== undefined && !passed(next)) tasks.push({ k: 'stop', berth: platformBerth(topo, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 120, rescueClear: peak ? 'failed' : 'all', note: '故障车清客' });
   const clearChain = next === undefined ? sim.trainChain(tr) : topo.stations[next].chain;
   const forward = depotsAhead(sim, tr, d, clearChain).filter((x) => entryFits(topo, x.index, d, tr.len));
   const depot = forward[0]?.index ?? nearestDepot(sim,next ?? 0,d);
   const reachable = forward.length>0;
-  if (reachable) depotTasks(topo, depot, d, tasks);
+  if (reachable) rescueDepotTasks(topo, depot, d, tasks, peak);
   else {
     // A coupled consist cannot fit a single-train siding. Continue to a
     // terminal tail sized for it, turn back and return both vehicles to depot.
@@ -2694,7 +2814,7 @@ function completeCoupling(sim: Sim, tr: Train) {
     const tbs = [...new Set([...(next === undefined ? [] : [next]), ...turnbackOptions(sim, tr)])];
     const terminal = tbs.find(s => (s === 0 || s === topo.stations.length - 1) && turnbackAt(topo, s, d)?.kind === 'rear');
     if (terminal !== undefined) {
-      if (!tasks.some(t => t.k === 'stop' && t.station === terminal) && !passed(terminal)) tasks.push({ k: 'stop', berth: platformBerth(topo, terminal, d), station: terminal, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 10 });
+      if (!tasks.some(t => t.k === 'stop' && t.station === terminal) && !passed(terminal)) tasks.push({ k: 'stop', berth: platformBerth(topo, terminal, d), station: terminal, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: peak ? 120 : 10, ...(peak ? { rescueClear: 'failed' as const } : {}) });
       addTurnback(topo, { id: -1, no: '', dir: d, kind: 'adj', from: terminal, to: terminal, stops: [], revenue: false, block: -1 }, tasks);
       const reverse = [...tasks].reverse().find(task => task.k === 'reverse' && task.station === terminal);
       if (reverse?.k === 'reverse') {
@@ -2702,14 +2822,25 @@ function completeCoupling(sim: Sim, tr: Train) {
         if (berths.length) { reverse.berths = berths; reverse.chosen = berths[0]; }
       }
       const back = d === 'DN' ? 'UP' : 'DN';
-      tasks.push({ k: 'stop', berth: platformBerth(topo, terminal, back), station: terminal, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 10 });
-      depotTasks(topo, fittingDepot(sim, terminal, back, tr.len), back, tasks);
+      tasks.push({ k: 'stop', berth: platformBerth(topo, terminal, back), station: terminal, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: peak ? 120 : 10, ...(peak ? { rescueClear: 'failed' as const } : {}) });
+      rescueDepotTasks(topo, fittingDepot(sim, terminal, back, tr.len), back, tasks, peak);
     }
   }
   tr.tasks = tasks;
   const clear = tasks.find((t): t is StopTask => t.k === 'stop');
-  sim.log('B', '列车', `救援连挂完成，救援列车推送故障车以RM模式运行至 ${clear ? `${STATIONS[clear.station].name}${clear.berth === platformBerth(topo, clear.station, d) ? '' : '（折返后）'}` : '前方站'} 清客后回段`);
-  void entryStation;
+  sim.log('B', '列车', `救援连挂完成，救援列车推送故障车以RM模式运行至 ${clear ? `${STATIONS[clear.station].name}${clear.berth === platformBerth(topo, clear.station, d) ? '' : '（折返后）'}` : '前方站'} ${peak ? '仅清故障车乘客，救援车带客至回段前最后一站清客' : '清客后回段'}`);
+}
+
+/** The actual chosen depot movement owns its last passenger platform. This
+ * is the same portal used by depotTasks/depotMoves, including cab changes. */
+function rescueDepotTasks(topo: Topology, depot: number, dir: TrackDir, tasks: Task[], peak: boolean) {
+  if (peak) {
+    const station = entryStation(topo, depot, dir), berth = platformBerth(topo, station, dir);
+    // Keep a failed-rake clear-out separate when both events share a station.
+    tasks.push({ k: 'stop', berth, station, trip: -1, arr: null, dep: null, doors: false,
+      revenue: false, minDwell: 90, rescueClear: 'all', note: '救援车回段前清客' });
+  }
+  depotTasks(topo, depot, dir, tasks);
 }
 
 export function failTrain(sim: Sim, tr: Train, recoverable: boolean, recoverAfter: number) {
@@ -2727,9 +2858,106 @@ export function failTrain(sim: Sim, tr: Train, recoverable: boolean, recoverAfte
 }
 
 export function recoverTrain(sim: Sim, tr: Train) {
+  cancelRescue(sim, tr);
   tr.failed = false;
   if (tr.phase === 'failed') tr.phase = 'run';
   sim.log('C', '列车', `列车 ${trainLabel(tr)} 故障排除，恢复运行`);
+}
+
+/** Self-recovery before coupling releases both orders and restores the live
+ * duty. No plan cancellations/takeovers have happened at this point. */
+function cancelRescue(sim: Sim, failed: Train) {
+  const rescuer = sim.trains.get(failed.rescueBy)
+    ?? sim.trainList.find(t => t.rescuing === failed.id && t.coupledLen === 0);
+  if (rescuer && rescuer.coupledLen > 0) return;
+  const duty = rescuer?.rescueDuty;
+  if (failed.rescueReverse) {
+    reverseTrain(sim, failed);
+    const stage = duty?.targetTurnback?.stage ?? 'depart';
+    // Undo the stationary cab change through the existing turnback stages.
+    if (stage === 'none') setTurnbackStage(sim, failed, 'none');
+    else if (stage !== 'arrive') {
+      setTurnbackStage(sim, failed, 'reverse');
+      if (stage !== 'reverse') setTurnbackStage(sim, failed, stage);
+    }
+    failed.tbExitSig = duty?.targetTurnback?.exitSignal ?? -1;
+    failed.rescueReverse = false;
+  }
+  failed.rescueBy = -1;
+  if (!rescuer) return;
+  rescuer.rescuing = -1;
+  const standing = rescuer.phase === 'dwell' ? curStop(rescuer) : null;
+  const clearing = !!duty?.cleared && standing?.note === '救援清客';
+  const block = sim.plan.blocks[rescuer.block];
+  const original = duty?.tasks.slice() ?? (block ? blockTasks(sim.topo, sim.plan, block,
+    Math.max(0, block.trips.indexOf(rescuer.tripId))) : []);
+  const direction = dirOf(rescuer, sim.topo), here = sim.trainChain(rescuer);
+  // The rescue approach can pass original calls. Never send the restored
+  // train backwards to them, and never board again at its clear-out stop.
+  while (original[0]?.k === 'stop') {
+    const task = original[0], berth = sim.topo.berths[task.berth];
+    if (travelDirection(sim.topo, { link: berth.link, dir: berth.dir }) !== direction) break;
+    const mark = linkChain(sim.topo, berth.link, berth.offset);
+    if (!ahead(direction, mark, here - (direction === 'DN' ? 1 : -1))
+      && !(clearing && task.berth === standing!.berth)) break;
+    original.shift();
+  }
+  if (duty?.cleared && duty.inService) {
+    const next = stationsAhead(sim, rescuer)[0], first = original[0];
+    if (next !== undefined && first?.k === 'stop' && next !== first.station && ahead(direction, next, first.station)) {
+      original.unshift({ k: 'stop', berth: platformBerth(sim.topo, next, direction), station: next,
+        trip: -1, arr: null, dep: sim.t, doors: true, revenue: true, note: '救援解除恢复载客' });
+    }
+  }
+  rescuer.tasks = clearing ? [standing!, ...original] : original;
+  if (standing && !clearing) {
+    const restoredHere = original[0]?.k === 'stop' && original[0].berth === standing.berth;
+    if (restoredHere) {
+      // At its own original stop, the pending opening belongs to that same
+      // physical platform. Replace the clear-out allocation with passenger
+      // work before the scheduled opening can commit it.
+      if (rescuer.doorsAwait) prepareDoorCycle(sim, rescuer, original[0] as StopTask,
+        sim.topo.berths[standing.berth].platform, rescuer.mode === 'RM');
+      else rescuer.dwellUntil = Math.max(sim.t, rescuer.depReadyAt, rescuer.doorLockedAt ?? 0,
+        rescuer.autoStartAt ?? 0, (original[0] as StopTask).dep ?? 0);
+    } else {
+      // A temporary rescue clear-out X is not the restored duty's next stop
+      // Y. Never leave phase=dwell at X with Y's task/platform as its owner.
+      rescuer.doorsAwait = false;
+      rescuer.autoOpenAt = undefined;
+      rescuer.doorExchange = undefined;
+      const physicalDoors = rescuer.doorsOpen || rescuer.doorSide || rescuer.doorMotion
+        || sim.t < (rescuer.doorLockedAt ?? 0);
+      if (physicalDoors) {
+        const closeOnly: StopTask = { k: 'stop', berth: standing.berth, station: standing.station,
+          trip: -1, arr: null, dep: sim.t, doors: false, revenue: true, noBoard: true,
+          note: '救援解除，完成本站关门' };
+        rescuer.tasks = [closeOnly, ...original];
+        rescuer.dwellUntil = Math.max(sim.t, rescuer.doorLockedAt ?? 0);
+        rescuer.depReadyAt = rescuer.dwellUntil;
+      } else {
+        rescuer.phase = 'run'; rescuer.phaseSince = sim.t;
+        rescuer.stopDist = Infinity;
+        if (sim.berthRes.get(standing.berth) === rescuer.id) sim.berthRes.delete(standing.berth);
+      }
+    }
+  }
+  rescuer.inService = duty?.inService ?? !!sim.plan.trips[rescuer.tripId]?.revenue;
+  rescuer.tripNo = duty?.tripNo ?? sim.plan.trips[rescuer.tripId]?.no ?? '';
+  rescuer.rescueDuty = undefined;
+  if (rescuer.phase === 'coupling') { rescuer.phase = 'run'; rescuer.phaseSince = sim.t; }
+  rescuer.rmAuth = 0; rescuer.rmSig = -1; rescuer.rmReason = '';
+  const level = cbtcAvailable(sim, rescuer) ? 'CBTC' : 'TBTC';
+  const mode = duty?.mode && duty.mode !== 'RM' && !(duty.mode === 'DTO' && level === 'TBTC')
+    ? duty.mode : autoMode(sim, rescuer, level);
+  if (rescuer.mode === 'RM') setMode(sim, rescuer, mode, level, '救援解除，恢复原任务');
+  setTripFromTasks(sim, rescuer);
+  withdrawAuthority(sim, rescuer);
+  sim.clearAlarm(`tfr-${failed.id}`);
+  sim.log('C', '列车', `故障列车 ${failed.svc} 连挂前恢复，撤销列车 ${rescuer.svc} 的救援，两车继续原任务${duty?.cleared ? '，救援车下一站恢复载客' : ''}`);
+  // A rescuer without a remaining duty returns to a yard, as a recovered
+  // train with no departure left does (cmdRecoverService).
+  if (!rescuer.tasks.length) cmdWithdraw(sim, rescuer, '救援解除：无原任务，回段');
 }
 
 export { goalBerth, releaseRoute };
