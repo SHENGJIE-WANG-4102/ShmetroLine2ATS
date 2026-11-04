@@ -1348,8 +1348,12 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
     return;
   }
   if (task.k !== 'stop') {
-    // turnback / stabling berths: within a few metres is fine
-    if (err <= 5 && err >= -3) arriveAtBerth(sim, tr, task);
+    // turnback / stabling berths: within a few metres is fine. 用户决定（2026-11-05）：
+    // 折返股道越过停车点不退行，就地换端折返（ATP 已把列车保护在股道内，同 ATO 到达）。
+    if (err <= 5 && (err >= -3 || task.k === 'reverse')) {
+      if (err < -3) sim.log('I', '列车', `列车 ${trainLabel(tr)} 人工驾驶越过 ${sim.topo.berths[goalBerth(tr)]?.name ?? '折返股道'} 停车点 ${(-err).toFixed(1)} m，就地换端`);
+      arriveAtBerth(sim, tr, task);
+    }
     return;
   }
   const d = tr.drv;

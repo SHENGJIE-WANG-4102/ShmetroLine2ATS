@@ -506,6 +506,18 @@ describe('driver controls and physical enable',()=>{
   t.tasks=[{...stop,dep:s.t} as typeof stop,{k:'stable',berth:b.id,reason:'存车'}];
   expect(atoStartReady(s,t)).toMatchObject({ready:false,code:'ROUTE_WAIT'});
  });
+ it('a manual train past the tail stopping point changes ends where it stands; short of it, it moves up',()=>{
+  const {s,t}=fixture();
+  const tail=s.topo.berths.find(x=>x.kind==='tail'&&(x.dir===1?s.topo.links[x.link].len-x.offset:x.offset)>25)!;
+  const place=(beyond:number)=>{
+   Object.assign(t,{link:tail.link,off:tail.offset+beyond*tail.dir,dir:tail.dir,hist:[{link:tail.link,dir:tail.dir}],recentBody:undefined,
+    phase:'run',v:0,a:0,doorsAwait:false,tbStage:'arrive'});
+   t.tasks=[{k:'reverse',berths:[tail.id],chosen:tail.id,station:tail.station,minTime:40}] as typeof t.tasks;
+   computeBody(s,t);indexBodies(s);updateTrainTasks(s,t,.1);
+  };
+  place(-10);expect(t.phase).toBe('run');
+  place(20);expect(t.phase).toBe('reversing');
+ });
  it('does not bypass terminal door locks, dwell, hold or EB while completing AM stabling',()=>{
   const {s,t,b}=fixture();Object.assign(t,{manual:false,atoDriver:false,mode:'AM',doorsAwait:false,
    arrivedAt:s.t-30,dwellUntil:s.t,depReadyAt:s.t-1,doorLockedAt:s.t-1,autoStartAt:s.t-1,maDist:0});
