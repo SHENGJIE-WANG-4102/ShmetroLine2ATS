@@ -29,7 +29,7 @@ import type { Sim } from './engine';
 import type { Block, Plan, StopTask, TrackDir, Train, Trip } from './model';
 import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, standbyWindows, effectiveStops, effectiveEnd, buildStops, clearOnToYard, type StandbyPlan } from './timetable';
 import { noWorse } from './planning';
-import { extendTrainTasks, remainingStart, setTripFromTasks } from './ats';
+import { extendTrainTasks, remainingStart, setTripFromTasks, berthHolder } from './ats';
 import { travelDirection, reversedBerthPoint } from './topology';
 import { routePathStart, walkRouteToBerth } from './routePath';
 import { platformBerth, departureBerthAfterReverse, storageOccupancy } from './timetable';
@@ -617,5 +617,24 @@ export function standbyTick(sim: Sim) {
     // 5 s after arrival, then once a minute while the withdrawal is refused
     if (Math.floor(sim.t - tr.phaseSince) % 60 !== 5) continue;
     sim.command({ c: 'withdraw', train: tr.id, reason: `后续车次已由备车表号${tr.relievedBy}接替` }, '系统');
+  }
+  returnIdleStock(sim);
+}
+
+/** 用户决定（2026-11-05，D177）：存车没有后续任务、却占着另一列车计划的存车位时，
+ * 那列车一开始跑最后一趟，存车就自动回段；不等它到站后在门口等一夜。 */
+function returnIdleStock(sim: Sim) {
+  if (Math.floor(sim.t) % 60 !== 17) return;
+  for (const claimant of sim.trainList) {
+    if (!claimant.tasks.every(t => t.k !== 'stop' || t.dep === null || t.trip === claimant.tripId)) continue;
+    const stable = claimant.tasks.find(t => t.k === 'stable' && t.berth >= 0);
+    if (stable?.k !== 'stable') continue;
+    const idle = sim.trains.get(berthHolder(sim, stable.berth, claimant.id, true));
+    // (a parked hot standby inside its window is on duty, not idle)
+    if (!idle || idle.id === claimant.id || idle.phase !== 'stabled' || idle.tasks.length || idle.failed || idle.coupledLen > 0
+      || hotStandby(sim, idle)) continue;
+    const place = sim.topo.berths[stable.berth].name;
+    const r = sim.command({ c: 'withdraw', train: idle.id, reason: `让出${place}供列车${claimant.svc}存车` }, '系统');
+    if (!r.ok) sim.log('B', '运营', `无任务存车 ${idle.svc}（${idle.vehicle}）占用${place}，自动回段未办成：${r.msg}`, { key: `idle-stock-${idle.id}` });
   }
 }

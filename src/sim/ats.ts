@@ -2223,10 +2223,97 @@ function turnAtClearPlatform(sim: Sim, tasks: Task[]) {
   rev.chosen = clear.berth;
 }
 
+/** 【假设】Conservative stock-credit clock for an unplanned move into a yard:
+ * 36 km/h over its physical task path, 120 s per cab change and 5 min entry
+ * clearance. Actual yard stock is still credited on real entry. */
+function withdrawalCredit(sim: Sim, tr: Train, tasks: Task[]): Block['withdrawal'] {
+  const { topo } = sim, home = tasks.at(-1);
+  if (home?.k !== 'depot') return undefined;
+  let at = sim.trainChain(tr), distance = 0;
+  for (const task of tasks) {
+    const target = task.k === 'stop' ? topo.stations[task.station].chain
+      : task.k === 'reverse' ? topo.stations[task.station].chain
+        : task.k === 'depot' ? topo.depots[task.depot].junctionChain : at;
+    distance += Math.abs(target-at); at = target;
+  }
+  return { depot: home.depot, at: sim.t + 60 + distance/10 + tasks.filter(task=>task.k==='reverse').length*120 + DEPOT_ENTRY_CLEAR };
+}
+
+/** Yards a train leaving `station` running `d` can enter, nearest first. */
+function yardsAhead(topo: Topology, station: number, d: TrackDir): number[] {
+  const at = topo.stations[station].chain;
+  return topo.depots.map((_, i) => i)
+    .filter(i => { const e = entryStation(topo, i, d); return e === station || ahead(d, station, e); })
+    .sort((i, j) => Math.abs(topo.stations[entryStation(topo, i, d)].chain - at) - Math.abs(topo.stations[entryStation(topo, j, d)].chain - at));
+}
+
+/** A stored train with no duty leaves its storage place for the nearest yard
+ * (D177): straight out when its cab already faces the line, else after a
+ * change of ends where it stands; when its path then reaches its station's
+ * platform against the yard, it changes ends once more there (the same
+ * shunting a storage tail is entered with, tailTasks, run in reverse). */
+function storedReturnTasks(sim: Sim, tr: Train): Task[] | undefined {
+  const { topo } = sim;
+  const here = topo.berths.find(b => b.link === tr.link && b.dir === tr.dir && b.kind !== 'platform' && standsAt(sim, tr, b.id))
+    ?? topo.berths.find(b => b.link === tr.link && b.dir === tr.dir && standsAt(sim, tr, b.id));
+  if (!here) return undefined;
+  const station = here.station;
+  const reaches = (p: { link: number; off: number; dir: Dir }, goal: number) => goal >= 0
+    && Number.isFinite(distanceToBerthFrom(sim, p.link, p.off, p.dir, goal));
+  const first = (tasks: Task[]) => { const t = tasks[0]; return t && 'berth' in t && typeof t.berth === 'number' ? t.berth : -1; };
+  const home = (p: { link: number; off: number; dir: Dir }) => {
+    for (const depot of yardsAhead(topo, station, travelDirection(topo, p))) {
+      const tasks: Task[] = [];
+      depotTasks(topo, depot, travelDirection(topo, p), tasks);
+      if (reaches(p, first(tasks))) return tasks;
+    }
+  };
+  const from = (p: { link: number; off: number; dir: Dir }): Task[] | undefined => {
+    const direct = home(p);
+    if (direct) return direct;
+    for (const plat of topo.berths) {
+      if (plat.kind !== 'platform' || plat.station !== station || !reaches(p, plat.id)) continue;
+      const flipped = topo.berths.find(x => x.kind === 'platform' && x.platform === plat.platform && x.dir !== plat.dir);
+      const onward = flipped && home({ link: flipped.link, off: flipped.offset, dir: flipped.dir });
+      if (onward) return [{ k: 'stop', berth: plat.id, station, trip: -1, arr: null, dep: null, doors: false, revenue: false, note: '回段换端' },
+        { k: 'reverse', berths: [plat.id], chosen: plat.id, station, minTime: 40 }, ...onward];
+    }
+  };
+  const head = from({ link: tr.link, off: tr.off, dir: tr.dir });
+  if (head) return head;
+  const rear = reversedBerthPoint(topo, here.id, tr.len, tr.hist);
+  const turned = rear && from(rear);
+  return turned && [{ k: 'reverse', berths: [here.id], chosen: here.id, station, minTime: 40 }, ...turned];
+}
+
+/** 用户决定（2026-11-05，D177）：无任务存车回段。Only a train standing idle in
+ * storage with no further duty; it keeps its block's completed trips. */
+function withdrawStored(sim: Sim, tr: Train, reason: string) {
+  if (tr.tasks.length) return { ok: false, msg: '存车列车已有后续任务' };
+  if (tr.failed || tr.coupledLen > 0) return { ok: false, msg: '故障或连挂存车不能自行回段' };
+  const tasks = storedReturnTasks(sim, tr);
+  if (!tasks) return { ok: false, msg: `列车 ${tr.svc}（${tr.vehicle}）存车位置无可达回段路径` };
+  const home = tasks.at(-1) as Extract<Task, { k: 'depot' }>;
+  if (tr.block >= 0) {
+    const credit = withdrawalCredit(sim, tr, tasks);
+    if (credit) { sim.plan.blocks[tr.block].withdrawal = credit; sim.planDirty = true; }
+  }
+  tr.tasks = tasks;
+  tr.phase = 'run';
+  tr.phaseSince = sim.t;
+  tr.inService = false;
+  tr.withdrawn = true;
+  tr.tripNo = '回段';
+  tr.destText = sim.topo.depots[home.depot].short;
+  sim.log('I', '车辆', `列车 ${tr.svc}（${tr.vehicle}）存车回段（${reason}），回${sim.topo.depots[home.depot].name}`);
+  return { ok: true, msg: `列车 ${tr.svc}（${tr.vehicle}）存车回段（${reason}），回${sim.topo.depots[home.depot].name}` };
+}
+
 export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   const { topo, plan } = sim;
   if (rescuePending(tr))
     return { ok: false, msg: '列车正参与救援，连挂前不能单独退出服务' };
+  if (tr.phase === 'stabled') return withdrawStored(sim, tr, reason);
   if (tr.tasks[0]?.k === 'depot') {
     tr.inService = false;
     tr.withdrawn = true;
@@ -2291,20 +2378,8 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
       if (!plan.trips[tr.tripId].completed) cancelTrip(plan.trips[tr.tripId], `列车${tr.svc}退出服务（${reason}）`);
     }
     sim.planDirty = true;
-    const home = tasks.at(-1);
-    if (home?.k === 'depot') {
-      // 【假设】Conservative stock-credit clock for an unplanned move: 36
-      // km/h over its physical task path, 120 s per cab change and 5 min
-      // entry clearance. Actual yard stock is still credited on real entry.
-      let at = sim.trainChain(tr), distance = 0;
-      for (const task of tasks) {
-        const target = task.k === 'stop' ? topo.stations[task.station].chain
-          : task.k === 'reverse' ? topo.stations[task.station].chain
-            : task.k === 'depot' ? topo.depots[task.depot].junctionChain : at;
-        distance += Math.abs(target-at); at = target;
-      }
-      b.withdrawal = { depot: home.depot, at: sim.t + 60 + distance/10 + tasks.filter(task=>task.k==='reverse').length*120 + DEPOT_ENTRY_CLEAR };
-    }
+    const withdrawal = withdrawalCredit(sim, tr, tasks);
+    if (withdrawal) b.withdrawal = withdrawal;
     const unfinished = tr.tripId >= 0 && !plan.trips[tr.tripId].completed ? [tr.tripId] : [];
     standbyTakeover(sim, b.id, [...unfinished, ...tail], `列车${tr.svc}退出服务`);
   }
