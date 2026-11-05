@@ -459,28 +459,26 @@ export const OPERATIONS = {
   /** Direct passenger retirement boundaries, from the depot portal topology.
    * A daily circulation chooses homes within the yards' balanced quotas. */
   depotReturns: [
-    { depot: 'BZL', dir: 'UP', station: 'SHR' },
+    // 【假设】D178：高德淞虹路上行（往蟠祥路）全天、夜间 22:30 后 18 列，往蟠祥路的车基本不在淞虹路截下入段；
+    // 截短后蟠祥路到达间隔不超过所跨原图最大间隔。
+    { depot: 'BZL', dir: 'UP', station: 'SHR', service: { terminal: 'PXL', intervalMultiplier: 1 } },
     { depot: 'LYD', dir: 'DN', station: 'LYL' },
     // 用户决定：通常直接回库，服务需要时先到机场，再折返远东大道入库。
     // 【假设】收车后的服务间隔不超过所跨原图最大间隔的两倍，随当日原图变化。
     { depot: 'CSD', dir: 'DN', station: 'YDD', service: { terminal: 'PDA', intervalMultiplier: 2 } },
   ] as { depot: string; dir: 'UP' | 'DN'; station: string; service?: { terminal: string; intervalMultiplier: number } }[],
-  /** 【假设】六列正线过夜车；D170：广兰路不存车，首班由车场开班前就位。 */
+  /** 用户决定（2026-11-05，D178）：正线不过夜，全部列车夜间回车场，首班由车场在开班前空放就位。
+   * 依据：公开资料查不到 2 号线正线过夜；官方首班（龙阳路 05:20 上行、蟠祥路 05:25 下行、
+   * 机场 06:00 上行）都能由相邻车场出车担当。【假设】车队 100 列中未上线的车停在检修／列检库，
+   * 不占停车库位。D170：广兰路不存车。 */
   overnightStabling: [
-    { station: 'PXL', count: 2, departure: 'DN', kind: 'terminal' },
-    { station: 'PDA', count: 1, departure: 'UP', kind: 'terminal' },
-    { station: 'KJG', count: 2, departure: 'UP', kind: 'origin', origin: 'LYL', nightAfter: 21 * 3600 + 40 * 60 },
-    { station: 'CXZ', count: 1, departure: 'DN', kind: 'feeder', nightAfter: 22 * 3600 + 30 * 60 },
   ] as { station: string; count: number; departure: 'UP' | 'DN'; kind: 'terminal' | 'platform' | 'origin' | 'feeder'; origin?: string; track?: 'turnback'; nightAfter?: number }[],
-  /** 【假设】平峰热备共用夜间泊位；中途两处各一列，按配线方向进出。 */
+  /** D178：正线不过夜以后，中途热备（科技馆、创新中路，原为【假设】，靠夜间存车担当）取消，只留两端。 */
   // 用户决定（2026-10-28，D148）：白天大交路两端固定一列热备、只用一条折返线；
   // 高峰可先取用，峰后补回。【假设】窗口按早晚高峰划分。
   hotStandby: [
     { station: 'PXL', track: 'turnback', berth: 0, windows: TERMINAL_STANDBY_WINDOWS, firstReady: true },
     { station: 'PDA', track: 'turnback', berth: 0, windows: TERMINAL_STANDBY_WINDOWS, firstReady: true },
-    // 主用折返线是科技馆1道（D149），热备放另一条。
-    { station: 'KJG', track: 'turnback', berth: 1, depot: 'BZL', incoming: 'DN' },
-    { station: 'CXZ', track: 'storage', berth: 0, depot: 'CSD', incoming: 'DN', emptyCalloutToFirstPlatform: true },
   ] as { station: string; track: 'turnback' | 'storage'; berth: number; depot?: string; incoming?: 'UP' | 'DN'; emptyCalloutToFirstPlatform?: boolean;
     windows?: typeof TERMINAL_STANDBY_WINDOWS; firstReady?: boolean }[],
   /** 用户决定（2026-10-28，D149）：站后折返只用一条主用折返线；另一条只在运行图

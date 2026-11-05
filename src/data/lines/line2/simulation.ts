@@ -197,6 +197,10 @@ export const SIMULATION: SimulationData = {
     templates: TEMPLATES, dayPeriods: DAY_PERIODS, shownPeriods: SHOWN_PERIODS,
     dwellBands: DWELL_BANDS, runBands: RUN_BANDS, serviceData: SERVICE_DATA,
     sectionRunBands: { weekday: OFFPEAK_SECTION_RUN_BANDS, weekend: OFFPEAK_SECTION_RUN_BANDS },
+    // 用户决定（2026-11-05，D178）：下行末班官方远东大道 23:22 发、机场 23:31 到，按标定时分
+    // （零余量）加最短停站仍晚 1 s；末班在远东大道→海天三路快 2 s。依据：该段录音比物理下界
+    // 快约 15.9 s（running.ts D171 残差）。
+    lastTrainRunGain: [{ from: 'YDD', to: 'HTS', s: 2 }],
     opening: OPENING, outerBandMargin: 1200, overlays: OVERLAY_PRESETS,
     terminals: {
       core: ['SHR', 'GLL'], insertOrigin: 'LYL', overflowWithdrawal: 'YDD',

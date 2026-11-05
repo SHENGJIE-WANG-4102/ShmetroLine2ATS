@@ -46,6 +46,9 @@ export interface TimetableData {
   runBands: Record<DayType, ClockBand[]>;
   /** Directed physical sections may use a different level within clock bands.
    * Missing sections and uncovered clocks retain runBands. Station IDs are data. */
+  /** seconds a published last train runs faster than the planned physical run
+   * between two adjacent stations (station ids), where the field runs were faster */
+  lastTrainRunGain?: { from: string; to: string; s: number }[];
   sectionRunBands?: Partial<Record<DayType, { from: string; to: string;
     bands: (ClockBand & { allowanceS?: number })[] }[]>>;
   serviceData: Record<DayType, ServiceData>;

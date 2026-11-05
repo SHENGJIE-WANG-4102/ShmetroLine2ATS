@@ -4,10 +4,12 @@ import { newTrain } from '../src/sim/ats';
 import { blockTasks, platformBerth } from '../src/sim/timetable';
 import { computeBody, indexBodies } from '../src/sim/movement';
 import { findStandby } from '../src/sim/standby';
+import { capture, restore } from '../src/sim/state';
 
 /** `done`: index of the trip's last completed call (-1: not started). */
 function fixture(done = -1) {
-  const sim = new Sim({ dayType: 'weekday', dateLabel: 'yard cut recovery', startTime: 14400, seed: 19, autoDispatch: true });
+  const config = { dayType: 'weekday', dateLabel: 'yard cut recovery', startTime: 14400, seed: 19, autoDispatch: true } as const;
+  const sim = new Sim(config);
   for (const train of [...sim.trainList]) sim.removeTrain(train);
   // A depot-bound duty whose mid-morning revenue trip has a following revenue
   // trip, with the train standing at its call `done`, where a yard standby
@@ -35,7 +37,12 @@ function fixture(done = -1) {
     for (const id of block.trips) plan.trips[id].cancelled = true;
     const standby = findStandby(sim, block.id, block.trips);
     for (const id of block.trips) plan.trips[id].cancelled = false;
-    if (standby?.k === 0) {
+    // (D178: the withdrawal's own return also enters the yard ledger, and at
+    // the fixture's 04:00 clock a yard can still be full; keep a duty the
+    // real command does hand over from its first trip, when not yet started)
+    const handedOver = () => { block.train = train.id; const trial = new Sim(config); restore(trial, capture(sim)); block.train = undefined;
+      trial.command({ c: 'withdraw', train: train.id }); return !trial.plan.trips[first.id].cancelled; };
+    if (standby?.k === 0 && (done >= 0 || handedOver())) {
       block.train = train.id;
       return { sim, block, first, nextId, train, vehicle };
     }

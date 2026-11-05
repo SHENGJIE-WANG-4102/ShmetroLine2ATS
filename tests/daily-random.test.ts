@@ -4,6 +4,7 @@ import {drawDailyRidership,RIDERSHIP_RANGE} from '../src/sim/calibration';
 import {Sim} from '../src/sim/engine';
 import {capture,restore} from '../src/sim/state';
 import {OPERATIONS} from '../src/data/current';
+import { fixtureTrainWhere } from './helpers/fixture-train';
 
 describe('daily random-fault budgets',()=>{
  const make=()=>new Sim({dayType:'weekday',dateLabel:'daily fault budget',startTime:14400,seed:17,noPossessions:true});
@@ -22,7 +23,9 @@ describe('daily random-fault budgets',()=>{
   }
  });
  it('defers a missing target, never faults the same vehicle twice, and restores pending entries through checkpoints',()=>{
-  const sim=make(),[first,second]=sim.trainList;
+  // (two trains already out on the main line: random faults pick no train on a depot track)
+  const sim=make(),onLine=(t:{link:number})=>sim.topo.links[t.link].track!=='DEP';
+  const first=fixtureTrainWhere(sim,onLine),second=fixtureTrainWhere(sim,t=>t!==first&&onLine(t));
   for(const tr of sim.trainList)tr.inService=false;
   sim.t=6*3600;sim.randomLevel=2;sim.nextRandomAt=sim.t;
   sim.randomSchedule=['trainComm','door'].map((kind,i)=>({event:`test-${kind}`,kind,major:false,vehicle:true,at:sim.t+i,windows:[[sim.t,sim.t+600]],status:'pending'}));

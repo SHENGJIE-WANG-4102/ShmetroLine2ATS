@@ -8,6 +8,7 @@ import {scheduleInstructorEvents} from '../src/sim/scenario';
 import {exportDiagnostics,parseDiagnostics,stringifyDiagnostics,replayDiagnostics} from '../src/sim/diagnostics';
 import {initialDepotStock,yardNeed,depotLedger,validatePlan} from '../src/sim/timetable';
 import {LINE_INFO} from '../src/data/current';
+import { fixtureTrain } from './helpers/fixture-train';
 
 describe('operating day boundaries and replay',()=>{
  let sim:Sim;
@@ -33,10 +34,6 @@ describe('operating day boundaries and replay',()=>{
   expect(preview.warnings?.join('') ?? '').not.toContain('收掉');
   expect(preview.plan.trips.some(t=>t.revenue&&t.stops.at(-1)!.arr>OPERATING_DAY.to)).toBe(true);
  });
- it('accepts the opening overnight cars at their legal departure or arrival berths',()=>{
-  expect(sim.trainList).toHaveLength(6);
-  expect(unfinishedAtRollover(sim)).toEqual([]);
- });
  it('excludes workshop vehicles from the ready-stock ledger and still reports actual parking overflow',()=>{
   const workshop=[...sim.vehicles.values()].filter(record=>record.work).length;
   expect(workshop).toBeGreaterThan(0);
@@ -46,17 +43,8 @@ describe('operating day boundaries and replay',()=>{
   const full=structuredClone(sim.plan);full.initialStock![0]=sim.topo.depots[0].capacity+1;
   expect(validatePlan(sim.planCtx,full).some(issue=>issue.code==='YARD_CAPACITY'&&issue.depot===0)).toBe(true);
  });
- it('counts a storage shunt as unfinished once its scheduled release arrives',()=>{
-  const saved=capture(sim),tr=sim.trainList.find(t=>t.tasks[0]?.k==='reverse'
-    &&t.tasks.some(task=>task.k==='stop'&&task.stabledOut))!;
-  expect(tr).toBeDefined();expect(unfinishedAtRollover(sim).join(' ')).not.toContain(tr.vehicle);
-  const stop=tr.tasks.find(task=>task.k==='stop'&&task.stabledOut)!;
-  if(stop.k!=='stop'||stop.dep===null)throw new Error('missing scheduled departure');
-  sim.t=stop.dep;expect(unfinishedAtRollover(sim).join(' ')).toContain(tr.vehicle);
-  restore(sim,saved);
- });
  it('copies a section phase through checkpoints and carries its arrival clock into the next day',()=>{
-  const saved=capture(sim),tr=sim.trainList[0];
+  const saved=capture(sim),tr=fixtureTrain(sim);
   tr.ato={state:{phase:'coast',recovered:false,neutral:2},plan:{cutoff:20,coastAt:800,coastFloor:15,
    eta:100,samples:[{remaining:1000,speed:20},{remaining:0,speed:0}]},berth:0,arrival:sim.t+200,
    level:1,ceiling:20,manual:false,distance:700,obstructed:false};
@@ -75,7 +63,7 @@ describe('operating day boundaries and replay',()=>{
   restore(sim,saved);
  },60000);
  it('identifies a moving train in the interval with its vehicle, location and task',()=>{
-  const cp=capture(sim),train=sim.trainList[0];
+  const cp=capture(sim),train=fixtureTrain(sim);
   const interval=sim.topo.links.find(l=>l.track==='DN'&&l.platform<0&&l.len>300)!;
   train.link=interval.id;train.off=interval.len/2;train.phase='run';
   train.v=1;

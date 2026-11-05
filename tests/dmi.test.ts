@@ -7,11 +7,12 @@ import {setTripFromTasks} from '../src/sim/ats';
 import {openDoors,closeDoors,doorMotionTick,DOOR_STAGGER_S,psdRepaired} from '../src/sim/psd';
 import {DOOR_CLOSE_S} from '../src/sim/calibration';
 import {capture} from '../src/sim/state';
+import { fixtureTrain } from './helpers/fixture-train';
 
 describe('Line 2 photographed cab content',()=>{
  it('publishes physical doors with offset opening and PSD-first closure, without changing the lock deadline',()=>{
   const s=new Sim({dayType:'weekday',dateLabel:'sequence',startTime:14400,seed:7,noPossessions:true});
-  const t=s.trainList[0],b=s.topo.berths[platformBerth(s.topo,12,'DN')],ps=s.plat[b.platform];
+  const t=fixtureTrain(s),b=s.topo.berths[platformBerth(s.topo,12,'DN')],ps=s.plat[b.platform];
   t.link=b.link;t.doorSide='';t.doorsOpen=false;t.vfault=null;
   openDoors(s,t,b.platform);const opened=s.t;
   expect(t.doorsOpen).toBe(true);expect(ps.psd).toBe('closed');
@@ -39,7 +40,7 @@ describe('Line 2 photographed cab content',()=>{
  it('uses station data for cab spelling and marks only the actual change of ends',()=>{
   const s=new Sim({dayType:'weekday',date:'2026-10-21',dateLabel:'cab',startTime:14400,seed:7,noPossessions:true});
   for(let i=0;i<20;i++)s.step();
-  const t=s.trainList[0];
+  const t=fixtureTrain(s);
   const airport=STATIONS.findIndex(st=>st.id==='PDA');
   const turn=turnbackAt(s.topo,airport,'DN')!;
   if(turn.kind!=='rear')throw Error('airport rear turnback');
@@ -109,7 +110,7 @@ describe('Line 2 photographed cab content',()=>{
  });
  it('keeps train doors independent of PSD and shows PSD only on a platform',()=>{
   const s=new Sim({dayType:'weekday',dateLabel:'doors',startTime:14400,seed:7,noPossessions:true});
-  const t=s.trainList[0],b=s.topo.berths[platformBerth(s.topo,12,'DN')];
+  const t=fixtureTrain(s),b=s.topo.berths[platformBerth(s.topo,12,'DN')];
   t.link=b.link;t.phase='run';t.v=8;t.doorsOpen=false;t.doorSide='';
   s.plat[b.platform].psd='open';
   expect(computeDmi(s,t.id)).toMatchObject({trainDoor:'closed',psd:'open'});
@@ -125,7 +126,7 @@ describe('Line 2 photographed cab content',()=>{
  });
  it('shows no fold for a platform change of ends and derives signs from each departure signal',()=>{
   const s=new Sim({dayType:'weekday',dateLabel:'platform',startTime:14400,seed:7,noPossessions:true});
-  const t=s.trainList[0],turn=turnbackAt(s.topo,6,'UP')!;
+  const t=fixtureTrain(s),turn=turnbackAt(s.topo,6,'UP')!;
   if(turn.kind!=='front')throw Error('front turnback');
   const trip=s.plan.trips.find(p=>p.dir==='DN'&&p.revenue)!;
   t.phase='reversing';t.link=s.topo.berths[turn.arrBerth].link;
@@ -146,7 +147,7 @@ describe('Line 2 photographed cab content',()=>{
  });
  it('uses the ATS departure clock for both displays after a late arrival and retains it on departure',()=>{
   const s=new Sim({dayType:'weekday',dateLabel:'late-board',startTime:14400,seed:7,noPossessions:true});
-  const t=s.trainList[0],b=s.topo.berths[platformBerth(s.topo,12,'DN')];
+  const t=fixtureTrain(s),b=s.topo.berths[platformBerth(s.topo,12,'DN')];
   t.link=b.link;t.off=b.offset;t.dir=b.dir;t.hist=[{link:b.link,dir:b.dir}];t.phase='dwell';
   const stop={k:'stop' as const,berth:b.id,station:b.station,trip:-1,arr:s.t-5,dep:s.t-15,doors:true,revenue:true};
   t.tasks=[stop];t.dwellUntil=s.t+14;t.departureDisplay=undefined;

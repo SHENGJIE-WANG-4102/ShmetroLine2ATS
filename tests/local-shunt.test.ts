@@ -1,3 +1,4 @@
+import './helpers/midline-storage';
 import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {LINE_INFO} from '../src/data/current';
@@ -8,11 +9,13 @@ import {computeOccupancy,releaseRoute} from '../src/sim/interlocking';
 import {arbitrateResources} from '../src/sim/resourceArbitration';
 import {berthFits,reversedBerthPoint,safeWaitingPoint} from '../src/sim/topology';
 import {routePathStart,walkRouteToBerth} from '../src/sim/routePath';
+import { fixtureTrains } from './helpers/fixture-train';
+import { storageExit } from './helpers/storage-exit';
 
 function scene(blocked=false, incoming: 'UP' | 'DN' = 'UP') {
  const s=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'local shunt',startTime:14400,seed:1,noPossessions:true,autoRadio:true});
  s.checkIntegrity=true;for(const id of [...s.routes.keys()])releaseRoute(s,id);
- const tr=s.trainList[0],other=blocked?s.trainList[1]:undefined;
+ const [tr,second]=fixtureTrains(s, blocked?2:1),other=blocked?second:undefined;
  for(const x of [...s.trainList])if(x!==tr&&x!==other)s.removeTrain(x);
  for(const b of s.plan.blocks)s.blockDone.add(b.id);
  const place=hotStandbyPlaces(s.topo).find(x=>x.emptyCalloutToFirstPlatform&&x.incoming)!;
@@ -35,10 +38,7 @@ describe('local storage-entry pull-out',()=>{
  it.each(['weekday','weekend'] as const)('%s: leaves a middle-track overnight berth by a protected local shunt and boards at its origin',(dayType)=>{
   const s=new Sim({dayType,date:'2026-10-19',dateLabel:'local departure',startTime:14400,seed:1,noPossessions:true});
   s.checkIntegrity=true;
-  const trip=s.plan.trips.find(t=>t.kind==='ins'&&t.revenue&&t.stops[0].stop
-    &&s.plan.blocks[t.block].start.kind==='stable'
-    &&s.topo.stations[t.from].shuntEntries.length>0)!;
-  expect(trip).toBeDefined();const block=s.plan.blocks[trip.block],tr=s.trainList.find(t=>t.block===block.id)!;
+  const {block,trip,tr}=storageExit(s);
   expect(tr.tasks.slice(0,3).map(t=>t.k)).toEqual(['reverse','reverse','stop']);
   for(const other of [...s.trainList])if(other!==tr)s.removeTrain(other);
   for(const b of s.plan.blocks)if(b.id!==block.id)s.blockDone.add(b.id);
@@ -52,9 +52,7 @@ describe('local storage-entry pull-out',()=>{
  });
  it('keeps the overnight departure in storage when its local shunt is occupied',()=>{
   const s=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'blocked local departure',startTime:14400,seed:1,noPossessions:true});
-  const trip=s.plan.trips.find(t=>t.kind==='ins'&&t.revenue&&t.stops[0].stop
-    &&s.plan.blocks[t.block].start.kind==='stable'&&s.topo.stations[t.from].shuntEntries.length>0)!;
-  const block=s.plan.blocks[trip.block],tr=s.trainList.find(t=>t.block===block.id)!,other=s.trainList.find(t=>t!==tr)!;
+  const {block,trip,tr}=storageExit(s),other=s.trainList.find(t=>t!==tr)!;
   for(const x of [...s.trainList])if(x!==tr&&x!==other)s.removeTrain(x);
   for(const b of s.plan.blocks)if(b.id!==block.id)s.blockDone.add(b.id);
   const task=tr.tasks[0];expect(task.k).toBe('reverse');if(task.k!=='reverse')return;

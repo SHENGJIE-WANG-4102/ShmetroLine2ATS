@@ -7,10 +7,11 @@ import { releaseRoute, computeOccupancy, signalPassed, updateInterlocking, trySe
 import { computeBody, indexBodies, moveBack } from '../src/sim/movement';
 import { arbitrateResources, collectResourceRequests, resourceAdmissionBlocked, routeNeedsResourceProtection } from '../src/sim/resourceArbitration';
 import { orderedStations, topologyResourceLinks, ahead, reversedBerthPoint } from '../src/sim/topology';
+import { fixtureTrain, fixtureTrains } from './helpers/fixture-train';
 
 it.each([true, false])('collects a consist already occupying its return exit, but leaves a distant approach unclaimed (%s)', near => {
   const sim = new Sim({ dayType: 'weekday', date: '2026-10-19', dateLabel: 'resource ownership', startTime: 14400, seed: 7, noPossessions: true });
-  const tr = sim.trainList[0];
+  const tr = fixtureTrain(sim);
   for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
   for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
   for (const b of sim.plan.blocks) sim.blockDone.add(b.id);
@@ -71,8 +72,9 @@ it.each([true, false])('collects a consist already occupying its return exit, bu
 // A real shared depot mouth, selected by topology capability rather than site id.
 function newApplicantRoute(keepPeer = false) {
   const sim = new Sim({ dayType: 'weekday', date: '2026-10-19', dateLabel: 'resource route lifecycle', startTime: 14400, seed: 7, noPossessions: true });
-  const tr = sim.trainList[0];
-  const peer = keepPeer ? sim.trainList[1] : undefined;
+  // the applicant is the car that has just left its yard; the peer, out earlier, only has to exist
+  const cars = fixtureTrains(sim, keepPeer ? 2 : 1), tr = cars.at(-1)!;
+  const peer = keepPeer ? cars[0] : undefined;
   for (const other of [...sim.trainList]) if (other !== tr && other !== peer) sim.removeTrain(other);
   if (peer) { peer.tasks = []; peer.phase = 'stabled'; peer.maSigs = []; }
   for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
@@ -94,6 +96,13 @@ function newApplicantRoute(keepPeer = false) {
   }));
   expect(candidates.length).toBeGreaterThan(0);
   const {depot,direction,tasks,arrival,berth,platform,reverseBerth,after}=candidates[0];
+  // D178: the peer is a yard car out early, which may stand at this mouth; it only has to exist, far away
+  if (peer) {
+    const last = sim.topo.stations.length - 1, far = arrival.station > last / 2 ? 0 : last;
+    const b = sim.topo.berths[platformBerth(sim.topo, far, far === 0 ? 'UP' : 'DN')];
+    Object.assign(peer, { link: b.link, off: b.offset, dir: b.dir, hist: [{ link: b.link, dir: b.dir }], v: 0, a: 0, block: -1, depotStage: 'none', tbStage: 'none' });
+    computeBody(sim, peer);
+  }
   const exitDir = -berth.dir as 1 | -1;
   const ordinaryDir = direction;
   const station = orderedStations(ordinaryDir, arrival.station)[1];
@@ -104,7 +113,7 @@ function newApplicantRoute(keepPeer = false) {
   tasks.splice(0,2);
   Object.assign(tr, { link: platform.id, off:reverseBerth.offset, dir:exitDir,
     hist: [{link:platform.id,dir:exitDir}], tasks, phase: 'run', block: -1,
-    tripId: -1, v: 0, a: 0, maSigs: [], lastMa: Infinity, lastDs: 0 });
+    tripId: -1, v: 0, a: 0, maSigs: [], lastMa: Infinity, lastDs: 0, depotStage: 'none', tbStage: 'none' });
   computeBody(sim, tr); indexBodies(sim); computeOccupancy(sim);
   const signal = signalAheadFrom(sim, tr.link, tr.off, tr.dir, Infinity)!;
   tr.nextSignal = signal.sig; tr.nextSignalDist = signal.dist;

@@ -65,7 +65,7 @@ export function openYard(store: Store, root: HTMLElement, depot: number, onAddTr
     const workshopView = h('div', { class: 'sect-title', style: 'margin-top:18px' }, '检修库（不占停车列位）');
     body.append(workshopView);
     if (!workshop.length) body.append(h('div', { class: 'hint' }, '无检修车辆'));
-    for (const [no,r] of workshop) body.append(h('div', { class:'mono', title:info(r) }, `${r.work === 'monthly' ? '月检' : '架修'}：${no}，预计 ${date(r.until).slice(5)} 完成`));
+    for (const [no,r] of workshop) body.append(h('div', { class:'mono', title:info(r) }, r.work === 'stored' ? `库内停放：${no}` : `${r.work === 'monthly' ? '月检' : '架修'}：${no}，预计 ${date(r.until).slice(5)} 完成`));
     const cols = h('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:22px' });
     const tb = h('tbody');
     if (!next.length) tb.append(h('tr', {}, h('td', { class: 'hint' }, '近期无出段计划')));

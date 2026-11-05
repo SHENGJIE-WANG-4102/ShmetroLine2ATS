@@ -3,6 +3,7 @@ import { Sim } from '../src/sim/engine';
 import { carryWorld, DAY_S } from '../src/sim/operatingDay';
 import { blockTasks } from '../src/sim/timetable';
 import type { Trip } from '../src/sim/model';
+import { fixtureTrain } from './helpers/fixture-train';
 
 type LinkedTrip = Trip & { prev?: number; next?: number };
 describe('cross-day overlay duty links', () => {
@@ -16,7 +17,7 @@ describe('cross-day overlay duty links', () => {
       && b.trips.some(id=>((from.plan.trips[id] as LinkedTrip).next??-1)>=baseCount+b.trips.length)
       && b.trips.some(id=>from.plan.trips[id].overlay==='ciie@34200'))!;
     expect(duty).toBeDefined();
-    const tr=from.trainList[0];for(const other of [...from.trainList])if(other!==tr)from.removeTrain(other);
+    const tr=fixtureTrain(from);for(const other of [...from.trainList])if(other!==tr)from.removeTrain(other);
     tr.block=duty.id;tr.tripId=duty.trips[1];tr.tasks=blockTasks(from.topo,from.plan,duty,1);
     from.blockDone.delete(duty.id);from.t=DAY_S+13500;
     const kept=duty.trips.slice(1).filter(id=>!from.plan.trips[id].cancelled || tr.tasks.some(t=>t.k==='stop'&&t.trip===id));

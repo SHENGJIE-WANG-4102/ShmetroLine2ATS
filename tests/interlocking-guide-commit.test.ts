@@ -7,12 +7,13 @@ import * as checks from '../src/sim/invariants';
 import * as protection from '../src/sim/protection';
 import * as resources from '../src/sim/resourceArbitration';
 import * as diagnostics from '../src/sim/diagnostics';
+import { fixtureTrain } from './helpers/fixture-train';
 const signatures = new Set<string>();
 const fields=(tr: Train)=>Object.fromEntries(['id','vehicle','link','off','dir','v','maDist','maFar','maSigs','lastMa','lastDs','maCut','vPermit','vEbi','eb','nextSignal','nextSignalDist'].map(k=>[k,structuredClone((tr as unknown as Record<string, unknown>)[k])]));
 function fixture(speed:number){
  const sim=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'ordinary-guide-command',startTime:14400,seed:105,noPossessions:true});
- const tr=sim.trainList[0]!;
- const signature=diagnostics.topologySignature(sim.topo);assert.equal(signature,'f279e2b3');signatures.add(signature);
+ const tr=fixtureTrain(sim)!;
+ const signature=diagnostics.topologySignature(sim.topo);assert.equal(signature,'38a4a0ef');signatures.add(signature);
  for(const other of [...sim.trainList])if(other!==tr)sim.removeTrain(other);
  for(const rid of [...sim.routes.keys()])ci.releaseRoute(sim,rid);
  for(const block of sim.plan.blocks)sim.blockDone.add(block.id);

@@ -21,6 +21,7 @@ import type { Train } from '../src/sim/model';
 import { DOOR_CLOSE_S } from '../src/sim/calibration';
 import { closeDoors } from '../src/sim/psd';
 import { updateTrainTasks } from '../src/sim/ats';
+import { fixtureTrain } from './helpers/fixture-train';
 
 const H = 8 * 3600;
 const st = (sim: Sim, name: string) => sim.topo.stations.find((s) => s.name === name)!;
@@ -139,7 +140,7 @@ describe('manual driving', () => {
 
 describe('driver doors and the acceleration limit', () => {
   it('CM departs after the 5.7s lock sequence after actual lock confirmation and records one negative-delay departure', () => {
-    const sim=new Sim({dayType:'weekday',dateLabel:'doors',startTime:14400,seed:7,noPossessions:true}),tr=sim.trainList[0];
+    const sim=new Sim({dayType:'weekday',dateLabel:'doors',startTime:14400,seed:7,noPossessions:true}),tr=fixtureTrain(sim);
     for(const other of [...sim.trainList])if(other!==tr)sim.removeTrain(other);
     for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
     for(const block of sim.plan.blocks)sim.blockDone.add(block.id);

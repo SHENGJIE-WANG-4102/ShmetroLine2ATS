@@ -10,11 +10,12 @@ import { carryTrains, DAY_S } from '../src/sim/operatingDay';
 import { closeDoors, openDoors, doorMotionTick } from '../src/sim/psd';
 import { cmdStandbyRelief } from '../src/sim/standby';
 import { vehicleTick } from '../src/sim/vehicle';
+import { fixtureTrains } from './helpers/fixture-train';
 
 function fixture(peak: boolean, dwell = false) {
   const sim = new Sim({ dayType: 'weekday', dateLabel: 'rescue-duty', startTime: 14400,
     seed: 7, noPossessions: true, autoRadio: false, autoDispatch: false });
-  const [rescuer, failed] = sim.trainList;
+  const [rescuer, failed] = fixtureTrains(sim, 2);
   for (const tr of [...sim.trainList]) if (tr !== rescuer && tr !== failed) sim.removeTrain(tr);
   for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
   const period = sim.plan.periods.find(p => !!TEMPLATES[p.template]?.peak === peak)!;

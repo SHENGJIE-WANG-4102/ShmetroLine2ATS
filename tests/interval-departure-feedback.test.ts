@@ -6,10 +6,11 @@ import {newHalt,rootCause} from '../src/sim/halt';
 import {platformBerth} from '../src/sim/timetable';
 import {OPERATIONS} from '../src/data/current';
 import {capture,restore} from '../src/sim/state';
+import { fixtureTrains } from './helpers/fixture-train';
 
 function fixture(){
  const sim=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'interval-feedback',startTime:14400,seed:7,noPossessions:true});
- const [rear,front,turn]=sim.trainList;expect(turn).toBeDefined();
+ const [rear,front,turn]=fixtureTrains(sim, 3);expect(turn).toBeDefined();
  for(const tr of [...sim.trainList])if(![rear,front,turn].includes(tr))sim.removeTrain(tr);
  const rule=OPERATIONS.intervalTrainLimits.find(r=>sim.topo.stations.findIndex(s=>s.id===r.from)>=2)!;
  const station=sim.topo.stations.findIndex(s=>s.id===rule.from),next=station+1;

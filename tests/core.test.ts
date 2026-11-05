@@ -22,6 +22,7 @@ import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET } from '../src/sim/calibration';
 import { doorMotionTick } from '../src/sim/psd';
 import { makeSim } from './helpers';
 import { reversedBerthPoint, safeWaitingPoint } from '../src/sim/topology';
+import { fixtureTrain, fixtureTrains, fixtureTrainWhere } from './helpers/fixture-train';
 
 const make = () => new Sim({ dayType: 'weekday', dateLabel: 'core', startTime: 14400, seed: 7, noPossessions: true });
 const advance = (sim: Sim, seconds: number) => { const end = sim.t + seconds; while (sim.t < end - 1e-6) sim.step(); };
@@ -40,7 +41,7 @@ const depotApproach = (sim: Sim, depot = 0) => {
 describe('ATO interval departure metering', () => {
   const fixture = (dir: 'DN' | 'UP' = 'DN') => {
     const sim = make(); advance(sim, 1);
-    const [rear, front] = sim.trainList;
+    const [rear, front] = fixtureTrains(sim, 2);
     for (const tr of [...sim.trainList]) if (tr !== rear && tr !== front) sim.removeTrain(tr);
     const station = sim.topo.stations.find(s => s.id === (dir === 'DN' ? 'NJD' : 'LJZ'))!.index;
     const next = station + (dir === 'DN' ? 1 : -1);
@@ -157,7 +158,7 @@ describe('depot berth selection before the first entry route',()=>{
   const arbitratedDesire=(sim:Sim,tr:Train)=>{arbitrateResources(sim);return trainDesire(sim,tr);};
   const fixture=(remote=false)=>{
     const sim=make();advance(sim,1);
-    const [rear,turning,other]=sim.trainList;
+    const [rear,turning,other]=fixtureTrains(sim, 3);
     for(const tr of [...sim.trainList])if(![rear,turning,other].includes(tr))sim.removeTrain(tr);
     for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
     sim.berthRes.clear();sim.resourceTransit.clear();for(const block of sim.plan.blocks)sim.blockDone.add(block.id);sim.t=7.95*3600;
@@ -215,7 +216,7 @@ describe('depot berth selection before the first entry route',()=>{
     expect(sim.routes.has(branch.id)).toBe(true);
   });
   it('protects the occupied reversal platform ahead of an unused opposite-platform depot booking',()=>{
-    const sim=make();advance(sim,1);const [waiting,booked]=sim.trainList;
+    const sim=make();advance(sim,1);const [waiting,booked]=fixtureTrains(sim, 2);
     for(const tr of [...sim.trainList])if(tr!==waiting&&tr!==booked)sim.removeTrain(tr);
     for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
     sim.berthRes.clear();sim.resourceTransit.clear();for(const block of sim.plan.blocks)sim.blockDone.add(block.id);const yard=sim.topo.depots[2],goal=yard.entryBerths[0];
@@ -237,7 +238,7 @@ describe('depot berth selection before the first entry route',()=>{
     expect(sim.sig[booked.nextSignal].route).toBe(-1);
   });
   it('does not let a following return book the empty lead against the train physically ahead',()=>{
-    const sim=make();advance(sim,1);const [front,rear]=sim.trainList;
+    const sim=make();advance(sim,1);const [front,rear]=fixtureTrains(sim, 2);
     for(const tr of [...sim.trainList])if(tr!==front&&tr!==rear)sim.removeTrain(tr);
     for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
     sim.berthRes.clear();sim.resourceTransit.clear();for(const block of sim.plan.blocks)sim.blockDone.add(block.id);const yard=sim.topo.depots[1],goal=yard.entryBerths[0];
@@ -304,7 +305,7 @@ describe('dispatcher boundary', () => {
 
 describe('movement and radio regressions', () => {
   it('admits a front turn to its safe platform and holds its ordinary departure behind the same exit occupant', () => {
-    const sim = make(); advance(sim,2); const [tr,other] = sim.trainList;
+    const sim = make(); advance(sim,2); const [tr,other] = fixtureTrains(sim, 2);
     for (const train of [...sim.trainList]) if (train !== tr && train !== other) sim.removeTrain(train);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -387,7 +388,7 @@ describe('movement and radio regressions', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it.each(['CBTC', 'TBTC'] as const)('revalidates the sighting scan immediately when RM ends into %s', level => {
-    const sim = make(); advance(sim,2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim,2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
     const { link: entry } = depotApproach(sim);
@@ -406,7 +407,7 @@ describe('movement and radio regressions', () => {
     checkSafety(sim); expect(sim.integrity.violations).toHaveLength(0);
   });
   it('follows occupancy behind a red signal even when the desired route is already set', () => {
-    const sim = make(); advance(sim,2); const [tr,other] = sim.trainList;
+    const sim = make(); advance(sim,2); const [tr,other] = fixtureTrains(sim, 2);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
     const { signal, link: entry } = depotApproach(sim);
     const rid = sim.routeTable.next.get(sim.topo.depots[0].berth)![signal.id], route = sim.topo.routes[rid];
@@ -427,7 +428,7 @@ describe('movement and radio regressions', () => {
     expect(sim.sig[signal.id].route).toBe(rid);
   });
   it('retains the live blocker while cancellation of an occupied route is refused', () => {
-    const sim = make(); advance(sim,2); const [tr,other] = sim.trainList;
+    const sim = make(); advance(sim,2); const [tr,other] = fixtureTrains(sim, 2);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
     const { signal, link } = depotApproach(sim);
     const wanted = sim.routeTable.next.get(sim.topo.depots[0].berth)![signal.id];
@@ -479,7 +480,7 @@ describe('movement and radio regressions', () => {
     advance(sim, 5); expect(sim.integrity.violations).toHaveLength(0);
   });
   it('never exempts an issued-MA overrun merely because EB and withdrawal are active', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     tr.phase = 'run'; tr.eb = true; tr.maCut = true; tr.lastMa = 10; tr.lastDs = 11;
     checkSafety(sim);
     expect(sim.integrity.violations.some(v => v.kind === 'BEYOND_MA')).toBe(true);
@@ -508,8 +509,7 @@ describe('movement and radio regressions', () => {
   });
   it('revalidates a stopped train authority on departure between ZC refreshes', () => {
     const sim = make(); advance(sim, 2);
-    const tr = sim.trainList.find(t => t.tasks[0]?.k === 'stop')!;
-    expect(tr).toBeDefined();
+    const tr = fixtureTrainWhere(sim, t => t.tasks[0]?.k === 'stop');
     tr.phase = 'dwell'; tr.v = 0; tr.doorsOpen = false; tr.dwellUntil = sim.t - 1;
     tr.maDist = tr.maFar = 99000;
     sim.step();
@@ -518,7 +518,7 @@ describe('movement and radio regressions', () => {
     expect(sim.integrity.violations.filter(v => v.kind === 'MA_NO_ROUTE')).toHaveLength(0);
   });
   it('keeps the nearest train route when a farther route is still occupied by a preceding train', () => {
-    const sim = make(); advance(sim, 2); const [front, rear, preceding] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [front, rear, preceding] = fixtureTrains(sim, 3);
     for (const other of [...sim.trainList]) if (![front,rear,preceding].includes(other)) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -552,7 +552,7 @@ describe('movement and radio regressions', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it('gives the physical front train a shared route despite the rear train earlier plan', () => {
-    const sim = make(); advance(sim, 2); const [front, rear] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [front, rear] = fixtureTrains(sim, 2);
     for (const other of [...sim.trainList]) if (other !== front && other !== rear) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     // the UP platform departure signal at 淞虹路: its first route (towards 虹桥2号航站楼) crosses a point
@@ -595,7 +595,7 @@ describe('movement and radio regressions', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it('never lets auto-answer grant RM or consume a refused call', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     const call = openCall(sim, { kind: 'stuck', from: 'driver', train: tr.id, text: 'test',
       options: [{ key: 'rm', label: 'RM' }, { key: 'wait', label: 'wait' }], auto: 'wait', timeout: 120 })!;
     expect(answerCall(sim, call.id, 'rm', true).ok).toBe(false);
@@ -605,7 +605,7 @@ describe('movement and radio regressions', () => {
     expect(call.state).toBe('ringing');
   });
   it('refuses authority towards a preceding train even under a signal failure', () => {
-    const sim = make(); advance(sim, 2); const [tr, ahead] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [tr, ahead] = fixtureTrains(sim, 2);
     // the other train sits just ahead of tr in tr's own running direction
     sim.linkBodies.set(tr.link, [tr.dir === 1 ? { train: ahead.id, from: tr.off + 1, to: tr.off + 20 } : { train: ahead.id, from: tr.off - 20, to: tr.off - 1 }]);
     expect(unsafeAhead(sim, tr)).toContain('列车');
@@ -613,7 +613,7 @@ describe('movement and radio regressions', () => {
     expect(sim.command({ c: 'authRM', train: tr.id }).ok).toBe(false);
   });
   it.each([false, true])('an already-RM train reports and sweeps a preset block (coupled=%s)', coupled => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
     const sig = sim.topo.signals.find(s => s.name === 'S0802')!;
@@ -643,7 +643,7 @@ describe('movement and radio regressions', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it('locks a guide path and sweeps a preset that prevented ARS from setting the route', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -679,14 +679,16 @@ describe('occupied-route rescue',()=>{
     ['S2402→S2322',false],['S2402→S2322',true],
     ['S0102→尽头(侧向)',false],['S0102→尽头(侧向)',true],
   ] as const)('admits only the assigned rescuer and retains locks through coupling (%s, preset=%s)',(name,preset)=>{
-    const sim=make();advance(sim,2);const [rescuer,failed]=sim.trainList;
+    const sim=make();advance(sim,2);const [rescuer,failed]=fixtureTrains(sim, 2);
     for(const other of [...sim.trainList])if(other!==rescuer&&other!==failed)sim.removeTrain(other);
     for(const id of [...sim.routes.keys()])releaseRoute(sim,id);
     for(const block of sim.plan.blocks)sim.blockDone.add(block.id);
     rescuer.tasks=[];failed.tasks=[];rescuer.hold=failed.hold=true;
     const route=sim.topo.routes.find(r=>r.name===name)!;
     const signal=sim.topo.signals[route.start];
+    // (D178: no train came in overnight, so the points may still have to be thrown)
     expect(trySetRoute(sim,route.id,{train:failed.id}).ok).toBe(true);advance(sim,5);
+    for(let i=0;i<30&&route.switches.some(({sw,pos})=>sim.sw[sw].pos!==pos);i++)advance(sim,1);
     const entry=sim.topo.links.find(l=>l.a===signal.node&&l.track==='UP')!;
     rescuer.link=entry.id;rescuer.off=6.1;rescuer.dir=-1;rescuer.hist=[{link:entry.id,dir:-1}];
     let remaining=250,index=0;
@@ -733,7 +735,7 @@ describe('occupied-route rescue',()=>{
 
 describe('multiple-failure maintenance escalation', () => {
   function fixture(coupled: boolean) {
-    const sim = make(); advance(sim,2); const [rescuer,failed] = sim.trainList;
+    const sim = make(); advance(sim,2); const [rescuer,failed] = fixtureTrains(sim, 2);
     for (const other of [...sim.trainList]) if (other !== rescuer && other !== failed) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -753,7 +755,8 @@ describe('multiple-failure maintenance escalation', () => {
     setMode(sim,rescuer,'RM','CBTC','test'); indexBodies(sim);
     sim.command({c:'fault',kind:'trainFail',target:failed.id,duration:0,recoverable:false});
     advance(sim,30);
-    return {sim,failed,rescuer,fault:sim.faults[0]};
+    // (the fixture's run-up may have raised other faults first)
+    return {sim,failed,rescuer,fault:sim.faults.find(f=>f.kind==='trainFail'&&f.target===failed.id)!};
   }
   it('keeps ordinary failures on the rescue path', () => {
     const {sim,failed,rescuer,fault} = fixture(false);
@@ -774,7 +777,7 @@ describe('multiple-failure maintenance escalation', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it('repairs a failed train straddling the scissors without moving a point beneath it, then restores its original cab',()=>{
-    const sim=make();advance(sim,2);const [failed,rescuer]=sim.trainList;
+    const sim=make();advance(sim,2);const [failed,rescuer]=fixtureTrains(sim, 2);
     for(const other of [...sim.trainList])if(other!==failed&&other!==rescuer)sim.removeTrain(other);
     for(const id of [...sim.routes.keys()])releaseRoute(sim,id);
     for(const block of sim.plan.blocks)sim.blockDone.add(block.id);
@@ -821,7 +824,7 @@ describe('paper-based turnback and depot procedures', () => {
   // 蟠祥路 no longer has terminal tails to turn back on (its turnback is the PXL1/PXL2 middle tracks and the two
   // main-line tails are storage only), so the physical-tail rule is checked on both 浦东1号2号航站楼 tails.
   it.each([[30, 1], [30, 0]])('keeps a coupled rescue on its physical terminal tail (station %s, tail %s)', (station, physicalIndex) => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -848,7 +851,7 @@ describe('paper-based turnback and depot procedures', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it('returns a rescue coupled at the western terminal to depot without fouling its tail crossover', () => {
-    const sim = make(); advance(sim, 2); const [tr, failed] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [tr, failed] = fixtureTrains(sim, 2);
     for (const other of [...sim.trainList]) if (other !== tr && other !== failed) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -874,7 +877,7 @@ describe('paper-based turnback and depot procedures', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it.each(['manual','none'] as const)('rescues an opposing failed terminal-tail train without selecting its parallel tail neighbour (stage=%s)', stage => {
-    const sim = make(); advance(sim, 2); const [tr, failed, parallel] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [tr, failed, parallel] = fixtureTrains(sim, 3);
     for (const other of [...sim.trainList]) if (![tr, failed, parallel].includes(other)) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -921,28 +924,10 @@ describe('paper-based turnback and depot procedures', () => {
     for (const vehicle of vehicles) expect(sim.yards.some(y => y.tracks.some(track => track.includes(vehicle)))).toBe(true);
     expect(sim.integrity.violations).toHaveLength(0);
   });
-  it('holds a CBTC train inside the tail until a complete pull-out path is locked', () => {
-    const sim = make(); advance(sim, 2);
-    const berth = sim.topo.berths[sim.topo.stations[0].turnbackBerths[0]];
-    // (the train stabled there overnight: one moved in from elsewhere would keep its old authority)
-    const tr = sim.trainList.find(t => t.link === berth.link) ?? sim.trainList[0];
-    for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
-    const platform = sim.topo.berths.find(b => b.station === 0 && b.kind === 'platform' && b.dir === 1)!;
-    tr.link = berth.link; tr.off = berth.offset; tr.dir = berth.dir; tr.hist = [{ link: berth.link, dir: berth.dir }];
-    tr.v = 0; tr.phase = 'reversing'; tr.dwellUntil = sim.t; tr.tbStage = 'arrive'; tr.block = -1; tr.tripId = -1;
-    tr.tasks = [{ k: 'reverse', berths: [berth.id], chosen: berth.id, station: 0, minTime: 0 },
-      { k: 'stop', berth: platform.id, station: 0, trip: -1, arr: null, dep: sim.t + 300, doors: false, revenue: false }];
-    computeBody(sim, tr); indexBodies(sim); checkSafety(sim); tr.tbStage = 'reverse'; checkSafety(sim);
-    for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
-    for (const signal of sim.sig) signal.ars = false;
-    sim.step(); const point = { link: tr.link, off: tr.off }; advance(sim, 20);
-    expect(tr.tbStage).toBe('depart'); expect(tr.v).toBe(0);
-    expect({ link: tr.link, off: tr.off }).toEqual(point);
-    expect(tr.maDist).toBe(0); expect(tr.eb).toBe(false);
-    expect(sim.integrity.violations).toHaveLength(0);
-  });
+  // ('holds a CBTC train inside the tail until a complete pull-out path is locked'
+  // moved to midline-storage.test.ts in D178: it needs a train stabled there overnight)
   it('protects the reverse-platform arrival before the cab-change task starts and refuses TBTC', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     const r = sim.topo.routes.find(r => r.wrongDir && r.berths.some(b => sim.topo.berths[b].kind === 'platform' && sim.topo.berths[b].reverse))!;
     const berth = r.berths.find(b => sim.topo.berths[b].kind === 'platform' && sim.topo.berths[b].reverse)!;
     tr.tasks = [{ k: 'stop', berth, station: sim.topo.berths[berth].station, trip: -1, arr: null, dep: null, doors: false, revenue: false }];
@@ -978,7 +963,7 @@ describe('paper-based turnback and depot procedures', () => {
     expect(distance).toBeLessThanOrEqual(before + terminal.length);
   });
   it('does not apply reverse-interval TD protection to an ordinary terminal tail move', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     const r = sim.topo.routes.find(r => r.wrongDir && r.berths.some(b => sim.topo.berths[b].kind === 'tail'))!;
     const tail = r.berths.find(b => sim.topo.berths[b].kind === 'tail')!;
     tr.tasks = [{ k: 'reverse', berths: [tail], chosen: tail, station: 0, minTime: 40 }];
@@ -988,7 +973,7 @@ describe('paper-based turnback and depot procedures', () => {
     expect(r.sections.some(s => sim.sec[s].directionEsp)).toBe(false);
   });
   it('rebinds an already locked pull-out route and clears protection only after cab change and platform clearance', () => {
-    const sim = make(); advance(sim, 2); const [tr, other] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [tr, other] = fixtureTrains(sim, 2);
     const goal = sim.topo.berths.find(b => b.kind === 'platform' && b.station === 0 && b.dir === 1)!;
     const r = sim.topo.routes.find(r => r.berths.includes(goal.id))!;
     for (const id of [...sim.routes.keys()]) releaseRoute(sim, id);
@@ -1024,7 +1009,7 @@ describe('paper-based turnback and depot procedures', () => {
     const sim = make(); advance(sim, 2); sim.autoRadio = false;
     const station = sim.topo.stations[0];
     const berth = sim.topo.berths[station.turnbackBerths[0]];
-    const tr = sim.trainList.find(t => t.link === berth.link) ?? sim.trainList[0];
+    const tr = sim.trainList.find(t => t.link === berth.link) ?? fixtureTrain(sim);
     const platform = sim.topo.berths.find(b => b.station === 0 && b.kind === 'platform' && b.dir === 1)!;
     tr.link = berth.link; tr.off = berth.offset; tr.dir = berth.dir; tr.hist = [{ link: berth.link, dir: berth.dir }];
     // This fixture starts after the driver's change of ends; it exercises the signal/RM procedure.
@@ -1050,7 +1035,7 @@ describe('paper-based turnback and depot procedures', () => {
 
 describe('withdrawal approach continuity', () => {
   it('clears passengers before choosing a forward turnback after leaving 淞虹路', () => {
-    const sim = make(); advance(sim,2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim,2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -1079,7 +1064,7 @@ describe('withdrawal approach continuity', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it.each(['BZL', 'LYD', 'CSD'])('preserves an entered %s depot path during recovery and repeated withdrawal', key => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim, id);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -1106,7 +1091,7 @@ describe('withdrawal approach continuity', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it('goes straight to the tail when an empty terminal train has already departed its clear-out mark', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     const berth = sim.topo.berths[platformBerth(sim.topo, 0, 'UP')];
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim,id);
@@ -1133,7 +1118,7 @@ describe('withdrawal approach continuity', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   it('keeps the normal clear-out platform when the depot is behind a moving train', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     const berth = sim.topo.berths[platformBerth(sim.topo, 2, 'UP')];
     tr.link = berth.link; tr.off = sim.topo.links[berth.link].len - 1; tr.dir = -1;
     tr.hist = [{link:tr.link,dir:-1}]; tr.phase = 'run'; tr.v = 3;
@@ -1151,7 +1136,7 @@ describe('withdrawal approach continuity', () => {
 
 describe('depot selection after clear-out', () => {
   it('does not choose a depot entrance before the passenger clear-out station', () => {
-    const sim = make(); advance(sim,2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim,2); const tr = fixtureTrain(sim);
     const link = sim.topo.links.find(l=>l.track==='UP'&&l.chainA<33510&&l.chainB>33510)!;
     tr.link=link.id;tr.off=33510-link.chainA;tr.dir=-1;tr.hist=[{link:tr.link,dir:-1}];
     tr.phase='run';tr.inService=true;tr.lastStation=20;tr.v=3;computeBody(sim,tr);indexBodies(sim);
@@ -1175,7 +1160,7 @@ describe('depot selection after clear-out', () => {
 
 describe('fault recovery service regulation', () => {
   const fixture = () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -1479,7 +1464,7 @@ describe('state-machine contracts', () => {
   it('refuses moving degradation and unauthorised EB release', () => {
     const sim = make();
     advance(sim, 2);
-    const tr = sim.trainList[0];
+    const tr = fixtureTrain(sim);
     expect(tr).toBeDefined();
     tr.v = 10;
     expect(allowed(sim, MODE, 'DTO-C', 'AM-T', tr).ok).toBe(false);
@@ -1490,7 +1475,7 @@ describe('state-machine contracts', () => {
   });
   it('raises an A-level alarm with a snapshot for an illegal transition', () => {
     const sim = make(); advance(sim, 2);
-    const tr = sim.trainList[0];
+    const tr = fixtureTrain(sim);
     checkSafety(sim);
     tr.mode = 'DTO'; tr.level = 'TBTC'; // no such state (DTO needs CBTC)
     checkSafety(sim);
@@ -1516,7 +1501,7 @@ describe('safety review fixes', () => {
     };
   }
   it('refuses a desk EB release after a SPAD; only the SPAD procedure releases it', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     tr.v = 0; applyEB(sim, tr, 'test SPAD', 'spad');
     expect(ebCauseCleared(sim, tr)).toBe(false);
     const desk = sim.command({ c: 'ebRelease', train: tr.id });
@@ -1526,7 +1511,7 @@ describe('safety review fixes', () => {
     expect(tr.eb).toBe(true);
   });
   it('refuses a plain EB release while the comm-loss cause persists under CBTC', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     tr.v = 0; tr.comm = false; tr.level = 'CBTC'; applyEB(sim, tr, 'test comm', 'comm');
     expect(sim.command({ c: 'ebRelease', train: tr.id }).ok).toBe(false);
     expect(tr.eb).toBe(true);
@@ -1535,7 +1520,7 @@ describe('safety review fixes', () => {
     expect(tr.eb).toBe(false);
   });
   it('raises one A-level alarm per violation instance and suppresses only identical repeats', () => {
-    const sim = make(); advance(sim, 2); const [a, b] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [a, b] = fixtureTrains(sim, 2);
     violate(sim, 'OVERSPEED', [a.id], 'x 1');
     violate(sim, 'OVERSPEED', [a.id], 'x 2');
     violate(sim, 'OVERSPEED', [b.id], 'y 1');
@@ -1548,14 +1533,14 @@ describe('safety review fixes', () => {
     expect(alarms.every(e => e.level === 'A')).toBe(true);
   });
   it('checks a rescue pair for overlap except couplers in contact while coupling', () => {
-    const sim = make(); advance(sim, 2); const [rescuer, failed] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [rescuer, failed] = fixtureTrains(sim, 2);
     for (const other of [...sim.trainList]) if (other !== rescuer && other !== failed) sim.removeTrain(other);
     const place = line(sim);
     place(failed, 56000); place(rescuer, 56000 + failed.len - 3);
     rescuer.rescuing = failed.id; failed.rescueBy = rescuer.id; indexBodies(sim);
     checkSafety(sim);
     expect(sim.integrity.violations.map(v => v.kind)).toContain('OVERLAP');
-    const sim2 = make(); advance(sim2, 2); const [r2, f2] = sim2.trainList;
+    const sim2 = make(); advance(sim2, 2); const [r2, f2] = fixtureTrains(sim2, 2);
     for (const other of [...sim2.trainList]) if (other !== r2 && other !== f2) sim2.removeTrain(other);
     const place2 = line(sim2);
     place2(f2, 56000); place2(r2, 56000 + f2.len - 0.5);
@@ -1564,14 +1549,14 @@ describe('safety review fixes', () => {
     expect(sim2.integrity.violations).toHaveLength(0);
   });
   it('checks an automatic rescue RM approach against its authority', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     tr.phase = 'run'; tr.mode = 'RM'; tr.manual = false; tr.rescuing = 99;
     tr.lastMa = 2; tr.lastDs = 3;
     checkSafety(sim);
     expect(sim.integrity.violations.map(v => v.kind)).toContain('BEYOND_MA');
   });
   it('grants rescue RM only when the failed train itself withholds the authority', () => {
-    const sim = make(); advance(sim, 2); const [rescuer, blocker, failed] = sim.trainList;
+    const sim = make(); advance(sim, 2); const [rescuer, blocker, failed] = fixtureTrains(sim, 3);
     for (const other of [...sim.trainList]) if (![rescuer, blocker, failed].includes(other)) sim.removeTrain(other);
     const place = line(sim);
     place(failed, 56000); place(blocker, 56250); place(rescuer, 56500);
@@ -1710,7 +1695,7 @@ describe('audit hardening (D54)', () => {
 
 describe('ARS rule conflicts', () => {
   it('creeps the last five metres to a stop within its short red-signal authority, opens and resumes', () => {
-    const sim = make(); advance(sim, 2); const tr = sim.trainList[0];
+    const sim = make(); advance(sim, 2); const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
     for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
@@ -1733,7 +1718,7 @@ describe('ARS rule conflicts', () => {
     expect(sim.integrity.violations).toHaveLength(0);
   });
   const sharedLead = () => {
-    const sim=make();advance(sim,2);const [exit,arrival]=sim.trainList;
+    const sim=make();advance(sim,2);const [exit,arrival]=fixtureTrains(sim, 2);
     for(const other of [...sim.trainList])if(other!==exit&&other!==arrival)sim.removeTrain(other);
     for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
     sim.resourceTransit.clear();for(const block of sim.plan.blocks)sim.blockDone.add(block.id);
@@ -1772,7 +1757,7 @@ describe('ARS rule conflicts', () => {
 });
 
 it('the applicant relinquishes an unused reservation when a physical front train needs another route',()=>{
-  const sim=make();advance(sim,2);const [front,rear]=sim.trainList;
+  const sim=make();advance(sim,2);const [front,rear]=fixtureTrains(sim, 2);
   for(const other of [...sim.trainList])if(other!==front&&other!==rear)sim.removeTrain(other);
   for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
   const {signal,link}=depotApproach(sim),depot=sim.topo.depots[0],goal=platformBerth(sim.topo,3,'UP');
@@ -1793,7 +1778,7 @@ it('the applicant relinquishes an unused reservation when a physical front train
 describe('whole-movement halt reason scope', () => {
   const stoppedAtEntry = () => {
     const sim = make(); advance(sim, 2);
-    const tr = sim.trainList[0];
+    const [tr, other] = fixtureTrains(sim, 2);
     const route = sim.topo.routes.find(r => r.start !== r.end && r.end >= 0 && sim.topo.signals[r.end].routes.length)!;
     expect(route).toBeDefined();
     Object.assign(tr, { phase: 'run', v: 0, eb: false, pendingMode: null, stopUntil: 0,
@@ -1801,7 +1786,7 @@ describe('whole-movement halt reason scope', () => {
       reverser: 1, retreat: null, maDist: 0, maCode: 'ROUTE_WAIT', maTrain: -1,
       maReason: '信号/进路未开放', nextSignal: route.start, stopDist: Infinity });
     sim.sig[route.start].ars = true;
-    return { sim, tr, entrance: route.start, downstream: route.end };
+    return { sim, tr, other, entrance: route.start, downstream: route.end };
   };
 
   it('retains a fresh downstream device cause within the current complete-movement entrance', () => {
@@ -1842,12 +1827,12 @@ describe('whole-movement halt reason scope', () => {
   });
 
   it.each(['ROUTE_WAIT', 'ROUTE_MISMATCH'] as const)('merges %s into the same ARS cause during manual driving without a traction hold', code => {
-    const { sim, tr, entrance } = stoppedAtEntry();
+    const { sim, tr, other, entrance } = stoppedAtEntry();
     tr.manual = true; tr.maCode = code;
-    tr.arsWait = { code: 'REGULATION', train: sim.trainList[1].id, signal: entrance,
+    tr.arsWait = { code: 'REGULATION', train: other.id, signal: entrance,
       t: sim.t, detail: '按图先发列车先进入始发站台' };
     updateHalts(sim);
-    expect(tr.halt).toMatchObject({ code: 'REGULATION', train: sim.trainList[1].id,
+    expect(tr.halt).toMatchObject({ code: 'REGULATION', train: other.id,
       detail: '按图先发列车先进入始发站台' });
   });
 

@@ -11,6 +11,7 @@ import { collectResourceRequests } from '../src/sim/resourceArbitration';
 import { recordTransition } from '../src/sim/invariants';
 import { TURNBACK } from '../src/sim/fsm';
 import { openDoors } from '../src/sim/psd';
+import { fixtureTrain } from './helpers/fixture-train';
 
 function primeDepart(sim:Sim,train:ReturnType<typeof newTrain>) {
   for (const [from,to] of [['none','arrive'],['arrive','reverse'],['reverse','depart']] as const) {
@@ -246,7 +247,7 @@ describe('fixed depot work', () => {
   it('carries remaining fixed work across the operating-day boundary', () => {
     const from=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'carry-work',startTime:14400,seed:7,noPossessions:true});
     const next=new Sim({dayType:'weekday',date:'2026-10-20',dateLabel:'carry-work-next',startTime:14400,seed:8,noPossessions:true});
-    const train=from.trainList[0];for(const other of [...from.trainList])if(other!==train)from.removeTrain(other);
+    const train=fixtureTrain(from);for(const other of [...from.trainList])if(other!==train)from.removeTrain(other);
     const depot=from.topo.depots.find(d=>d.key==='CSD')!,path=depot.transferPaths.find(p=>p.exitWorkBerth!==undefined)!;
     const berth=from.topo.berths[path.exitWorkBerth!];from.t=DAY_S+13500;
     const work:StopTask={k:'stop',berth:berth.id,station:depot.station,trip:-1,arr:null,dep:null,doors:false,revenue:false,
@@ -263,7 +264,7 @@ describe('fixed depot work', () => {
   });
   it.each([true,false])('protects the full platform-to-depot turn after work (turn chosen: %s)', chosen => {
     const sim=new Sim({dayType:'weekday',dateLabel:'work-turn-admission',startTime:14400,seed:7,noPossessions:true});
-    const train=sim.trainList[0];for(const other of [...sim.trainList])if(other!==train)sim.removeTrain(other);
+    const train=fixtureTrain(sim);for(const other of [...sim.trainList])if(other!==train)sim.removeTrain(other);
     for(const block of sim.plan.blocks)sim.blockDone.add(block.id);sim.resourceTransit.clear();
     const depot=sim.topo.depots.find(d=>d.key==='LYD')!,berth=sim.topo.berths[platformBerth(sim.topo,depot.station,'UP')];
     const tasks:Task[]=[{k:'stop',berth:berth.id,station:depot.station,trip:-1,arr:null,dep:null,doors:true,revenue:true}];
@@ -281,7 +282,7 @@ describe('fixed depot work', () => {
   });
   it('finishes a previous turn before fixed work and permits the next depot turn', () => {
     const sim=new Sim({dayType:'weekday',dateLabel:'work-after-turn',startTime:14400,seed:7,noPossessions:true});
-    const train=sim.trainList[0];for(const other of [...sim.trainList])if(other!==train)sim.removeTrain(other);
+    const train=fixtureTrain(sim);for(const other of [...sim.trainList])if(other!==train)sim.removeTrain(other);
     const depot=sim.topo.depots.find(d=>d.key==='LYD')!,tasks:Task[]=[];depotTasks(sim.topo,depot.id,'UP',tasks);
     const work=tasks[0];if(work.k!=='stop'||!work.depotWork)throw Error('missing work stop');
     const berth=sim.topo.berths[work.berth];
@@ -314,7 +315,7 @@ describe('fixed depot work', () => {
   });
   it('still releases the platform boundary before a later ordinary departure after same-platform work', () => {
     const sim=new Sim({dayType:'weekday',dateLabel:'work-turn-boundary',startTime:14400,seed:7,noPossessions:true});
-    const train=sim.trainList[0];for(const other of [...sim.trainList])if(other!==train)sim.removeTrain(other);
+    const train=fixtureTrain(sim);for(const other of [...sim.trainList])if(other!==train)sim.removeTrain(other);
     for(const block of sim.plan.blocks)sim.blockDone.add(block.id);sim.resourceTransit.clear();
     const plans=sim.plan.blocks.map(b=>blockTasks(sim.topo,sim.plan,b));
     const selected=plans.flatMap(tasks=>tasks.flatMap((t,i)=>t.k==='reverse'&&i>0&&tasks[i-1]?.k==='stop'

@@ -14,8 +14,23 @@ it('keeps a future tail call-out after a real operating-day carry', async () => 
   const model = await import('../src/sim/model');
   const old = new Sim({ dayType: 'weekend', date: '2026-10-24', dateLabel: 'crossday-wait',
     startTime: 14400, seed: 14201, noPossessions: true, randomFaults: 0, autoDispatch: false });
-  const arrival = old.plan.trips.find(t => t.no === '0001')!;
-  const departure = old.plan.trips.find(t => t.no === '1004')!;
+  // D178: duty pairs come from the terminal pools, so the day's first turn
+  // through a tail or siding is found by its shape.
+  const pair = old.plan.blocks.flatMap(block => {
+    const trips = block.trips.map(id => old.plan.trips[id]).filter(t => !t.cancelled);
+    const list = timetable.blockTasks(old.topo, old.plan, block);
+    return trips.slice(1).flatMap((d, i) => {
+      const a = trips[i];
+      if (a.to !== d.from || a.dir === d.dir) return [];
+      const e = list.findIndex(t => t.k === 'stop' && t.trip === a.id && t.station === a.to);
+      const r = list.findIndex((t, j) => j > e && t.k === 'reverse');
+      const rev = list[r], after = list[r + 1];
+      if (e < 0 || rev?.k !== 'reverse' || after?.k !== 'stop' || after.trip !== d.id) return [];
+      return ['tail', 'siding'].includes(old.topo.berths[rev.chosen].kind) ? [{ a, d }] : [];
+    });
+  }).sort((x, y) => x.a.stops.at(-1)!.arr - y.a.stops.at(-1)!.arr)[0];
+  expect(pair).toBeDefined();
+  const arrival = pair!.a, departure = pair!.d;
   const block = old.plan.blocks[departure.block];
   expect(block.trips.indexOf(departure.id)).toBe(block.trips.indexOf(arrival.id) + 1);
 

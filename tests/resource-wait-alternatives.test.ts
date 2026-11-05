@@ -11,10 +11,11 @@ import { carryTrains, DAY_S } from '../src/sim/operatingDay';
 import { platformBerth } from '../src/sim/timetable';
 import { parseDiagnostics, stringifyDiagnostics, topologySignature } from '../src/sim/diagnostics';
 import { runARS } from '../src/sim/ats';
+import { fixtureTrains } from './helpers/fixture-train';
 
 function fixture() {
   const sim = new Sim({ dayType: 'weekday', date: '2026-10-19', dateLabel: 'test', startTime: 14400, seed: 7, noPossessions: true });
-  const [a, b, c] = sim.trainList;
+  const [a, b, c] = fixtureTrains(sim, 3);
   expect(c).toBeDefined();
   for (const tr of [...sim.trainList]) if (![a, b, c].includes(tr)) sim.removeTrain(tr);
   for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);

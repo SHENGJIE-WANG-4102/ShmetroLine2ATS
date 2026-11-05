@@ -20,13 +20,14 @@ import { arbitrateResources, collectResourceRequests, routePhysicalPredecessors,
 import { blockTasks, depotTasks } from '../src/sim/timetable';
 import { reversedBerthPoint, downstreamTerminal, orderedStations, safeWaitingPoint, buildTopology, linkChain, travelDirection, type Dir, type Topology } from '../src/sim/topology';
 import { profileOf, chainSense, gradeAccelAt, G, type Profile } from '../src/sim/gradient';
+import { fixtureTrains } from './helpers/fixture-train';
 
 let checkpoint: Checkpoint | undefined;
 function fixture(keepThird = false) {
   const sim = new Sim({dayType:'weekday', date:'2026-10-19', dateLabel:'roots', startTime:14400, seed:7, noPossessions:true});
   if (checkpoint) restore(sim, checkpoint);
   else { for (let i=0;i<20;i++) sim.step(); checkpoint=capture(sim); }
-  const [front, rear, third] = sim.trainList;
+  const [front, rear, third] = fixtureTrains(sim, 3);
   for (const tr of [...sim.trainList]) if (tr !== front && tr !== rear && !(keepThird && tr === third)) sim.removeTrain(tr);
   for (const rid of [...sim.routes.keys()]) releaseRoute(sim,rid);
   for (const b of sim.plan.blocks) sim.blockDone.add(b.id);
@@ -34,8 +35,9 @@ function fixture(keepThird = false) {
   const signal=sim.topo.signals.find(s=>s.station===sim.topo.depots[0].station && s.role==='start' && s.dir===-1 && sim.topo.links[s.link].track==='UP')!;
   const link=sim.topo.links.find(l=>l.a===signal.node && l.track==='UP')!;
   for (const [tr,off] of [[front,6.1],[rear,Math.min(212.1,link.len-.1)]] as const) {
+    // (D178: the fixture cars come out of a yard; they stand here as plain line trains)
     Object.assign(tr,{link:link.id,off,dir:-1,hist:[{link:link.id,dir:-1}],v:0,a:0,eb:false,phase:'run',block:-1,tripId:-1,
-      nextSignal:signal.id,nextSignalDist:off,stopDist:Infinity,maSigs:[],lastDs:0,lastMa:Infinity});
+      nextSignal:signal.id,nextSignalDist:off,stopDist:Infinity,maSigs:[],lastDs:0,lastMa:Infinity,depotStage:'none',tbStage:'none'});
     computeBody(sim,tr);
   }
   front.tasks=[{k:'stop',berth:platformBerth(sim.topo,3,'UP'),station:3,trip:-1,arr:sim.t+100,dep:null,doors:false,revenue:false}];
@@ -724,7 +726,7 @@ describe('whole-movement resource admission', () => {
     const { sim } = fixture();
     for (const train of [...sim.trainList]) sim.removeTrain(train);
     const block = sim.plan.blocks.find(b => {
-      if (b.start.kind !== 'depot') return false;
+      if (b.start.kind !== 'depot' || b.train !== undefined) return false;
       const first = sim.plan.trips[b.trips[0]], dp = sim.topo.depots[b.start.depot];
       return dp.portals.exit[first.dir].reverse && dp.transferPaths[dp.portals.exit[first.dir].path].flow === 'shared';
     })!;
@@ -751,10 +753,12 @@ describe('whole-movement resource admission', () => {
 
   it('separates a whole-platform cab change from its later ordinary departure window', () => {
     const { sim, front, rear } = fixture(); sim.removeTrain(rear); sim.resourceTransit.clear();
+    // a station's own turnback platform (D178: a pool duty may also turn over a crossover onto a through platform)
+    const whole = (t: (ReturnType<typeof blockTasks>)[number]) => t.k === 'reverse' && sim.topo.berths[t.chosen].kind === 'platform'
+      && sim.topo.stations[sim.topo.berths[t.chosen].station].turnbackBerths.includes(t.chosen);
     const tasks = sim.plan.blocks.map(b => blockTasks(sim.topo, sim.plan, b)).find(tasks => tasks.some((t, i) =>
-      t.k === 'reverse' && sim.topo.berths[t.chosen].kind === 'platform'
-      && tasks[i + 1]?.k === 'stop' && tasks[i + 2]?.k === 'stop'))!;
-    const index = tasks.findIndex(t => t.k === 'reverse' && sim.topo.berths[t.chosen].kind === 'platform');
+      whole(t) && tasks[i + 1]?.k === 'stop' && tasks[i + 2]?.k === 'stop'))!;
+    const index = tasks.findIndex((t, i) => whole(t) && tasks[i + 1]?.k === 'stop' && tasks[i + 2]?.k === 'stop');
     const turn = tasks[index] as Extract<(typeof tasks)[number], { k: 'reverse' }>;
     const berth = sim.topo.berths[turn.chosen], point = reversedBerthPoint(sim.topo, berth.id, front.len)!;
     const departure = structuredClone(tasks.slice(index + 1));
@@ -1198,7 +1202,7 @@ describe('event-observed state machines',()=>{
   it('records fault creation and immediate rescue procedure, while rejecting an unrelated initial manual turn',()=>{
     const {sim,front}=fixture();
     expect(sim.command({c:'fault',kind:'trainFail',target:front.id,duration:600,recoverable:false}).ok).toBe(true);
-    faultProcedure(sim,{c:'rescue',failed:front.id,rescuer:sim.trainList[1].id});
+    faultProcedure(sim,{c:'rescue',failed:front.id,rescuer:fixtureTrains(sim, 2)[1].id});
     checkSafety(sim);
     expect(sim.faults.at(-1)?.stage).toBe('procedure');
     expect(sim.integrity.violations.filter(v=>v.kind==='FSM')).toEqual([]);

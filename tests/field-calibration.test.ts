@@ -7,6 +7,7 @@ import { PERF, computeRunTimes, sectionEta, sectionPlan, staticLinkLimit } from 
 import { newTrain } from '../src/sim/ats';
 import { buildStops, platformBerth, tripTasks } from '../src/sim/timetable';
 import { releaseRoute } from '../src/sim/interlocking';
+import { fixtureTrain } from './helpers/fixture-train';
 
 describe('field section measurement harness', () => {
   it.each([['HTS','PDA','DN'],['PDA','HTS','UP']] as const)(
@@ -26,7 +27,7 @@ describe('field section measurement harness', () => {
     const sim=createProbeWorld();
     probeSection(sim,STATIONS.findIndex(s=>s.id==='YDD'),STATIONS.findIndex(s=>s.id==='HTS'),'DN',43200);
     for(let i=0;i<300;i++)sim.step();
-    const tr=sim.trainList[0];
+    const tr=fixtureTrain(sim);
     expect(sim.command({c:'manual',train:tr.id,mode:'CM'}).ok).toBe(true);sim.drive(tr.id,1);
     const saved=capture(sim),id=tr.id;
     updateTrainMotion(sim,tr,.1);
@@ -186,7 +187,7 @@ describe('static task-path ETA', () => {
       && sim.routeTable.next.get(berth.id)?.[r.start] === r.id)!;
     expect(route).toBeDefined();
     for (const point of route.switches) Object.assign(sim.sw[point.sw], {pos:point.pos,target:point.pos,moveUntil:0});
-    const tr = sim.trainList[0];
+    const tr = fixtureTrain(sim);
     // The head starts on the middle-track turnout; the forward restriction
     // must remain in force until the tail clears. No issued MA is required.
     tr.link = turnout.id; tr.off = turnout.len / 2;

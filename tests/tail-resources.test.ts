@@ -6,6 +6,7 @@ import { Sim } from '../src/sim/engine';
 import { computeBody, indexBodies } from '../src/sim/movement';
 import { computeOccupancy, releaseRoute, updateInterlocking } from '../src/sim/interlocking';
 import { berthHolder, updateTrainTasks } from '../src/sim/ats';
+import { fixtureTrain } from './helpers/fixture-train';
 
 describe('continuous independent tail tracks', () => {
   it('recognises a whole consist across connected tail links without admitting hazards', () => {
@@ -91,7 +92,7 @@ describe('continuous independent tail tracks', () => {
     expect(safeWaitingPoint(sim.topo, point, LINE_INFO.trainLength * 2 + 1)).toBe(true);
     expect(safeWaitingPoint(sim.topo, point, LINE_INFO.trainLength * 2 + 1,
       { protectedLinks: new Set([inner.id]) })).toBe(false);
-    const other = sim.trainList[0];
+    const other = fixtureTrain(sim);
     sim.linkBodies.clear(); sim.linkBodies.set(inner.id, [{ train: other.id, from: 10, to: 20 }]);
     expect(berthHolder(sim, berth.id, -1, true)).toBe(other.id);
   });
@@ -105,7 +106,7 @@ describe('continuous independent tail tracks', () => {
     const station = sim.topo.stations.find(s => s.rescueBerths.some(id => !s.turnbackBerths.includes(id))
       && s.turnbackBerths.some(routedBeyond));
     if (!station) return;
-    const tr = sim.trainList[0];
+    const tr = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== tr) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) releaseRoute(sim, id);
     const berth = sim.topo.berths[station.turnbackBerths.find(routedBeyond)!];

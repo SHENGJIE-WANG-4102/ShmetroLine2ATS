@@ -16,9 +16,10 @@ import {setMode,turnbackDwell} from '../src/sim/onboard';
 import {checkSafety} from '../src/sim/invariants';
 import {driveOverrun,reverseToMark} from './helpers/driver-approach';
 import {stopError,advance} from '../src/sim/movement';
+import { fixtureTrain } from './helpers/fixture-train';
 const make=()=>new Sim({dayType:'weekday',date:'2026-10-22',dateLabel:'driver',startTime:14400,seed:7,noPossessions:true,autoRadio:false});
 function fixture(){
- const s=make(),t=s.trainList[0],b=s.topo.berths[platformBerth(s.topo,12,'DN')];
+ const s=make(),t=fixtureTrain(s),b=s.topo.berths[platformBerth(s.topo,12,'DN')];
  for(const other of [...s.trainList])if(other!==t)s.removeTrain(other);
  Object.assign(t,{link:b.link,off:b.offset,dir:b.dir,hist:[{link:b.link,dir:b.dir}],recentBody:undefined,
   phase:'dwell',phaseSince:s.t,arrivedAt:s.t,v:0,a:0,manual:true,mode:'CM',doorsAwait:true,doorsOpen:false,doorSide:'',
@@ -387,7 +388,8 @@ describe('driver controls and physical enable',()=>{
   const a=run();expect(a).toBeGreaterThanOrEqual(.5);expect(a).toBeLessThanOrEqual(1.5);expect(run()).toBe(a);
  });
  it('queues cab/task messages every 15s, coalesces simultaneous changes and carries queues independently',()=>{
-  const {s,t}=fixture();t.dmiLog=[];t.dmiPrev=null;t.dmiContext=undefined;dmiTick(s);
+  // (the fixture train ran out of its yard first: its queued messages go too)
+  const {s,t}=fixture();t.dmiLog=[];t.dmiPrev=null;t.dmiContext=undefined;t.dmiQueue=undefined;dmiTick(s);
   const start=s.t;expect(t.dmiLog.map(m=>m.m)).toEqual(['DMI激活']);
   s.t=start+15;dmiTick(s);s.t=start+30;dmiTick(s);expect(t.dmiLog.map(m=>m.m)).toEqual(['DMI激活','定位已确认','ATPM模式可用']);
   t.dmiLog=[];t.depotStage='out';dmiTick(s);expect(t.dmiLog.map(m=>m.m)).toEqual(['定位已确认']);
@@ -450,7 +452,7 @@ describe('driver controls and physical enable',()=>{
    const route=s.topo.routes.find(r=>r.steps.some(st=>st.link===b.link&&st.dir===b.dir))!;
    const history=route.steps.slice(0,route.steps.findIndex(st=>st.link===b.link)+1);
    for(const initial of [{off:b.dir===1?0:s.topo.links[b.link].len,v:0},{off:b.offset-65*b.dir,v:4}]){
-   restore(s,base);const t=s.trainList[0],id=t.id;
+   restore(s,base);const t=fixtureTrain(s),id=t.id;
    for(const other of [...s.trainList])if(other!==t)s.removeTrain(other);
    for(const block of s.plan.blocks)s.blockDone.add(block.id);
    Object.assign(t,{link:b.link,off:initial.off,dir:b.dir,hist:history.map(st=>({...st})),

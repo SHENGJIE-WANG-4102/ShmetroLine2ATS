@@ -11,10 +11,11 @@ import {carryWorld,nextOperatingConfig,DAY_S}from'../src/sim/operatingDay';
 import {OPERATIONS,STATIONS}from'../src/data/current';
 import {DOOR_CLOSE_S}from'../src/sim/calibration';
 import {runAmTurnback}from'./helpers/am-turnback';
+import { fixtureTrain } from './helpers/fixture-train';
 
 function fixture(mode:'DTO'|'AM'='DTO',stationId='RMG',dir:'DN'|'UP'='DN'){
  const sim=new Sim({dayType:'weekday',date:'2026-10-23',dateLabel:'am-driver-work',startTime:14400,seed:7,noPossessions:true,autoRadio:false});
- const tr=sim.trainList[0],st=STATIONS.findIndex(s=>s.id===stationId),b=sim.topo.berths[platformBerth(sim.topo,st,dir)];
+ const tr=fixtureTrain(sim),st=STATIONS.findIndex(s=>s.id===stationId),b=sim.topo.berths[platformBerth(sim.topo,st,dir)];
  for(const other of[...sim.trainList])if(other!==tr)sim.removeTrain(other);
  for(const t of sim.plan.trips)t.completed=true;for(const block of sim.plan.blocks)sim.blockDone.add(block.id);
  Object.assign(tr,{link:b.link,off:b.offset,dir:b.dir,hist:[{link:b.link,dir:b.dir}],recentBody:undefined,phase:'dwell',phaseSince:sim.t,

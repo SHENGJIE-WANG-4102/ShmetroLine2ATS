@@ -242,6 +242,10 @@ export function requestTrainMaintenance(sim: Sim, id: number): { ok: boolean; ms
   return {ok:true,msg:'现场抢修已申请，20min内维持故障防护'};
 }
 
+/** the clock sums 0.1 s steps: a repair due on a whole second must not slip
+ * a second for the float residue (D178) */
+const CLOCK_EPS = 1e-6;
+
 export function faultsTick(sim: Sim) {
   const { topo } = sim;
   for (const f of sim.faults) {
@@ -249,7 +253,7 @@ export function faultsTick(sim: Sim) {
     if (f.kind === 'trainFail') {
       const tr = sim.trains.get(f.target);
       if (!tr) { f.repaired = true; continue; }
-      if (tr.failRecoverable && sim.t >= tr.failRecoverAt) {
+      if (tr.failRecoverable && sim.t >= tr.failRecoverAt - CLOCK_EPS) {
         recoverTrain(sim, tr);
         f.repaired = true;
         sim.clearAlarm(`tf-${tr.id}`);
@@ -257,7 +261,7 @@ export function faultsTick(sim: Sim) {
         sim.log('A', '列车', `列车 ${trainLabel(tr)} 故障无法排除，请求救援（选择故障列车→“组织救援”）`, { key: `tfr-${tr.id}` });
         callRescue(sim, tr);
       }
-      if (sim.t >= f.repairAt && f.repairAt !== Infinity && tr.failed) {
+      if (sim.t >= f.repairAt - CLOCK_EPS && f.repairAt !== Infinity && tr.failed) {
         recoverTrain(sim, tr);
         f.repaired = true;
         sim.clearAlarm(`tf-${tr.id}`);
@@ -270,7 +274,7 @@ export function faultsTick(sim: Sim) {
       }
       continue;
     }
-    if (sim.t < f.repairAt) continue;
+    if (sim.t < f.repairAt - CLOCK_EPS) continue;
     f.repaired = true;
     switch (f.kind) {
       case 'traction':

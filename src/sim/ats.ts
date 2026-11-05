@@ -755,6 +755,8 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
   }
 
   if (tr.phase === 'dwell') {
+    // A dispatcher may clear the tasks of a dwelling train: it then simply stands.
+    if (!task) return;
     const st = task as StopTask;
     if (st.depotWork) {
       if (sim.t < tr.dwellUntil || tr.hold || tr.eb || tr.doorsOpen || tr.doorSide || tr.doorMotion
@@ -1642,6 +1644,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
   let eta = dist / Math.max(tr.v, 6);
 
   if (tr.phase === 'dwell') {
+    if (!tr.tasks[0]) return null;
     goalTask = tr.tasks[1];
     const remain = Math.max(0, tr.dwellUntil - sim.t);
     const platform = topo.berths[(tr.tasks[0] as StopTask).berth].platform;

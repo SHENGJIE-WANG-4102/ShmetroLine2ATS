@@ -2,13 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { Sim } from '../src/sim/engine';
 import type { StopTask } from '../src/sim/model';
 import { computeBody, indexBodies } from '../src/sim/movement';
-import { computeOccupancy, trySetRoute, updateInterlocking } from '../src/sim/interlocking';
+import { computeOccupancy, releaseRoute, trySetRoute, updateInterlocking } from '../src/sim/interlocking';
 import { intervalDepartureHold, runARS } from '../src/sim/ats';
 import { arbitrateResources, routeResourceBlocker } from '../src/sim/resourceArbitration';
+import { fixtureTrains } from './helpers/fixture-train';
 
 function fixture() {
   const sim = new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'interval readiness',startTime:14400,seed:111,noPossessions:true});
-  const [main, middle] = sim.trainList;
+  const [main, middle] = fixtureTrains(sim, 2);
   // Airport layout changes can renumber signals and routes elsewhere.
   const turnRoute = sim.topo.routes.find(route => route.name === 'S2310→S2304(侧向)')!;
   const mainRoute = sim.topo.routes.find(route => route.name === 'S2306→S2304')!;
@@ -26,7 +27,9 @@ function fixture() {
   const conflictSection = turnRoute.sections.at(-1)!;
   for (const tr of [...sim.trainList]) if (tr !== main && tr !== middle) sim.removeTrain(tr);
   for (const rid of [...sim.routes.keys()]) sim.routes.has(rid) && sim.command({c:'cancelRoute',signal:sim.topo.routes[rid].start});
-  // No initial route has approaching authority in the cold fixture.
+  // D178: the fixture trains come out of the yards first; the routes they
+  // were given go with the scene, which is set up afresh below.
+  for (const rid of [...sim.routes.keys()]) releaseRoute(sim, rid);
   expect(sim.routes.size).toBe(0);
   for (const block of sim.plan.blocks) sim.blockDone.add(block.id);
   sim.t = 38841;

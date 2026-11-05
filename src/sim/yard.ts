@@ -150,7 +150,8 @@ export function maintainFleet(sim: FleetState, overnight: boolean, reorder = ove
   if (overnight) for (const r of sim.vehicles.values()) if (r.work && sim.topo.depots[r.depot].work.daily) r.daily = today;
   const completed = [...sim.vehicles].filter(([, record]) => record.work && record.until <= today);
   const release = (no: string, r: VehicleRecord) => {
-    r.work = ''; r.monthly = today; r.daily = today; r.until = 0;
+    if (r.work !== 'stored') r.monthly = today;
+    r.work = ''; r.daily = today; r.until = 0;
     putVehicle(sim, r.depot, no);
   };
   // An ongoing workshop programme exchanges cars before its completed cars
@@ -160,12 +161,12 @@ export function maintainFleet(sim: FleetState, overnight: boolean, reorder = ove
   const ready = (depot: number) => yardCount(sim.yards[depot]) + pending.filter(([, record]) => record.depot === depot).length;
   const spare = (depot: number) => ready(depot) > need[depot];
   const excess = (depot: number) => Math.max(0, ready(depot) - sim.topo.depots[depot].capacity);
-  const reserve = (depot: number, no: string, work: 'monthly' | 'overhaul') => {
+  const reserve = (depot: number, no: string, work: 'monthly' | 'overhaul' | 'stored') => {
     const y = sim.yards[depot], track = y.tracks.find(t => t.includes(no))!;
     track.splice(track.indexOf(no), 1);
     const r = sim.vehicles.get(no)!;r.work = work;r.depot = depot;
-    r.until = today + (work === 'monthly' ? RULE.monthlyDays : RULE.overhaulDays);
-    sim.depotStock[depot] = yardCount(y);result[work]++;
+    r.until = today + (work === 'overhaul' ? RULE.overhaulDays : RULE.monthlyDays);
+    sim.depotStock[depot] = yardCount(y);if (work !== 'stored') result[work]++;
   };
   let overhaul = [...sim.vehicles.values()].filter(r => r.work === 'overhaul' && r.until > today).length;
   for (const d of sim.topo.depots) if (d.work.overhaul) {
@@ -184,7 +185,7 @@ export function maintainFleet(sim: FleetState, overnight: boolean, reorder = ove
       } else reserve(d.id, no, 'monthly');
     }
   }
-  let occupied = [...sim.vehicles.values()].filter(record => record.work && record.until > today).length;
+  let occupied = [...sim.vehicles.values()].filter(record => record.work && record.work !== 'stored' && record.until > today).length;
   while (occupied < minimum || minimum > 0 && sim.topo.depots.some(depot => depot.work.monthly && excess(depot.id) > 0)) {
     const candidates = sim.topo.depots.filter(depot => depot.work.monthly && spare(depot.id) && (occupied < minimum || excess(depot.id) > 0))
       .flatMap(depot => sim.yards[depot.id].tracks.flat().map(no => ({ depot, no, record: sim.vehicles.get(no)! })))
@@ -197,11 +198,14 @@ export function maintainFleet(sim: FleetState, overnight: boolean, reorder = ove
       sim.log('B', '车辆', `检修计划推迟：在修 ${occupied} 列，需至少 ${minimum} 列；具备月检能力车场的可用车不足当天 yardNeed`);
       break;
     }
-    reserve(next.depot.id, next.no, 'monthly'); occupied++;
+    // D178【假设】：最低在修数之外、超出停车库位的车停进检修库（库内停放），
+    // 不算检修，也不刷新月检日期。
+    if (occupied < minimum) { reserve(next.depot.id, next.no, 'monthly'); occupied++; }
+    else reserve(next.depot.id, next.no, 'stored');
   }
   for (const [no, record] of pending) release(no, record);
   // Reordering is explicit: restoration never silently moves a real vehicle.
   if (reorder) for (const d of sim.topo.depots) arrangeYard(sim, d.id);
-  sim.log('I','车辆运用',`车辆运用：可用 ${sim.depotStock.reduce((a,b)=>a+b,0)} 列在段，月检 ${[...sim.vehicles.values()].filter(r=>r.work==='monthly').length} 列，架修 ${overhaul} 列，推迟 ${result.deferred} 列；各段最低备车 ${need.join('/')}`);
+  sim.log('I','车辆运用',`车辆运用：可用 ${sim.depotStock.reduce((a,b)=>a+b,0)} 列在段，月检 ${[...sim.vehicles.values()].filter(r=>r.work==='monthly').length} 列，架修 ${overhaul} 列，库内停放 ${[...sim.vehicles.values()].filter(r=>r.work==='stored').length} 列，推迟 ${result.deferred} 列；各段最低备车 ${need.join('/')}`);
   return result;
 }

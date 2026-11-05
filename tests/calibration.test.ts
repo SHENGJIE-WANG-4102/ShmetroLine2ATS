@@ -13,6 +13,7 @@ import {trainLevel,LEVEL_LATE,levelAccel,levelBand} from '../src/sim/energy';
 import {PERF,type AtoState} from '../src/sim/dynamics';
 import {capture,restore} from '../src/sim/state';
 import {buildTopology} from '../src/sim/topology';
+import { fixtureTrain } from './helpers/fixture-train';
 
 const advance=(s:Sim,t:number)=>{const end=s.t+t;while(s.t<end-1e-6)s.step();};
 
@@ -121,20 +122,20 @@ describe('D74 diagram ATO levels',()=>{
   expect(stops[1].arr-stops[0].dep).toBeCloseTo(s.rt.dn[22],5);
   expect(stops[2].arr-stops[1].dep).toBeCloseTo(s.rt.byLevel![4].dn[23],5);
   const trip={...s.plan.trips[0],id:s.plan.trips.length,from:22,to:26,stops};s.plan.trips.push(trip);
-  const tr=s.trainList[0];tr.tripId=trip.id;tr.delay=0;
+  const tr=fixtureTrain(s);tr.tripId=trip.id;tr.delay=0;
   tr.tasks=[];tripTasks(s.topo,trip,tr.tasks,false);tr.tasks.shift();
   s.t=21*3600;expect(trainLevel(s,tr)).toBe(1); // interval retains its departure grade
   tr.tasks.shift();expect(trainLevel(s,tr)).toBe(4);
  });
  it('defaults to diagram operation, supports a whole-line manual override and keeps late recovery',()=>{
-  const s=make(),night=slowTrip(s);
+  const s=make(),night=slowTrip(s);fixtureTrain(s);
   expect(s.runLevel).toBe(0);expect(s.snapshot().runLevel).toBe(0);
   for(const level of [NaN,Infinity,-1,1.5,4]){expect(s.command({c:'runLevel',level}).ok).toBe(false);expect(s.runLevel).toBe(0);}
   for(const tr of s.trainList){tr.tripId=night.id;tr.tasks=[];tripTasks(s.topo,night,tr.tasks,false);tr.tasks.shift();tr.delay=0;expect(trainLevel(s,tr)).toBe(4);}
   expect(s.command({c:'runLevel',level:1}).ok).toBe(true);
   for(const tr of s.trainList)expect(trainLevel(s,tr)).toBe(1);
   expect(s.command({c:'runLevel',level:0}).ok).toBe(true);
-  const tr=s.trainList[0];tr.delay=LEVEL_LATE;expect(trainLevel(s,tr)).toBe(4);
+  const tr=fixtureTrain(s);tr.delay=LEVEL_LATE;expect(trainLevel(s,tr)).toBe(4);
   tr.delay=LEVEL_LATE+.01;expect(trainLevel(s,tr)).toBe(1);
   expect(s.command({c:'runLevel',level:3}).ok).toBe(true);expect(trainLevel(s,tr)).toBe(1);
  });
@@ -179,7 +180,7 @@ describe('D74 diagram ATO levels',()=>{
  });
 });
 function fixture(station:number,delay:number,dwell:number,waiting=0,load=0){
- const s=new Sim({dayType:'weekday',dateLabel:'calibration',startTime:14400,seed:7,noPossessions:true});advance(s,2);const tr=s.trainList[0];
+ const s=new Sim({dayType:'weekday',dateLabel:'calibration',startTime:14400,seed:7,noPossessions:true});advance(s,2);const tr=fixtureTrain(s);
  for(const other of [...s.trainList])if(other!==tr)s.removeTrain(other);
  for(const id of [...s.routes.keys()])releaseRoute(s,id);
  for(const b of s.plan.blocks)s.blockDone.add(b.id);
@@ -260,8 +261,10 @@ describe('automatic dwell and ATO regulation',()=>{
  });
  it('keeps the peak passenger minimum and recovers at following stops',()=>{
   const {s,tr}=fixture(12,7,30,1300,1900);const minimum=tr.dwellUntil-s.t;
-  expect(minimum).toBeGreaterThan(30);advance(s,minimum+.2);expect(tr.delay).toBeGreaterThan(7);
-  const atDeparture=tr.delay;
+  const task=tr.tasks[0];if(task.k!=='stop')throw new Error('fixture stop');task.trip=0;
+  // D175: the running delay is an estimate on the next arrival; the departure itself is in depLog
+  expect(minimum).toBeGreaterThan(30);advance(s,minimum+.2);expect(s.depLog).toHaveLength(1);expect(s.depLog[0].delay).toBeGreaterThan(7);
+  const atDeparture=s.depLog[0].delay;
   let departures=0,phase=tr.phase;const until=s.t+1000;
   while(s.t<until&&departures<3){s.step();if(phase==='dwell'&&tr.phase==='run')departures++;phase=tr.phase;}
   expect(departures).toBe(3);expect(tr.delay).toBeLessThan(atDeparture);expect(tr.delay).toBeGreaterThanOrEqual(DOOR_CLOSE_S + OPERATIONS.autoStartDelay[0] - PLANNED_CLOSE_BUDGET);
@@ -298,6 +301,9 @@ describe('calibrated plan structure',()=>{
  const peakTimes=(s:Sim,dir:'DN'|'UP',st:number)=>s.plan.trips.filter(t=>{
   if(t.cancelled||t.dir!==dir)return false;
   const b=s.plan.blocks[t.block],next=b&&s.plan.trips[b.trips[b.trips.indexOf(t.id)+1]];
+  // At the far end of the core the arrivals count, so a trip starting there
+  // (a continuation or a yard exit, D178) is not one more train from the core.
+  if(st===(dir==='DN'?22:4))return t.from!==st;
   // A same-direction positioning trip and its onward service are one train
   // at their shared station, matching the timetable validator's convention.
   return !(t.to===st&&next?.from===st&&next.dir===dir);

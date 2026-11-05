@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Topology } from '../src/sim/topology';
+import { fixtureTrain } from './helpers/fixture-train';
 
 describe('ordinary near turnback and deep physical storage roles', () => {
   let data: typeof import('../src/data/current');
@@ -110,9 +111,10 @@ describe('ordinary near turnback and deep physical storage roles', () => {
   it('maps overnight and hot standby to deep points without adding storage allocations', () => {
     const night = timetable.overnightPlaces(topo), hot = timetable.hotStandbyPlaces(topo);
     expect(night).toHaveLength(data.OPERATIONS.overnightStabling.reduce((sum, rule) => sum + rule.count, 0));
-    expect(night).toHaveLength(6);
+    // D178 用户决定: no main-line overnight trains; only the two line-end spares (D148)
+    expect(night).toHaveLength(0);
     expect(hot).toHaveLength(data.OPERATIONS.hotStandby.length);
-    expect(hot).toHaveLength(4);
+    expect(hot).toHaveLength(2);
     expect(night.map(place => [place.station, place.berth, place.arrivalBerth]))
       .toEqual(timetable.overnightPlaces(oldPoints).map(place => [place.station, place.berth, place.arrivalBerth]));
     expect(hot.map(place => [place.station, place.berth]))
@@ -161,7 +163,7 @@ describe('ordinary near turnback and deep physical storage roles', () => {
     const arbitration = await import('../src/sim/resourceArbitration');
     const sim = new Sim({ dayType: 'weekday', dateLabel: 'deep berth role', startTime: 14400, seed: 7,
       noPossessions: true, randomFaults: 0, autoDispatch: false, autoRadio: false });
-    const train = sim.trainList[0];
+    const train = fixtureTrain(sim);
     for (const other of [...sim.trainList]) if (other !== train) sim.removeTrain(other);
     for (const id of [...sim.routes.keys()]) interlocking.releaseRoute(sim, id);
     // This fixture tests one physical request, with no virtual depot source.

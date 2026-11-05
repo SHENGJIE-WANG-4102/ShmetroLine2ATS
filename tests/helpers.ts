@@ -20,7 +20,8 @@ export function makeSim(dayType: DayType = 'weekday', until = 8 * 3600, config: 
   const own = config.scenario && SCENARIOS.find((x) => x.id === config.scenario)?.fixedRuns;
   const key = `${dayType}-${until}-${seed}${config.noPossessions ? '-noPossessions' : ''}${own ? `-${config.scenario}` : ''}`;
   let cp = warmups.get(key);
-  const file = process.env.ATSSIM_WARMUPS && join(process.env.ATSSIM_WARMUPS, `${key}.bin`);
+  // a test-local data fixture (tests/helpers/midline-storage.ts) must not reuse checkpoints of the real data
+  const file = !(globalThis as { __atssimDataFixture?: boolean }).__atssimDataFixture && process.env.ATSSIM_WARMUPS && join(process.env.ATSSIM_WARMUPS, `${key}.bin`);
   if (!cp && file && existsSync(file)) warmups.set(key, cp = deserialize(readFileSync(file)) as Checkpoint);
   if (cp) {
     restore(sim, cp);

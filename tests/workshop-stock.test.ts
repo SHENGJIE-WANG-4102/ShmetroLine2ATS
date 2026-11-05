@@ -2,6 +2,7 @@ import {describe,expect,it,vi} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {dayNumber,initVehicles,maintainFleet,type FleetState} from '../src/sim/yard';
 import {yardNeed} from '../src/sim/timetable';
+import {OPERATIONS} from '../src/data/current';
 
 const make=(seed=3,dayType:'weekday'|'weekend'='weekday')=>new Sim({dayType,date:dayType==='weekday'?'2026-10-19':'2026-10-24',dateLabel:'workshop stock',startTime:14400,seed,noPossessions:true});
 function fixture(){
@@ -18,18 +19,21 @@ function fixture(){
 
 describe('ongoing workshop stock',()=>{
  for(const dayType of ['weekday','weekend'] as const)it.each([1,3,7,103,142031])(`${dayType} seed%s: keeps real parking and workshops within their separate contracts`,seed=>{
-  const s=make(seed,dayType),working=[...s.vehicles].filter(([,r])=>r.work);
+  const s=make(seed,dayType),inShed=[...s.vehicles].filter(([,r])=>r.work);
+  // D178: cars beyond the parking tracks stand in a workshop shed ('stored'), not under maintenance.
+  const working=inShed.filter(([,r])=>r.work!=='stored'),stored=inShed.filter(([,r])=>r.work==='stored');
   expect(working.length).toBeGreaterThanOrEqual(2);
   expect(working.length).toBeLessThanOrEqual(3);
+  for(const [,r]of stored){expect(s.topo.depots[r.depot].work.monthly).toBe(true);expect(s.depotStock[r.depot]).toBe(s.topo.depots[r.depot].capacity);}
   for(const [depot,yard]of s.yards.entries()){
    expect(s.depotStock[depot]).toBeLessThanOrEqual(s.topo.depots[depot].capacity);
    expect(yard.tracks.every(track=>track.length<=yard.perTrack)).toBe(true);
   }
   const parked=s.yards.flatMap(y=>y.tracks.flat());
   for(const [no,r]of working){expect(parked).not.toContain(no);expect(s.topo.depots[r.depot].work[r.work as 'monthly'|'overhaul']).toBe(true);}
-  const ids=[...parked,...working.map(([no])=>no),...s.stabledPool,...s.trainList.map(t=>t.vehicle)];
+  const ids=[...parked,...inShed.map(([no])=>no),...s.stabledPool,...s.trainList.map(t=>t.vehicle)];
   expect(ids).toHaveLength(100);expect(new Set(ids).size).toBe(100);
-  expect(s.plan.blocks.filter(b=>b.start.kind==='stable')).toHaveLength(6);
+  expect(s.plan.blocks.filter(b=>b.start.kind==='stable')).toHaveLength(OPERATIONS.overnightStabling.length);
   expect(s.plan.initialStock).toEqual(s.depotStock);
  });
  it('admits the oldest eligible spare, never an online or incapable-yard car, and is idempotent',()=>{

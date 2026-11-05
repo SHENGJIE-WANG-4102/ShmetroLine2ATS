@@ -4,12 +4,13 @@ import {platformBerth,addTurnback}from'../../src/sim/timetable';
 import {computeBody,indexBodies}from'../../src/sim/movement';
 import {ahead}from'../../src/sim/topology';
 import type{Task}from'../../src/sim/model';
+import {fixtureTrain}from'./fixture-train';
 
 /** A real, empty-line terminal arrival with an already-due next departure.
  * No timetable wait is available to absorb driver work. */
 export function runAmTurnback(mode:'DTO'|'AM',stationId:string,incoming:'DN'|'UP'){
  const sim=new Sim({dayType:'weekday',date:'2026-10-23',dateLabel:'am-turnback',startTime:14400,seed:7,noPossessions:true,autoRadio:true});
- const tr=sim.trainList[0],station=STATIONS.findIndex(s=>s.id===stationId);
+ const tr=fixtureTrain(sim),station=STATIONS.findIndex(s=>s.id===stationId);
  const outgoing:'DN'|'UP'=incoming==='DN'?'UP':'DN';
  const next=sim.topo.stations.find(s=>ahead(outgoing,station,s.index)&&Math.abs(s.index-station)===1)!.index;
  for(const other of[...sim.trainList])if(other!==tr)sim.removeTrain(other);

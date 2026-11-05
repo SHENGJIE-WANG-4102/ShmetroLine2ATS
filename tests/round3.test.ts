@@ -1,7 +1,7 @@
 import {describe,expect,it} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {applyOverlay,depotLedger,OVERLAY_PRESETS,storageOccupancy,validatePlan,platformBerth} from '../src/sim/timetable';
-import {scanAhead,updateTrainMotion} from '../src/sim/movement';
+import {updateTrainMotion} from '../src/sim/movement';
 import {captureWarmup,readWarmup,restoreWarmup,warmupKey,writeWarmup} from '../src/sim/warmupCache';
 import {capture,restore,type Checkpoint} from '../src/sim/state';
 import {makeSim,runFor,assertIntegrity,assertNoCollision} from './helpers';
@@ -9,6 +9,7 @@ import {envTick} from '../src/sim/env';
 import {newTrain} from '../src/sim/ats';
 import {checkSafety} from '../src/sim/invariants';
 import {STATIONS} from '../src/data/current';
+import { fixtureTrain } from './helpers/fixture-train';
 
 const H=(h:number,m=0)=>h*3600+m*60;
 const create=(dayType:'weekday'|'weekend'='weekday')=>new Sim({dayType,dateLabel:'round3',startTime:H(4),seed:1});
@@ -26,11 +27,11 @@ describe('registered storage positions',()=>{
     expect(sim.integrity.violations.some(v=>v.kind==='FSM'&&v.detail.includes(`进路[${rid}]`))).toBe(true);
     restore(sim,capture(create()));runFor(sim,2);checkSafety(sim);
     expect(sim.integrity.violations).toEqual([]);
-    const tr=sim.trainList[0];tr.mode='DTO';tr.level='TBTC';checkSafety(sim);
+    const tr=fixtureTrain(sim);tr.mode='DTO';tr.level='TBTC';checkSafety(sim);
     expect(sim.integrity.violations.some(v=>v.kind==='FSM')).toBe(true);
   });
   it('accepts a restrictive authority in the braking step that reaches standstill',()=>{
-    const sim=create(),tr=sim.trainList[0];
+    const sim=create(),tr=fixtureTrain(sim);
     tr.phase='run';tr.v=.02;tr.eb=true;tr.maCut=true;tr.lastMa=1400;tr.lastDs=0;
     updateTrainMotion(sim,tr,.1);
     expect(tr.v).toBeLessThanOrEqual(.01);
@@ -42,26 +43,6 @@ describe('registered storage positions',()=>{
     const sim=makeSim('weekday',35700,{seed:5});
     runFor(sim,300,s=>{assertIntegrity(s);assertNoCollision(s);});
     expect(sim.trainList.filter(t=>t.phase==='dwell'&&sim.t-t.dwellUntil>300&&t.tasks[1]?.k==='reverse')).toEqual([]);
-  });
-  it.each(['weekday','weekend'] as const)('%s: holds overnight heads at their spawn berths',day=>{
-    const sim=create(day), positions=sim.trainList.map(tr=>({id:tr.id,link:tr.link,off:tr.off}));
-    expect(positions.length).toBe(6);
-    while(sim.t<H(4,2)) sim.step();
-    for(const p of positions) {
-      const tr=sim.trains.get(p.id)!;
-      expect(tr.link).toBe(p.link);
-      expect(Math.abs(tr.off-p.off)).toBeLessThan(.01);
-    }
-  });
-  it('keeps authority at the hot berth while the next task is on a distant platform',()=>{
-    const sim=create(), tr=sim.trainList.find(tr=>sim.topo.berths.some(b=>b.station===24&&b.link===tr.link))!;
-    expect(tr).toBeDefined();
-    sim.t=H(12);
-    const berth=platformBerth(sim.topo,24,'DN');
-    tr.tasks=[{k:'stop',berth,station:24,trip:-1,arr:null,dep:H(13),standby:true,revenue:true,doors:true}];
-    const scan=scanAhead(sim,tr,berth);
-    expect(scan.maDist).toBe(0);
-    expect(scan.maCode).toBe('REGULATION');
   });
   it('rejects an overnight reservation on a platform-kind middle track against a turn',()=>{
     const sim=create(),plan=structuredClone(sim.plan);
@@ -98,17 +79,21 @@ describe('early and late added-service reservations',()=>{
   it('continues beyond a briefly occupied tail while retaining every fitted call and reporting omitted requests',()=>{
     const sim=create(),plan=structuredClone(sim.plan);
     const result=applyOverlay(sim.planCtx,plan,{...OVERLAY_PRESETS.find(p=>p.id==='ciie')!,from:H(5),to:H(6),headway:600},{now:H(4,43),canExtend:()=>true});
-    const through=plan.trips.filter(t=>t.overlay&&!t.cancelled&&t.revenue&&t.from===1&&t.to>22&&t.stops[0].dep<=H(6));
+    // an added trip run on past a requested end (1 / 22) because that end's tail is briefly occupied
+    const through=plan.trips.filter(t=>t.overlay&&!t.cancelled&&t.revenue
+      &&(t.dir==='DN'?t.from<=1&&t.to>22:t.from>=22&&t.to<1));
     // D119's physical timings, then D135/D138, D171 and D173 (denser official
     // opening: GLL full at 05:44, no withdrawal slot at 06:04) changed the
-    // feasible slots. Pin the current full-plan result without dropping any
-    // requested calls; every omitted request still reports its reason.
+    // feasible slots. D178 (pool duties, no main-line overnight): the run-on
+    // is now the UP one to 蟠祥路; the DN one to 川沙 is omitted (shared
+    // conversion track). Pin the current full-plan result without dropping
+    // any requested calls; every omitted request still reports its reason.
     expect(through).toHaveLength(1);
     for(const trip of through) for(let station=1;station<=22;station++)
       expect(trip.stops.find(s=>s.st===station)?.stop).toBe(true);
-    expect(result.skipped).toBe(4);
+    expect(result.skipped).toBe(5);
     const omitted=plan.trips.filter(t=>t.overlay&&t.cancelled&&t.revenue);
-    expect(omitted).toHaveLength(4);
+    expect(omitted).toHaveLength(5);
     expect(omitted.every(t=>!!t.cancelReason)).toBe(true);
     expect(validatePlan(sim.planCtx,plan).filter(i=>i.severity==='error')).toEqual([]);
   });
@@ -144,7 +129,7 @@ describe('early and late added-service reservations',()=>{
 
 describe('optional persistent warm-up cache',()=>{
   it('restores the same initial graph history without draining or sharing the warm-up buffers',()=>{
-    const sim=create();runFor(sim,120);
+    const sim=create();fixtureTrain(sim);runFor(sim,120);
     const removed=sim.trainList.find(t=>t.trace.length)!;
     expect(removed).toBeDefined();sim.removeTrain(removed);
     const saved=captureWarmup(sim),expected=structuredClone(saved.warmupTraces!);

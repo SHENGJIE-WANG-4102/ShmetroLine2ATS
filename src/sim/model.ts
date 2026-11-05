@@ -858,7 +858,7 @@ export interface EnvState {
 export interface YardState { tracks: string[][]; perTrack: number }
 /** One vehicle's maintenance record (D112). Days are operating-day numbers
  * (`dayNumber`); `work` is what keeps it in the depot's workshop until `until`. */
-export interface VehicleRecord { uto?: UtoVehicleState; daily: number; monthly: number; km: number; work: '' | 'monthly' | 'overhaul'; depot: number; until: number }
+export interface VehicleRecord { uto?: UtoVehicleState; daily: number; monthly: number; km: number; work: '' | 'monthly' | 'overhaul' | 'stored'; depot: number; until: number }
 
 export interface Metrics {
   since: number;

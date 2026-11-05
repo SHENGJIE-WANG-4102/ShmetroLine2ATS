@@ -174,7 +174,9 @@ describe('official last service owns the fixed closing reference phase', () => {
         physicalResiduals.push({ dir, station, departure });
       }
     }
-    expect(physicalResiduals).toEqual([{ dir: 'DN', station: east, departure: OPERATIONS.lastBigEastboundDep }]);
+    // D178 (用户决定 D73 A+B): the last train's shortest dwells and its 2 s gain
+    // 远东大道→海天三路 bring the airport arrival onto the official minute
+    expect(physicalResiduals).toEqual([]);
     for (const origin of SIMULATION.timetable.firstOrigins) {
       const from = STATIONS.findIndex(station => station.id === origin.from);
       const to = STATIONS.findIndex(station => station.id === origin.to);

@@ -5,12 +5,13 @@ import {exchangePartner} from '../src/sim/ats';
 import {buildStops,tripTasks,platformBerth,effectiveEnd} from '../src/sim/timetable';
 import {computeBody,indexBodies} from '../src/sim/movement';
 import {capture,restore} from '../src/sim/state';
+import { fixtureTrain } from './helpers/fixture-train';
 
 describe('turnback then duty exchange',()=>{
  it('rebuilds the earlier shortened trip through its actual terminal',()=>{
   const sim=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'turnback-exchange',startTime:14400,seed:125,noPossessions:true,autoDispatch:false});
   sim.t=31000;
-  const late=sim.trainList[0],rear=structuredClone(late);
+  const late=fixtureTrain(sim),rear=structuredClone(late);
   for(const tr of [...sim.trainList])if(tr!==late)sim.removeTrain(tr);
   rear.id=999;rear.vehicle='02092';sim.addTrain(rear);
   const first=sim.plan.trips.length,block=sim.plan.blocks.length;

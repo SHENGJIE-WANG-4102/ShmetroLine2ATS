@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Sim as Simulator } from '../src/sim/engine';
 import type { Checkpoint } from '../src/sim/state';
+import { fixtureTrain } from './helpers/fixture-train';
 
 describe('line without a backup signalling system', () => {
   let Sim: typeof Simulator;
@@ -76,7 +77,7 @@ describe('existing line backup capability', () => {
   afterAll(() => { vi.unstubAllEnvs(); vi.resetModules(); });
   it('retains both train and zone TBTC commands', () => {
     const sim = new Sim({ dayType: 'weekday', dateLabel: 'backup capability', startTime: 14400, seed: 7, noPossessions: true });
-    const train = sim.trainList[0];
+    const train = fixtureTrain(sim);
     expect(train).toBeDefined();
     expect(sim.command({ c: 'trainLevel', train: train.id, level: 'TBTC' }).ok).toBe(true);
     expect(train.forceLevel).toBe('TBTC');

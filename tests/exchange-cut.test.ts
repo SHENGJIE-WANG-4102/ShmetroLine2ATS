@@ -4,11 +4,12 @@ import type {Trip,StopTask} from '../src/sim/model';
 import {exchangePartner} from '../src/sim/ats';
 import {buildStops,tripTasks,platformBerth} from '../src/sim/timetable';
 import {computeBody,indexBodies} from '../src/sim/movement';
+import { fixtureTrain } from './helpers/fixture-train';
 
 function fixture(station:number){
  const sim=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'exchange-origin',startTime:14400,seed:129,noPossessions:true,autoDispatch:false});
  sim.t=32100;
- const late=sim.trainList[0],rear=structuredClone(late);
+ const late=fixtureTrain(sim),rear=structuredClone(late);
  for(const tr of [...sim.trainList])if(tr!==late)sim.removeTrain(tr);
  rear.id=999;rear.vehicle='02092';sim.addTrain(rear);
  const first=sim.plan.trips.length,block=sim.plan.blocks.length;

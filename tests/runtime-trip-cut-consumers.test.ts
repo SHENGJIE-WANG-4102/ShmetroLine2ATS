@@ -7,6 +7,7 @@ import { effectiveEnd, effectiveStops } from '../src/sim/timetable';
 import { plannedWaitLong, plannedNormalWork } from '../src/sim/plannedWaitBerth';
 import { plannedWaiting } from '../src/sim/plannedWaiting';
 import type { StopTask, Train } from '../src/sim/model';
+import { fixtureTrain } from './helpers/fixture-train';
 
 const make = () => new Sim({ dayType: 'weekday', dateLabel: 'runtime cut', startTime: 14400, seed: 19 });
 
@@ -33,7 +34,7 @@ describe('runtime trip cut consumers', () => {
   });
   it('copies the last completed call across checkpoints and accepts older checkpoints without it', () => {
     const sim = make();
-    const train = sim.trainList[0];
+    const train = fixtureTrain(sim);
     expect(train).toBeDefined();
     train.lastCompletedCall = { trip: 1, stopIndex: 2 };
     const checkpoint = capture(sim);

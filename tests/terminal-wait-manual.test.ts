@@ -35,7 +35,9 @@ describe('terminal waiting with a real manual departure', () => {
       const trips = block.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled);
       for (let i = 1; i < trips.length; i++) {
         const a = trips[i-1], d = trips[i];
-        if (a.to !== d.from || a.dir === d.dir || a.standby || d.stops[0].dep - a.stops.at(-1)!.arr < 600) continue;
+        // D178: the pool planner keeps ordinary terminal layovers short (about 8 min at most);
+        // the fixture's own guards below still require the wait to outlast the standby call.
+        if (a.to !== d.from || a.dir === d.dir || a.standby || d.stops[0].dep - a.stops.at(-1)!.arr < 480) continue;
         const tasks = timetable.blockTasks(sim.topo, sim.plan, block);
         const arrival = tasks.findIndex(t => t.k === 'stop' && t.trip === a.id && t.station === a.to);
         const ri = tasks.findIndex((t,index) => index > arrival && t.k === 'reverse');
@@ -120,14 +122,27 @@ describe('terminal waiting with a real manual departure', () => {
     const lineInterlocking = await import('../src/sim/interlocking');
     const lineTimetable = await import('../src/sim/timetable');
     const lineArbitration = await import('../src/sim/resourceArbitration');
+    const trainLength = (await import('../src/data/current')).LINE_INFO.trainLength;
     const sim = new LineSim({ dayType:'weekend', date:'2026-10-24', dateLabel:'terminal-choice',
       startTime:14400, seed:14201, noPossessions:true, randomFaults:0, autoDispatch:false, autoRadio:false });
-    const a = sim.plan.trips.find(t => t.no === '0001')!;
-    const d = sim.plan.trips.find(t => t.no === '1004')!;
-    const block = sim.plan.blocks[d.block];
-    const tasks = lineTimetable.blockTasks(sim.topo,sim.plan,block);
-    const arrivalIndex = tasks.findIndex(t => t.k === 'stop' && t.trip === a.id && t.station === a.to);
-    const reverseIndex = tasks.findIndex((t,i) => i > arrivalIndex && t.k === 'reverse');
+    // D178: duty pairs come from the terminal pools, so the day's first turn
+    // through a tail with a second safe tail is found by its shape.
+    const found = sim.plan.blocks.flatMap(block => {
+      const trips = block.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled);
+      const tasks = lineTimetable.blockTasks(sim.topo,sim.plan,block);
+      return trips.slice(1).flatMap((d,i) => {
+        const a = trips[i];
+        if (a.to !== d.from || a.dir === d.dir) return [];
+        const arrivalIndex = tasks.findIndex(t => t.k === 'stop' && t.trip === a.id && t.station === a.to);
+        const reverseIndex = tasks.findIndex((t,j) => j > arrivalIndex && t.k === 'reverse');
+        const reverse = tasks[reverseIndex];
+        if (arrivalIndex < 0 || reverse?.k !== 'reverse' || reverse.berths.length < 2) return [];
+        if (!reverse.berths.every(id => topology.safeWaitingPoint(sim.topo,id,trainLength))) return [];
+        return [{ a, d, block, tasks, arrivalIndex, reverseIndex }];
+      });
+    }).sort((x,y) => x.a.stops.at(-1)!.arr - y.a.stops.at(-1)!.arr)[0];
+    expect(found, 'a turn through a tail with a second safe tail').toBeDefined();
+    const { a, block, tasks, arrivalIndex, reverseIndex } = found!;
     for (const other of [...sim.trainList]) sim.removeTrain(other);
     for (const rid of [...sim.routes.keys()]) lineInterlocking.releaseRoute(sim,rid);
     for (const b of sim.plan.blocks) sim.blockDone.add(b.id);

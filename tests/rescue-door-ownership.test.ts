@@ -5,11 +5,12 @@ import { classify } from '../src/sim/halt';
 import { computeBody, indexBodies } from '../src/sim/movement';
 import { platformBerth } from '../src/sim/timetable';
 import { closeDoors, doorMotionTick, openDoors, psdRepaired, psdTick } from '../src/sim/psd';
+import { fixtureTrains } from './helpers/fixture-train';
 
 function fixture() {
   const sim = new Sim({ dayType: 'weekday', dateLabel: 'rescue-door-owner', startTime: 14400,
     seed: 7, noPossessions: true, autoRadio: false, autoDispatch: false });
-  const [rescuer, failed] = sim.trainList;
+  const [rescuer, failed] = fixtureTrains(sim, 2);
   for (const tr of [...sim.trainList]) if (tr !== rescuer && tr !== failed) sim.removeTrain(tr);
   const berth = sim.topo.berths[platformBerth(sim.topo, 8, 'DN')];
   const link = sim.topo.links[berth.link];

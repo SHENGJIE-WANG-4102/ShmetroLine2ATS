@@ -1,3 +1,5 @@
+// D178: the carried night world here is the mid-line overnight one (fixture data).
+import './helpers/midline-storage';
 import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {nextOperatingConfig,carryWorld,DAY_S} from '../src/sim/operatingDay';
@@ -8,6 +10,7 @@ import {computeBody,indexBodies} from '../src/sim/movement';
 import {spawnDue,updateTrainTasks} from '../src/sim/ats';
 import {overnightPlaces} from '../src/sim/timetable';
 import {runUntil,assertIntegrity} from './helpers';
+import { fixtureTrain } from './helpers/fixture-train';
 
 /** Stage a settled shutdown; the integration below runs only 26:30–05:30. */
 function night(){
@@ -60,7 +63,7 @@ describe('continuous operating days',()=>{
  },120000);
  it('adopts a real overnight arrival which only finishes after 04:00',()=>{
   let s=night();s.t=99900;
-  const place=overnightPlaces(s.topo)[0],old=s.trainList[0];
+  const place=overnightPlaces(s.topo)[0],old=fixtureTrain(s);
   old.tasks=[{k:'stable',berth:place.arrivalBerth,reason:'late overnight'}];old.phase='run';
   const id=old.id,vehicle=old.vehicle;
   s=new Sim(nextOperatingConfig(s),s);
@@ -78,11 +81,11 @@ describe('continuous operating days',()=>{
  it('rebases every carried clock and preserves routes, faults, calls and weather',()=>{
   const s=night();s.t=99900;
   const stamp=100000;
-  Object.assign(s.trainList[0],{ebSince:stamp,ebCallAt:stamp,modeSince:stamp,tbCallAt:stamp,pendingModeAt:stamp,phaseSince:stamp,dwellUntil:stamp,doorLockedAt:stamp,arrivedAt:stamp,depReadyAt:stamp,failRecoverAt:stamp,lastTraceT:stamp,stopUntil:stamp,waitSince:stamp});
+  Object.assign(fixtureTrain(s),{ebSince:stamp,ebCallAt:stamp,modeSince:stamp,tbCallAt:stamp,pendingModeAt:stamp,phaseSince:stamp,dwellUntil:stamp,doorLockedAt:stamp,arrivedAt:stamp,depReadyAt:stamp,failRecoverAt:stamp,lastTraceT:stamp,stopUntil:stamp,waitSince:stamp});
   const berth=s.topo.berths.find(b=>b.kind==='platform')!;
-  s.trainList[0].departureDisplay={stop:{k:'stop',berth:berth.id,station:berth.station,trip:-1,arr:stamp,dep:stamp,doors:true,revenue:true},at:stamp,remaining:-2,side:'L',headLeftAt:stamp};
-  s.trainList[0].vRecommended=11;
-  s.trainList[0].doorMotion={kind:'closing',platform:berth.platform,trainAt:stamp,psdAt:stamp-.3};
+  fixtureTrain(s).departureDisplay={stop:{k:'stop',berth:berth.id,station:berth.station,trip:-1,arr:stamp,dep:stamp,doors:true,revenue:true},at:stamp,remaining:-2,side:'L',headLeftAt:stamp};
+  fixtureTrain(s).vRecommended=11;
+  fixtureTrain(s).doorMotion={kind:'closing',platform:berth.platform,trainAt:stamp,psdAt:stamp-.3};
   s.sw[0].moveUntil=stamp;s.plat[0].lastDep=stamp;s.plat[0].lastArr=stamp;s.plat[0].limitUntil=stamp;
   const ar=[...s.routes.values()][0];ar.committed=70001;ar.arsTrain=70002;ar.guideUntil=stamp;ar.cancelAt=stamp;ar.setAt=stamp;
   s.command({c:'fault',kind:'signal',target:0,duration:0});
@@ -91,11 +94,11 @@ describe('continuous operating days',()=>{
   s.possessions=[{id:9,name:'test',sections:[0],from:90000,to:stamp,state:'active'}];s.sec[0].poss=9;s.sec[0].blocked=true;
   s.calls=[{id:7,t:stamp,deadline:stamp,kind:'possRel',target:9,from:'test',text:'test',options:[],auto:'',state:'ringing',repeats:0}];
   s.pendingCalls=[{at:stamp,spec:{kind:'possReq',target:9,from:'test',text:'test',options:[],auto:'',timeout:10}}];
-  s.dispatcher.next.set('test',stamp);s.vehicleResets=[{train:s.trainList[0].id,at:stamp,fault:1}];
+  s.dispatcher.next.set('test',stamp);s.vehicleResets=[{train:fixtureTrain(s).id,at:stamp,fault:1}];
   s.log('B','test','persist',{key:'test'});const eid=s.nextEventId;
   const n=new Sim({...nextOperatingConfig(s),noPossessions:false},s);
-  expect(n.trainList[0].departureDisplay?.at).toBe(stamp-DAY_S);
-  expect(n.trainList[0].vRecommended).toBe(11);
+  expect(fixtureTrain(n).departureDisplay?.at).toBe(stamp-DAY_S);
+  expect(fixtureTrain(n).vRecommended).toBe(11);
   expect(n.faults[0].repairAt).toBe(Infinity);expect(n.faults[0].stageAt).toBe(stamp-DAY_S);expect(n.sig[0].failed).toBe(true);
   expect(n.routes.get(ar.route)?.committed).toBe(70001);
   expect(n.routes.get(ar.route)?.arsTrain).toBe(70002);

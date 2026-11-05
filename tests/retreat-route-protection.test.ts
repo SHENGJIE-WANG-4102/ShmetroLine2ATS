@@ -5,10 +5,11 @@ import {advance,computeBody,indexBodies,reversePermission,scanAhead,updateTrainM
 import {computeOccupancy,releaseRoute,trySetRoute,updateInterlocking,bindRouteApproach} from '../src/sim/interlocking';
 import {capture,restore} from '../src/sim/state';
 import {arbitrateResources} from '../src/sim/resourceArbitration';
+import { fixtureTrain } from './helpers/fixture-train';
 
 function fixture(metres=40){
  const sim=new Sim({dayType:'weekday',date:'2026-10-19',dateLabel:'retreat-route',startTime:14400,seed:107,noPossessions:true,autoRadio:false});
- const lead=sim.trainList[0];
+ const lead=fixtureTrain(sim);
  for(const other of [...sim.trainList])if(other!==lead)sim.removeTrain(other);
  for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
  for(const b of sim.plan.blocks)sim.blockDone.add(b.id);

@@ -25,8 +25,17 @@ describe('planned terminal waiting', () => {
   function fixture(alternative = false) {
     const sim = new Sim({ dayType: 'weekend', date: '2026-10-24', dateLabel: 'terminal-wait',
       startTime: 14400, seed: 14201, noPossessions: true, autoDispatch: false });
-    const a = sim.plan.trips.find(t => t.no === '0001')!;
-    const d = sim.plan.trips.find(t => t.no === '1004')!;
+    // the day's first line-end turn standing ten minutes or more in a tail
+    // (the pairing is the duty's choice, D178: found by shape, not by number)
+    const turns = sim.plan.blocks.flatMap(b => b.trips.slice(0, -1).map((id, i) => [sim.plan.trips[id], sim.plan.trips[b.trips[i + 1]]] as const))
+      .filter(([x, y]) => x.to === y.from && x.dir !== y.dir && y.stops[0].dep - x.stops.at(-1)!.arr >= 600)
+      .sort(([x], [y]) => x.stops.at(-1)!.arr - y.stops.at(-1)!.arr);
+    const [a, d] = turns.find(([x]) => {
+      const list = timetable.blockTasks(sim.topo, sim.plan, sim.plan.blocks[x.block]);
+      const at = list.findIndex(t => t.k === 'stop' && t.trip === x.id);
+      const rev = list.find((t, i) => i > at && t.k === 'reverse') as ReverseTask | undefined;
+      return rev && ['tail', 'siding'].includes(sim.topo.berths[rev.chosen].kind);
+    })!;
     const block = sim.plan.blocks[d.block];
     expect(block.trips.indexOf(d.id)).toBe(block.trips.indexOf(a.id) + 1);
     const tasks = timetable.blockTasks(sim.topo, sim.plan, block);

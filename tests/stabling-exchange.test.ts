@@ -6,6 +6,8 @@ import type {Block,Plan,StopTask,Trip} from '../src/sim/model';
 import * as planning from '../src/sim/planning';
 import {capture,restore} from '../src/sim/state';
 import {applyInput} from '../src/sim/diagnostics';
+import {newTrain} from '../src/sim/ats';
+import {takeVehicle} from '../src/sim/yard';
 
 afterEach(()=>vi.restoreAllMocks());
 function fixture(until=14400){
@@ -22,7 +24,9 @@ function fixture(until=14400){
  const blocks:Block[]=[{id:0,svc:'A',start:{kind:'stable',station:st,berth:place.berth},end:{kind:'stable',station:st,berth:place.berth,holdFrom:-600,holdUntil:until},trips:[0]},
   {id:1,svc:'B',start:{kind:'stable',station:st-1},end:{kind:'depot',depot:0},trips:[1,2]}];
  s.plan={...s.plan,trips:[old,incoming,next],blocks,overlays:[]} as Plan;
- const held=s.trainList[0], approaching=s.trainList[1];
+ // D178: no train stands on the main line overnight; both fixture trains are real yard cars
+ const car=(at:number)=>{const b=s.topo.berths[at];return newTrain(s,null,b.link,b.offset,b.dir,[{link:b.link,dir:b.dir}],takeVehicle(s,0)!);};
+ const held=car(place.berth),approaching=car(platformBerth(s.topo,st-1,'DN'));
  const arrival:StopTask={k:'stop',station:st,berth:place.berth,trip:1,arr:19980,dep:null,doors:true,revenue:true};
  const departure:StopTask={k:'stop',station:st,berth:place.berth,trip:2,arr:null,dep:20400,doors:true,revenue:true};
  Object.assign(held,{phase:'stabled',link:berth.link,off:berth.offset,dir:berth.dir,block:0,tripId:0,tasks:[],failed:false,manual:false,withdrawn:false,coupledLen:0});

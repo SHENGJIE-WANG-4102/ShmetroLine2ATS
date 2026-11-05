@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/engine';
-import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, terminalOverflows, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, allocateTerminalServices, buildStops, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, depotMoves, terminalReuseRejections, type ServiceRequest } from '../src/sim/timetable';
+import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, terminalOverflows, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, departureBerthAfterReverse, allocateTerminalServices, buildStops, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, depotMoves, terminalReuseRejections, type ServiceRequest } from '../src/sim/timetable';
 import { buildTopology, reversedBerthPoint } from '../src/sim/topology';
 import { routePathStart, walkRouteToBerth } from '../src/sim/routePath';
 import { computeRunTimes } from '../src/sim/dynamics';
@@ -80,7 +80,13 @@ describe('daily depot homes', () => {
     const sim = new Sim({ dayType, dateLabel: 'daily depot ledger', startTime: 14400, seed: 1 });
     it(`${dayType}: credits a physical withdrawal instead of its former overnight berth`, () => {
       const plan = structuredClone(sim.plan);
-      const b = plan.blocks.find(b=>b.start.kind==='depot'&&b.end.kind==='stable')!;
+      // D178: no train stands on the main line overnight, so make one duty end there
+      const b = plan.blocks.find(b=>b.start.kind==='depot'&&b.end.kind==='stable') ?? (() => {
+        const d = plan.blocks.find(b=>b.start.kind==='depot'&&b.end.kind==='depot'&&sim.topo.stations[plan.trips[b.trips.at(-1)!].to].turnbackBerths.length)!;
+        const st = plan.trips[d.trips.at(-1)!].to;
+        d.end = { kind: 'stable', station: st, berth: sim.topo.stations[st].turnbackBerths[0] };
+        return d;
+      })();
       for (const id of b.trips) plan.trips[id].cancelled = true;
       b.withdrawal = {depot:1,at:12*3600};
       const events = depotLedger(sim.topo,plan).events.filter(e=>e.block===b.id);
@@ -98,29 +104,41 @@ describe('daily depot homes', () => {
         const last = block.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled && t.revenue).at(-1)!;
         if (!last) continue; // dedicated hot spares only position and return
         const depot = sim.topo.depots[block.end.depot];
-        const portal=depot.portals.entry[last.dir];
-        expect(last.to, `block ${block.svc}: clear at its actual entry station`).toBe(portal.station);
+        // D178 (user decision): past the last train a car clears at its
+        // terminal and runs on boarding nobody to the entry station
+        const runs = block.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled);
+        const final = runs.at(-1)!;
+        const portal=depot.portals.entry[final.dir];
+        expect(final.to, `block ${block.svc}: enters at its actual entry station`).toBe(portal.station);
+        for (const run of runs.slice(runs.indexOf(last) + 1))
+          expect(run.stops.some((p, i) => i < run.stops.length - 1 && p.stop && !p.noBoard), `block ${block.svc}: boards nobody after its last passenger run`).toBe(false);
         const tasks=blockTasks(sim.topo,sim.plan,block);
         const lastStop=tasks.map(task=>task.k==='stop'&&task.trip===last.id).lastIndexOf(true);
         expect(lastStop, `block ${block.svc}: physical passenger arrival`).toBeGreaterThanOrEqual(0);
-        const tail=tasks.slice(lastStop+1), final=tail.at(-1);
-        expect(final, `block ${block.svc}: correct yard and entry lead`).toMatchObject({k:'depot',depot:depot.id,berth:depot.entryBerths[portal.path]});
+        const tail=tasks.slice(lastStop+1), entered=tail.at(-1);
+        expect(entered, `block ${block.svc}: correct yard and entry lead`).toMatchObject({k:'depot',depot:depot.id,berth:depot.entryBerths[portal.path]});
         const reversals=tail.filter(task=>task.k==='reverse');
-        expect(reversals.length, `block ${block.svc}: reverse only if required by its entry`).toBe(portal.reverse?1:0);
+        const after=runs.slice(runs.indexOf(last)), turnsOn=after.slice(1).filter((run,i)=>run.dir!==after[i].dir).length;
+        expect(reversals.length, `block ${block.svc}: reverse only if required by its entry`).toBe(turnsOn+(portal.reverse?1:0));
         if(portal.reverse){
-          const turn=reversals[0];
+          const turn=reversals.at(-1)!;
           expect(turn.station).toBe(portal.station);
-          expect(turn.chosen).toBe(platformBerth(sim.topo,portal.station,last.dir));
+          expect(turn.chosen).toBe(platformBerth(sim.topo,portal.station,final.dir));
         }
-        const berth=sim.topo.berths[platformBerth(sim.topo,last.to,last.dir)];
+        // (from the berth the last passenger arrival actually used, e.g. a turnback platform)
+        const arrival=tasks[lastStop];
+        const berth=sim.topo.berths[arrival.k==='stop'?arrival.berth:platformBerth(sim.topo,last.to,last.dir)];
         let point={link:berth.link,off:berth.offset,dir:berth.dir};
+        let reversedAt:number|undefined;
         for(const task of tail){
-          const id=task.k==='reverse'?task.chosen:task.k==='stop'?task.berth:task.k==='depot'?task.berth:undefined;
+          // (a train reversed at a platform berth leaves from that platform, as the runtime does)
+          const id=task.k==='reverse'?task.chosen:task.k==='stop'?(reversedAt!==undefined?departureBerthAfterReverse(sim.topo,reversedAt,task.berth):task.berth):task.k==='depot'?task.berth:undefined;
+          reversedAt=task.k==='reverse'?task.chosen:undefined;
           if(id===undefined)continue;
           const path=routePathStart(sim.topo,point,id);
           expect(path, `block ${block.svc}: physically reachable ${task.k}`).toBeDefined();
           if(!path)break;
-          if('start' in path)expect(Number.isFinite(walkRouteToBerth(sim.topo,sim.routeTable,path.start,id))).toBe(true);
+          if('start' in path)expect(Number.isFinite(walkRouteToBerth(sim.topo,sim.routeTable,path.start,id)), `block ${block.svc}: route to ${task.k} ${sim.topo.berths[id].name}`).toBe(true);
           const target=sim.topo.berths[id];
           const next=task.k==='reverse'?reversedBerthPoint(sim.topo,id,LINE_INFO.trainLength):{link:target.link,off:target.offset,dir:target.dir};
           expect(next).toBeDefined();if(!next)break;point=next;
@@ -164,22 +182,37 @@ describe('daily depot homes', () => {
     try {
       delete rule.service;
       const direct = new Sim({ dayType: 'weekday', dateLabel: 'direct withdrawal', startTime: 14400, seed: 1 });
-      const gll = sim.topo.stations.find(st => st.id === 'GLL')!.index;
       // D173: with the rule, the car that goes home at 龙阳路 and the one that
       // runs on to GLL can swap, so a 龙阳路–GLL clock may differ; the core
       // keeps every boarding departure, counted per station, direction and hour.
       // An east-only feeder finishing at GLL departs from no core station.
+      // D178: the outer legs and the positioning runs are the duty's choice
+      // (it may trim an outer leg or fit a run); the rule leaves the laid-out
+      // core service as it is.
+      const shr = sim.topo.stations.find(st => st.id === 'SHR')!.index;
+      // D178: east of 龙阳路 the core may give up a late-evening call to a
+      // 龙阳路 return within the published interval (which car returns there
+      // follows the rule), so the identical-count check stops at 龙阳路.
+      const lyl = sim.topo.stations.find(st => st.id === 'LYL')!.index;
       const departures = (sim: Sim) => {
         const count = new Map<string, number>();
-        for (const t of sim.plan.trips) if (t.revenue && !t.cancelled) for (const stop of t.stops.slice(0, -1))
-          if (stop.st <= gll && stop.stop !== false && !stop.noBoard) {
+        // (a departure counts when it runs on inside the window: one leaving 淞虹路 west or
+        // 龙阳路 east serves the outer or eastern leg, which the rules may shape)
+        const inside = (st: number) => st >= shr && st <= lyl;
+        for (const t of sim.plan.trips) if (t.revenue && !t.cancelled && !['ins', 'wd', 'empty', 'adj'].includes(t.kind)) for (const [i, stop] of t.stops.slice(0, -1).entries())
+          if (inside(stop.st) && inside(t.stops[i + 1].st) && stop.stop !== false && !stop.noBoard) {
             const key = `${t.dir} ${STATIONS[stop.st].name} ${Math.floor(stop.dep / 3600)}h`;
             count.set(key, (count.get(key) ?? 0) + 1);
           }
         return [...count].sort(([a], [b]) => a.localeCompare(b));
       };
       expect(departures(sim)).toEqual(departures(direct));
-      expect(direct.plan.trips.filter(t => !t.revenue && t.from === airport && t.to === sim.topo.depots.find(d => d.key === rule.depot)!.station)).toHaveLength(0);
+      // an airport→yard leg runs in service, unless it follows the direction's
+      // last train (D178【假设】: such a move boards nobody)
+      const lastUp = Math.max(...direct.plan.trips.filter(t => t.revenue && !t.cancelled && t.dir === 'UP' && t.from === airport
+        && !['ins', 'wd', 'empty', 'adj'].includes(t.kind)).map(t => t.stops[0].dep));
+      expect(direct.plan.trips.filter(t => !t.revenue && t.from === airport && t.to === sim.topo.depots.find(d => d.key === rule.depot)!.station
+        && t.stops[0].dep <= lastUp)).toHaveLength(0);
     } finally { rule.service = saved; }
   });
 });
@@ -279,7 +312,9 @@ describe('D73 calibrated service anchors', () => {
     expect(live.filter(t => t.dir === 'UP' && t.from === 22 && t.stops[0].dep > H(23, 2))).toHaveLength(0);
   });
   it('stables the last revenue arrivals at the terminal overnight stations', () => {
-    for (const [st, count] of [[0, 2], [30, 1]]) {
+    // D178 用户决定: no main-line overnight trains; the data says how many stand where
+    const night = (st: number) => OPERATIONS.overnightStabling.filter(p => p.kind === 'terminal' && STATIONS.findIndex(x => x.id === p.station) === st).reduce((n, p) => n + p.count, 0);
+    for (const [st, count] of [[0, night(0)], [30, night(30)]]) {
       const expected = live.filter(t => t.to === st).sort((a, b) => b.stops.at(-1)!.arr - a.stops.at(-1)!.arr)
         .slice(0, count).map(t => t.id).sort((a, b) => a - b);
       const actual = sim.plan.blocks.filter(b => b.end.kind === 'stable' && b.end.station === st)
@@ -469,14 +504,16 @@ describe('D72 timetable structure', () => {
     expect(live.filter(t => t.kind === 'small' && t.stops.at(-1)!.arr > H(21, 10))).toHaveLength(0);
     // Retirement is distributed by daily homes rather than the old single
     // 20:55 portal-arrival anchor; the extended western stream is mixed.
+    // D178: the 龙阳路 withdrawals are the first cars no later departure
+    // needs, so they pass 淞虹路 from about 20:10
     for (const to of [19,28,30]) expect(live.some(t => t.dir === 'DN' && t.to === to
-      && t.stops.some(s => s.st === 4 && s.dep >= H(20,15) && s.dep <= H(21,15)))).toBe(true);
+      && t.stops.some(s => s.st === 4 && s.dep >= H(20,0) && s.dep <= H(21,15)))).toBe(true);
     expect(live.some(t => t.kind === 'wd' && t.dir === 'UP' && t.from === 22 && t.to === 0 && Math.abs(t.stops[0].dep - H(20, 55)) <= 180)).toBe(true);
     expect(dayPeriods('weekday').some(p => p.template === 'weekdayEvening')).toBe(false);
     expect(dayPeriods('weekend').find(p => p.from === H(21))?.template).toBe('weekdayEvening');
   });
   for (const dayType of ['weekday', 'weekend'] as const) {
-    it(`${dayType}: official first trains and six overnight trains fit the yards`, () => {
+    it(`${dayType}: official first trains and the overnight trains of the data fit the yards`, () => {
       const sim = make(dayType), { plan, topo } = sim;
       for (const [id, dir] of [['LYL', 'UP'], ['KJG', 'UP'], ['GLL', 'UP'], ['PXL', 'DN'], ['GLL', 'DN'], ['PDA', 'UP']] as const) {
         const st = STATIONS.findIndex(s => s.id === id);
@@ -498,9 +535,8 @@ describe('D72 timetable structure', () => {
         expect(t!.revenue).toBe(true);
         expect(t!.stops.filter(s => s.stop && s.noBoard && s.st !== t!.to).map(s => STATIONS[s.st].id), `${from} ${dir}`).toEqual([]);
       }
-      expect(plan.blocks.filter(b => b.start.kind === 'stable')).toHaveLength(6);
-      expect(plan.blocks.filter(b => b.start.kind === 'stable' && b.start.station === 17)).toHaveLength(2);
-      expect(plan.blocks.filter(b => b.start.kind === 'stable' && b.start.station === 24)).toHaveLength(1);
+      // D178 用户决定: no main-line overnight trains (OPERATIONS.overnightStabling)
+      expect(plan.blocks.filter(b => b.start.kind === 'stable')).toHaveLength(OPERATIONS.overnightStabling.reduce((n, p) => n + p.count, 0));
       const gll = STATIONS.findIndex(st => st.id === 'GLL');
       for (const [dir, dep] of [['UP', H(5, 28)], ['DN', H(6)]] as const) {
         const first = opener(dir, 'GLL', dep)!;
@@ -515,7 +551,9 @@ describe('D72 timetable structure', () => {
         expect(feeder.stops.at(-1)!.arr).toBeLessThanOrEqual(dep + 1e-6);
         expect(depotMoves([b], plan.trips, {topo}).find(move => move.delta < 0))
           .toMatchObject({depot:yard.id,trip:feeder.id,time:b.start.time});
-        const reverse = blockTasks(topo, plan, b).filter(task => task.k === 'reverse' && task.station === gll);
+        // the feeder's own turn only: a pool duty may turn at GLL again later in the day (D178)
+        const all = blockTasks(topo, plan, b), opening = all.findIndex(task => task.k === 'stop' && task.trip === first.id);
+        const reverse = all.slice(0, opening).filter(task => task.k === 'reverse' && task.station === gll);
         expect(reverse.length > 0).toBe(feeder.dir !== first.dir);
       }
       sim.step(); sim.step();
@@ -590,12 +628,15 @@ describe('timetable validator', () => {
       }
       // Deliberately keep a middle spare over the overnight arrival: the
       // opposite-direction berth is still the same physical storage slot.
-      const hot = plan.blocks.find(b => b.trips.some(id => plan.trips[id].standby && plan.trips[id].to === 24))!;
+      // (D178: only where the data still has a middle spare)
+      const hot = plan.blocks.find(b => b.trips.some(id => plan.trips[id].standby && plan.trips[id].to === 24));
+      if (hot) {
       const clash=structuredClone(plan), id=clash.trips.length, block=clash.blocks.length;
       const arrival=structuredClone(clash.trips[hot.trips.at(-1)!]);
       arrival.id=id;arrival.block=block;arrival.no='clashing standby';clash.trips.push(arrival);
       clash.blocks.push({id:block,svc:'clashing standby',start:{kind:'stable',station:arrival.from},end:structuredClone(hot.end),trips:[id]});
       expect(validatePlan(sim.planCtx, clash).some(i => i.code === 'STABLE_CONFLICT' && i.blocks?.includes(hot.id))).toBe(true);
+      }
       // D148: the full-route terminals keep their spare through the day; a
       // peak may borrow it, and the evening window holds it again until 22:00.
       if (dayType === 'weekday') for (const st of [0, E]) {
@@ -752,8 +793,13 @@ describe('timetable validator', () => {
     const sim = new Sim({ dayType: 'weekday', dateLabel: 'order', startTime: 14400, seed: 1 });
     const occupancy = terminalOccupancy(sim.plan).get(22)!.sort((a,b) => a.from-b.from);
     // (one train turns there at a time: move a feeder ahead of the train before it)
-    const index = occupancy.findIndex((item,i) => i > 0
-      && sim.plan.trips[sim.plan.blocks[item.block].trips[0]].kind === 'ins'
+    // (both turn on the platform: a pool feeder may also run through GLL in its own direction, D178)
+    const turns = (item: typeof occupancy[number]) => { const ids = sim.plan.blocks[item.block].trips;
+      const k = ids.findIndex(id => sim.plan.trips[id].to === 22 && Math.abs(sim.plan.trips[id].stops.at(-1)!.arr - item.from) < 1800);
+      return k >= 0 && k + 1 < ids.length && sim.plan.trips[ids[k + 1]].dir !== sim.plan.trips[ids[k]].dir; };
+    // (the block's first run, from its yard, is what is moved)
+    const index = occupancy.findIndex((item,i) => i > 0 && item.from < 9 * 3600 && turns(item) && turns(occupancy[i-1])
+      && sim.plan.blocks[item.block].start.kind === 'depot'
       && sim.plan.trips[sim.plan.blocks[item.block].trips[0]].to === 22);
     expect(index).toBeGreaterThan(0);
     const first = occupancy[index-1], second = occupancy[index];
@@ -793,11 +839,12 @@ describe('fixed-time special trains (定点班车)', () => {
     expect(air.map((t) => t.stops[0].dep).sort((a, b) => a - b)).toEqual([22 * 3600 + 50 * 60, 23 * 3600 + 10 * 60, 23 * 3600 + 30 * 60]);
     for (const t of air) {
       expect([t.from, t.to]).toEqual([idx('PDA'), idx('ZSG')]);
-      // After the fixed train terminates, its next service carries to the
-      // actual 北翟路 entry portal before returning to the yard.
+      // After the fixed train terminates, its car runs on to the actual
+      // 北翟路 entry portal. It runs after the direction's last train, so it
+      // boards nobody (D178, 用户决定: 末班后可空车回送).
       const b = sim.plan.blocks[t.block];
       const next = sim.plan.trips[b.trips[b.trips.indexOf(t.id) + 1]];
-      expect(next.revenue).toBe(true);
+      expect(next.revenue).toBe(false);
       expect(next.from).toBe(idx('ZSG'));
       expect(next.to).toBe(idx('SHR'));
       expect(next.kind).toBe('wd');

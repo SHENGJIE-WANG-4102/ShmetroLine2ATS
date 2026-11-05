@@ -4,6 +4,7 @@ import { PERF } from '../src/sim/dynamics';
 import { STATIONS, STATION_EN } from '../src/data/current';
 import type { PisRow, TrackDir } from '../src/sim/model';
 import type { Sim } from '../src/sim/engine';
+import { fixtureTrain } from './helpers/fixture-train';
 
 const train = (destination: string, eta = 36, status: PisRow['status'] = 'eta'): PisRow => ({
   destSt: STATIONS.findIndex((s) => s.id === destination),
@@ -145,8 +146,8 @@ describe('PIS actual task destination', () => {
     // The car has already left the origin of this trip: later stops of the
     // same active trip must not resurrect an overdue zero-countdown row.
     sim.t=departure+180;
-    sim.trainList[0].tasks=sim.trainList[0].tasks.filter(t=>t.k!=='stop'||t.trip!==1||t.station!==station);
-    sim.trainList[0].tasks.push({...task,station:1} as Sim['trainList'][number]['tasks'][number]);
+    fixtureTrain(sim).tasks=fixtureTrain(sim).tasks.filter(t=>t.k!=='stop'||t.trip!==1||t.station!==station);
+    fixtureTrain(sim).tasks.push({...task,station:1} as Sim['trainList'][number]['tasks'][number]);
     expect(computePis(sim,station).DN).toEqual([]);
     sim.trainList=[];
     expect(computePis(sim,station).DN).toEqual([]);
