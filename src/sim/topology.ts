@@ -555,9 +555,9 @@ export function buildTopology(): Topology {
     const f = features.find((x) => x.station === station && x.pts.some((p) => Math.abs(p.ch - ch) < 150));
     if (f) curFeature = f; else beginFeature(station);
   };
-  const addSwitchPt = (track: 'DN' | 'UP', ch: number, toeSide: 'west' | 'east', sb: SwBuild) => {
+  const addSwitchPt = (track: 'DN' | 'UP', ch: number, toeSide: 'west' | 'east', sb: SwBuild, bounds = true) => {
     mainPts[track].push({ ch, kind: 'switch', toeSide, swBuild: sb });
-    hardBounds[track].push(ch - SW_HALF, ch + SW_HALF);
+    if (bounds) hardBounds[track].push(ch - SW_HALF, ch + SW_HALF);
     curFeature!.pts.push({ track, ch });
   };
   const featureExtent = (f: (typeof features)[number], t: 'DN' | 'UP') => {
@@ -579,26 +579,36 @@ export function buildTopology(): Topology {
   // crossovers (incl. scissors at terminals and junctions)
   interface XoBuild { kind: CrossoverKind; center: number; station: number; sw: TSwitch; dn: SwBuild; up: SwBuild }
   const xos: XoBuild[] = [];
-  const addCrossover = (center: number, kind: CrossoverKind, station: number, swKind: TSwitch['kind'] = 'crossover', halfSpan = XO_HALF): XoBuild => {
+  const addCrossover = (center: number, kind: CrossoverKind, station: number, swKind: TSwitch['kind'] = 'crossover', halfSpan = XO_HALF, bounds = true): XoBuild => {
     const sw = newSwitch(swKind, station);
     const dn: SwBuild = { sw: sw.id };
     const up: SwBuild = { sw: sw.id };
     if (kind === '/') {
       // DN at west end (toe faces west), UP at east end (toe faces east)
-      addSwitchPt('DN', center - halfSpan, 'west', dn);
-      addSwitchPt('UP', center + halfSpan, 'east', up);
+      addSwitchPt('DN', center - halfSpan, 'west', dn, bounds);
+      addSwitchPt('UP', center + halfSpan, 'east', up, bounds);
     } else {
-      addSwitchPt('UP', center - halfSpan, 'west', up);
-      addSwitchPt('DN', center + halfSpan, 'east', dn);
+      addSwitchPt('UP', center - halfSpan, 'west', up, bounds);
+      addSwitchPt('DN', center + halfSpan, 'east', dn, bounds);
     }
     const xo = { kind, center, station, sw, dn, up };
     xos.push(xo);
     return xo;
   };
 
+  /** A scissors: both diagonals on one centre, crossing at a diamond. Each
+   * main has one switch section over both its points, so the two diagonals
+   * (and a straight move) exclude each other through the section locks. */
+  const addScissors = (center: number, station: number, halfSpan = XO_HALF) => {
+    addCrossover(center, '/', station, 'crossover', halfSpan, false);
+    addCrossover(center, '\\', station, 'crossover', halfSpan, false);
+    for (const t of ['DN', 'UP'] as const) hardBounds[t].push(center - halfSpan - SW_HALF, center + halfSpan + SW_HALF);
+  };
+
   for (const x of LAYOUT.crossovers) {
     joinFeature(x.station, chains[x.station] + x.offset);
-    addCrossover(chains[x.station] + x.offset, x.kind, x.station);
+    if (x.kind === 'X') addScissors(chains[x.station] + x.offset, x.station);
+    else addCrossover(chains[x.station] + x.offset, x.kind, x.station);
   }
 
   /** A second turnout connects a siding or paired middle track back to a main. */
@@ -648,10 +658,14 @@ export function buildTopology(): Topology {
     if (t.scissors ?? true) {
       const halfSpan = t.scissorsHalfSpan ?? XO_HALF;
       const c1 = c + s * (PLAT_HALF + SW_HALF + halfSpan + (t.scissorsApproach ?? 30));
-      const c2 = c1 + s * (t.scissorsSpacing ?? (2 * XO_HALF + 2 * SW_HALF + 10 + 30));
+      const spacing = t.scissorsSpacing ?? (2 * XO_HALF + 2 * SW_HALF + 10 + 30);
+      const c2 = c1 + s * spacing;
       beginFeature(t.station);
-      addCrossover(c1, '/', t.station, 'crossover', halfSpan);
-      addCrossover(c2, '\\', t.station, 'crossover', halfSpan);
+      if (spacing === 0) addScissors(c1, t.station, halfSpan);
+      else {
+        addCrossover(c1, '/', t.station, 'crossover', halfSpan);
+        addCrossover(c2, '\\', t.station, 'crossover', halfSpan);
+      }
       f = features[features.length - 1];
     } else {
       // the mains run on past the station's own switches (a double Y)

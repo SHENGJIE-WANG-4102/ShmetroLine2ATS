@@ -27,7 +27,8 @@ export type CrossoverKind = '/' | '\\';
 export interface CrossoverDef {
     station: number;
     offset: number;
-    kind: CrossoverKind;
+    /** '/' or '\' single crossover; 'X' a scissors (both diagonals on one centre, crossing) */
+    kind: CrossoverKind | 'X';
 }
 export interface LeadDef {
     depot: string;
@@ -90,7 +91,8 @@ export interface TailDef {
     bufferFromStation?: number;
     scissors?: boolean;
     turnback?: boolean;
-    /** Extra distance from the platform to the first crossover, and distance between crossover centres. */
+    /** Extra distance from the platform to the first crossover, and distance between crossover centres
+     * (0: a true scissors, the diagonals cross on one centre). */
     scissorsApproach?: number;
     scissorsSpacing?: number;
     scissorsHalfSpan?: number;

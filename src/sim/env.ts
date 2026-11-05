@@ -164,6 +164,21 @@ function possessionClear(sim: Sim, p: Possession): boolean {
     return section.chainFrom < Math.max(a,b) && section.chainTo > Math.min(a,b);
   });
   const west = topo.sections[p.sections[0]]?.station ?? 0;
+  // A car's later trips (before the work ends) run through the interval too:
+  // a running train only holds its current trip as tasks.
+  const tripsCross = (from: number, trips: readonly number[]) => {
+    for (const trip of trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled && !t.completed)) {
+      const stops = effectiveStops(trip);
+      if (!stops.length) continue;
+      if (stops[0].dep >= p.to) break;
+      for (const stop of stops) {
+        const to = topo.stations[stop.st].chain;
+        if (crosses(from, to)) return true;
+        from = to;
+      }
+    }
+    return false;
+  };
   for (const tr of sim.trainList) {
     if (tr.phase === 'stabled') continue;
     for (const b of tr.body) if (secs.has(topo.links[b.link].section)) return false;
@@ -185,20 +200,25 @@ function possessionClear(sim: Sim, p: Possession): boolean {
         if (p.sections.some((s) => topo.sections[s].chainFrom < hi && topo.sections[s].chainTo > lo)) return false;
       }
     }
+    const block = tr.block >= 0 && !sim.blockDone.has(tr.block) ? sim.plan.blocks[tr.block] : undefined;
+    const later = block ? block.trips.slice(block.trips.indexOf(tr.tripId) + 1).filter(id => !sim.plan.trips[id].cancelled && !sim.plan.trips[id].completed) : [];
+    if (tripsCross(from, later)) return false;
+    // A train whose work ends on the line (a relieved car finishing its last
+    // kept trip) is still to be withdrawn to a yard; its return path is not a
+    // task yet. Keep the work off the way to the nearest yard on either side.
+    const last = tr.tasks.at(-1);
+    if (!later.length && last?.k !== 'depot' && last?.k !== 'stable') {
+      let below = -Infinity, above = Infinity;
+      for (const d of topo.depots) {
+        if (d.junctionChain <= from) below = Math.max(below, d.junctionChain);
+        else above = Math.min(above, d.junctionChain);
+      }
+      if (below > -Infinity && crosses(from, below) || above < Infinity && crosses(from, above)) return false;
+    }
   }
   for(const block of sim.plan.blocks) {
     if(block.train!==undefined||sim.blockDone.has(block.id)||block.start.kind!=='depot'||block.start.time>=p.to) continue;
-    let from=topo.depots[block.start.depot].junctionChain;
-    for(const trip of block.trips.map(id=>sim.plan.trips[id]).filter(t=>!t.cancelled&&!t.completed)) {
-      const stops=effectiveStops(trip);
-      if(!stops.length) continue;
-      if(stops[0].dep>=p.to) break;
-      for(const stop of stops) {
-        const to=topo.stations[stop.st].chain;
-        if(crosses(from,to)) return false;
-        from=to;
-      }
-    }
+    if(tripsCross(topo.depots[block.start.depot].junctionChain, block.trips)) return false;
   }
   return true;
 }

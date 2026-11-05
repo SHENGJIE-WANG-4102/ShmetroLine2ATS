@@ -13,9 +13,10 @@ function fixture(metres=40){
  for(const other of [...sim.trainList])if(other!==lead)sim.removeTrain(other);
  for(const rid of [...sim.routes.keys()])releaseRoute(sim,rid);
  for(const b of sim.plan.blocks)sim.blockDone.add(b.id);
- const route=sim.topo.routes[76],berth=sim.topo.berths[44];
+ const route=sim.topo.routes.find(r=>r.name==='X1201→X1205')!,berth=sim.topo.berths[44];
+ const approach=sim.topo.nodes[sim.topo.links[berth.link].a].links.find(l=>l!==berth.link)!;
  expect(route.name).toBe('X1201→X1205');expect(route.steps).toEqual([{link:berth.link,dir:1}]);
- Object.assign(lead,{link:berth.link,off:berth.offset,dir:1,hist:[{link:76,dir:1},{link:77,dir:1}],
+ Object.assign(lead,{link:berth.link,off:berth.offset,dir:1,hist:[{link:approach,dir:1},{link:berth.link,dir:1}],
   recentBody:undefined,block:-1,tripId:-1,phase:'run',v:0,a:0,manual:true,mode:'CM',level:'CBTC',
   doorsAwait:false,doorsOpen:false,doorSide:'',doorLockedAt:0,stopUntil:0,failed:false,eb:false,
   hold:false,retreat:undefined,overrun:0,tbStage:'none',maDist:0,lastMa:0,lastDs:0});
@@ -28,8 +29,8 @@ function fixture(metres=40){
  updateTrainTasks(sim,lead);expect(lead.overrun).toBeCloseTo(metres);
  expect(answerOverrun(sim,lead,'back').ok).toBe(true);
  const follower=structuredClone(lead);
- Object.assign(follower,{id:999,vehicle:'0202',link:76,off:sim.topo.links[76].len-120,dir:1,
-  hist:[{link:76,dir:1}],recentBody:undefined,retreat:undefined,manual:false,mode:'DTO',
+ Object.assign(follower,{id:999,vehicle:'0202',link:approach,off:sim.topo.links[approach].len-120,dir:1,
+  hist:[{link:approach,dir:1}],recentBody:undefined,retreat:undefined,manual:false,mode:'DTO',
   nextSignal:route.start,nextSignalDist:120,stopDist:Infinity,reverser:1});
  follower.tasks=[{k:'stop',berth:48,station:sim.topo.berths[48].station,trip:-1,arr:sim.t+400,dep:null,doors:false,revenue:false}];
  computeBody(sim,follower);sim.addTrain(follower);indexBodies(sim);computeOccupancy(sim);
@@ -93,7 +94,7 @@ describe('remaining retreat occupancy protects route admission',()=>{
   // A longer explicitly authorised return leaves the platform physically
   // empty, so existing physical resource checks can admit the follower.
   const {sim,lead,follower,route}=fixture(300),consent=lead.retreat;
-  expect(lead.body.some(b=>b.link===77)).toBe(false);
+  expect(lead.body.some(b=>b.link===sim.topo.berths[44].link)).toBe(false);
   lead.retreat=undefined;follower.nextSignal=-1;
   expect(trySetRoute(sim,route.id,{fleeting:true}).ok).toBe(true);updateInterlocking(sim);
   follower.nextSignal=route.start;

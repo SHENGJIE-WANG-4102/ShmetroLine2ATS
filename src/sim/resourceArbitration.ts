@@ -61,11 +61,17 @@ export interface ResourceDecision {
   code?: HaltCode;
   /** Actual first limiting cause for each attempted option, from this allocation. */
   alternatives?: WaitAlternative[];
+  /** A view handed to an ordinary through train: this unentered origin
+   * entrant departs its platform first (Rule 3), not a resource claim. */
+  precedence?: boolean;
 }
 export interface ResourceAllocation {
   decisions: Map<number, ResourceDecision>;
   claims: Map<number, ResourceDecision>;
   switches: Map<number, { decision: ResourceDecision; positions: Set<'N' | 'R'> }[]>;
+  /** Denied origin entrants waiting for a train to clear their platform, by platform. */
+  origins?: Map<number, { dep: number; decision: ResourceDecision }[]>;
+  physical?: PhysicalOrder;
 }
 
 /** Carry only topology IDs and geometry, never timetable IDs or clocks. */
@@ -791,6 +797,46 @@ function physicallyNeeds(order: PhysicalOrder, train: number, owner: number | ((
   return false;
 }
 
+/** The departure of `tr`'s current movement from `platform`, if any. Only
+ * the current service or the contiguous turn at its current stop counts: a
+ * future return trip from several stations away does not reserve this
+ * platform ahead of an actual siding occupant. DWELL still belongs to its
+ * actual current stop, not the next station; an ordinary running service has
+ * not begun its destination's cab change. */
+function movementStopAt(sim: Sim, tr: Train, platform: number): StopTask | null {
+  const stops = queryCache(sim).movementStops;
+  let byPlatform = stops.get(tr);
+  if (!byPlatform) stops.set(tr, byPlatform = new Map());
+  let task = byPlatform.get(platform);
+  if (task === undefined) {
+    const tasks = tr.tasks, first = tasks[0];
+    let trip = first?.k === 'stop' ? first.trip : -1;
+    const station = first && 'station' in first ? first.station : undefined;
+    let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
+    const cache = queryCache(sim);
+    let ends = cache.tripEnds.get(tr);
+    if (!ends) {
+      cache.tripEnds.set(tr, ends = new Map());
+      tasks.forEach((t, i) => { if (t.k === 'stop') ends!.set(t.trip, i); });
+    }
+    task = null;
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      if ('station' in t && t.station !== station) sameStation = false;
+      // Finishing a local cab change starts this same movement's service;
+      // it does not expose a later turn at another station to the queue.
+      if (sameStation && t.k === 'stop' && t.dep !== null && (t.arr === null || t.arr === t.dep)) trip = t.trip;
+      if (t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
+        && t.dep !== null && sim.topo.berths[t.berth].platform === platform) { task = t; break; }
+      // Off the current station the trip no longer changes: past its last
+      // stop (or with none) nothing later can match.
+      if (!sameStation && i > 0 && (trip < 0 || i >= (ends.get(trip) ?? -1))) break;
+    }
+    byPlatform.set(platform, task);
+  }
+  return task;
+}
+
 function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: PhysicalOrder, request: ResourceRequest, option: ResourceOption): { id: number } | undefined {
   if (request.inside && !request.safeHere || request.committed) return undefined;
   const origin = optionOrigin(sim, option, request.tasks)?.task;
@@ -835,41 +881,7 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   // ordinary through trains receive no resource claim of their own.
   return sim.trainList.find(tr => {
     if (tr.id === request.id || tr.failed) return false;
-    // Only the current service or the contiguous turn at its current stop
-    // can compete here. A future return trip from several stations away
-    // does not reserve this origin ahead of an actual siding occupant.
-    // DWELL still belongs to its actual current stop, not the next station.
-    // An ordinary running service has not begun its destination's cab change.
-    const stops = queryCache(sim).movementStops;
-    let byPlatform = stops.get(tr);
-    if (!byPlatform) stops.set(tr, byPlatform = new Map());
-    let task = byPlatform.get(platform);
-    if (task === undefined) {
-      const tasks = tr.tasks, first = tasks[0];
-      let trip = first?.k === 'stop' ? first.trip : -1;
-      const station = first && 'station' in first ? first.station : undefined;
-      let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
-      const cache = queryCache(sim);
-      let ends = cache.tripEnds.get(tr);
-      if (!ends) {
-        cache.tripEnds.set(tr, ends = new Map());
-        tasks.forEach((t, i) => { if (t.k === 'stop') ends!.set(t.trip, i); });
-      }
-      task = null;
-      for (let i = 0; i < tasks.length; i++) {
-        const t = tasks[i];
-        if ('station' in t && t.station !== station) sameStation = false;
-        // Finishing a local cab change starts this same movement's service;
-        // it does not expose a later turn at another station to the queue.
-        if (sameStation && t.k === 'stop' && t.dep !== null && (t.arr === null || t.arr === t.dep)) trip = t.trip;
-        if (t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
-          && t.dep !== null && sim.topo.berths[t.berth].platform === platform) { task = t; break; }
-        // Off the current station the trip no longer changes: past its last
-        // stop (or with none) nothing later can match.
-        if (!sameStation && i > 0 && (trip < 0 || i >= (ends.get(trip) ?? -1))) break;
-      }
-      byPlatform.set(platform, task);
-    }
+    const task = movementStopAt(sim, tr, platform);
     // (pure conditions, cheapest first)
     return !!task && task.dep! < origin.dep!
       && !tr.body.some(b => option.sections.has(sim.topo.links[b.link].section))
@@ -1011,7 +1023,21 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
         list.push({ decision, positions: set }); result.switches.set(sw, list);
       }
     }
+    // Rule 3, the converse of earlierOrigin's through-service clause: a
+    // denied origin entrant still waiting for an actual train to clear its
+    // way keeps its timetable place at the platform against through trains.
+    if (!decision.admitted && !request.committed && !(request.inside && !request.safeHere)
+      && !decision.option.unreachable && decision.blocker >= 0) {
+      const origin = optionOrigin(sim, decision.option, request.tasks)?.task;
+      if (origin && entersOrigin(sim, decision.option, origin)) {
+        const platform = sim.topo.berths[origin.berth].platform;
+        result.origins ??= new Map();
+        const list = result.origins.get(platform) ?? [];
+        list.push({ dep: origin.dep!, decision }); result.origins.set(platform, list);
+      }
+    }
   }
+  result.physical = physical;
   allocations.set(sim, result);
   return result;
 }
@@ -1054,7 +1080,7 @@ export function resourceAuthorityBlocker(sim: Sim, train: Train, rid: number): R
     detail: decision?.detail || `${sim.topo.signals[sim.topo.routes[rid].start].name} 等待本车当前整段动作准入`,
   };
   const claim = routeResourceBlocker(sim, train, rid);
-  if (claim) return { train: claim.request.id, code: 'ROUTE_WAIT', detail: resourceWaitDetail(sim, rid, claim) };
+  if (claim) return { train: claim.request.id, code: claim.precedence ? 'REGULATION' : 'ROUTE_WAIT', detail: resourceWaitDetail(sim, rid, claim) };
 }
 
 export function adoptSpawnResources(sim: Sim, block: number, tr: Train) {
@@ -1129,6 +1155,33 @@ export function routeResourceBlocker(sim: Sim, train: Train, rid: number): Resou
     if (prior.decision.request.id === train.id || ![...prior.positions].some(pos => pos !== sw.pos)) continue;
     if (!occupies(prior.decision)) return prior.decision;
   }
+  return originPrecedence(sim, result, train, rid);
+}
+
+/** Rule 3: an ordinary through train whose own departure from a platform is
+ * no earlier than a waiting origin entrant's lets that entrant in first. The
+ * complement of earlierOrigin's through-service clause (`dep <` there), so
+ * the two never wait for each other; never for an entrant that physically
+ * needs this train to move first. */
+function originPrecedence(sim: Sim, result: ResourceAllocation, train: Train, rid: number): ResourceDecision | undefined {
+  if (!result.origins || train.failed) return undefined;
+  // Timetable order withholds a route; it never revokes one already set
+  // under approach locking (the entrant then waits for this train).
+  const start = sim.topo.routes[rid].start;
+  if (sim.sig[start].route === rid && approachLocked(sim, start)) return undefined;
+  for (const step of sim.topo.routes[rid].steps) {
+    const entrants = result.origins.get(sim.topo.links[step.link].platform);
+    if (!entrants) continue;
+    const stop = movementStopAt(sim, train, sim.topo.links[step.link].platform);
+    if (!stop) return undefined;
+    // Neither the entrant nor the train it waits for may need this train to
+    // move first: an earlier service queued behind it would close the loop
+    // entrant -> that service -> this train -> entrant.
+    const needs = (id: number) => id === train.id || id !== -1 && physicallyNeeds(result.physical!, id, train.id);
+    const first = entrants.find(e => e.decision.request.id !== train.id && e.dep <= stop.dep!
+      && !needs(e.decision.request.id) && !needs(e.decision.blocker));
+    return first && { ...first.decision, precedence: true };
+  }
 }
 
 export function resourceRouteReserved(sim: Sim, rid: number): boolean {
@@ -1143,6 +1196,7 @@ export function resourceRouteReserved(sim: Sim, rid: number): boolean {
 /** Rule 4: virtual yard requests also name the precise affected route. */
 export function resourceWaitDetail(sim: Sim, rid: number, decision: ResourceDecision): string {
   const owner = resourceApplicantLabel(sim, decision.request.id);
+  if (decision.precedence) return `${sim.topo.signals[sim.topo.routes[rid].start].name} 按图先让${owner}进入始发站台`;
   return `${sim.topo.routes[rid].name} 等待完整动作退出：${owner}`;
 }
 

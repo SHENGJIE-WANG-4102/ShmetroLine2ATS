@@ -784,8 +784,9 @@ describe('multiple-failure maintenance escalation', () => {
     failed.tasks=[];rescuer.tasks=[];failed.hold=rescuer.hold=true;
     // Straight tail pull-out: both scissors points lie normal beneath the body,
     // so no rescuer can cross over from the opposite platform (the airport
-    // throat was redrawn; S3110 is the UP-tail exit signal).
-    const pullout=sim.topo.routes.find(r=>r.name==='S3110→S3106')!;
+    // throat is a true scissors; the straight route into the UP platform's
+    // exit signal S3106 starts at the UP-tail exit signal).
+    const pullout=sim.topo.routes.find(r=>r.name.endsWith('→S3106')&&!r.name.includes('侧向')&&sim.topo.links[r.steps[0].link].track==='UP')!;
     expect(trySetRoute(sim,pullout.id,{manual:true,train:failed.id}).ok).toBe(true);advance(sim,5);
     // Airport scissors footprint: the head stands in the second point section,
     // the body back over the first one and the UP platform. The point positions
@@ -1603,9 +1604,10 @@ describe('ATO with a driver under CBTC (D52)', () => {
         const task = t.tasks[0];
         if (task?.k === 'reverse' && t.mode === 'AM') {
           reversals++;
-          // Paper whole-turn increments include one/two 20s door departures:
-          // front 30-20=10s, rear 67.5-40=27.5s at the reversal itself.
-          const increment = sim.topo.berths[task.chosen].kind === 'platform' ? 10 : 27.5;
+          // Whole-turn increments include one/two AM door departures, each
+          // carrying the post-lock driver work; the rest falls at the reversal.
+          const work = OPERATIONS.atoDriverWork, kind = sim.topo.berths[task.chosen].kind === 'platform' ? 'front' : 'rear';
+          const increment = work.turnbackExtraS[kind] - work.turnbackDoorCycles[kind] * work.postLockExtraS;
           // D171: a registered rear turnback changes ends on the shared reference.
           const base = calibratedRearTurnback(sim.topo, task) && driverTurnbackKind(sim.topo, task) === 'rear'
             ? Math.max(task.minTime, OPERATIONS.rearTurnback!.changeEndsS) : task.minTime;

@@ -251,6 +251,9 @@ export function cancelRoute(sim: Sim, sig: number, opts: { force?: boolean; manu
     return { ok: true, msg: `${name} 接近锁闭，信号关闭，进路延时${APPROACH_RELEASE}秒解锁` };
   }
   releaseRoute(sim, sg.route);
+  // An authority already issued over the released route is withdrawn now,
+  // not at the train's next motion tick (the train can stop: not approach locked).
+  for (const tr of sim.trainList) if (tr.maSigs.includes(sig)) withdrawAuthority(sim, tr);
   return { ok: true, msg: `${name} 进路取消` };
 }
 

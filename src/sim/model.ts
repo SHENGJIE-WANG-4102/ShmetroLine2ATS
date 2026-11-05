@@ -928,6 +928,8 @@ export interface Snapshot {
   dateLabel: string;
   sections: Uint16Array;
   sectionTsr: Uint8Array;
+  /** the route (topology id) locking each section, -1 when none */
+  sectionRoute: Int16Array;
   switches: Uint8Array;
   signals: Uint8Array;
   platforms: Uint8Array;

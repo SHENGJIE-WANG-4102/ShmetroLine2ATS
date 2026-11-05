@@ -29,13 +29,13 @@ function fixture(mode:'DTO'|'AM'='DTO',stationId='RMG',dir:'DN'|'UP'='DN'){
 }
 
 describe('paper AM driver work',()=>{
- it('keeps DTO random sampling identical and adds 20 seconds only once after physical lock for a simulated AM driver',()=>{
+ it('keeps DTO random sampling identical and adds the driver confirmation only once after physical lock for a simulated AM driver',()=>{
   const dto=fixture('DTO'),am=fixture('AM'),began=dto.sim.t;
   updateTrainTasks(dto.sim,dto.tr);updateTrainTasks(am.sim,am.tr);
   expect(am.tr.doorLockedAt).toBe(dto.tr.doorLockedAt);expect(am.tr.doorLockedAt!-began).toBeCloseTo(DOOR_CLOSE_S);
   const base=dto.tr.autoStartAt!-dto.tr.doorLockedAt!;
   expect(base).toBeGreaterThanOrEqual(1.5);expect(base).toBeLessThanOrEqual(3.5);
-  expect(am.tr.autoStartAt!-am.tr.doorLockedAt!-base).toBeCloseTo(20);
+  expect(am.tr.autoStartAt!-am.tr.doorLockedAt!-base).toBeCloseTo(OPERATIONS.atoDriverWork.postLockExtraS);
   expect(am.sim.rng()).toBe(dto.sim.rng());
   am.sim.t=am.tr.doorLockedAt!;doorMotionTick(am.sim);updateTrainTasks(am.sim,am.tr);
   expect(am.tr.phase).toBe('dwell');expect(atoStartReady(am.sim,am.tr).detail).toContain('司机');
@@ -46,7 +46,7 @@ describe('paper AM driver work',()=>{
  it('applies a mid-close DTO to AM conversion once, and keeps player F/G and legacy manual reversal work',()=>{
   const{sim,tr,b}=fixture();closeDoors(sim,tr,b.platform);tr.dwellUntil=tr.autoStartAt!;
   const initial=tr.autoStartAt!;expect(setMode(sim,tr,'AM','CBTC','')).toBe(true);
-  expect(tr.autoStartAt).toBe(initial+20);expect(setMode(sim,tr,'AM','CBTC','')).toBe(true);expect(tr.autoStartAt).toBe(initial+20);
+  expect(tr.autoStartAt).toBe(initial+OPERATIONS.atoDriverWork.postLockExtraS);expect(setMode(sim,tr,'AM','CBTC','')).toBe(true);expect(tr.autoStartAt).toBe(initial+OPERATIONS.atoDriverWork.postLockExtraS);
   expect(sim.command({c:'manual',train:tr.id,mode:'AM'}).ok).toBe(false); // physical closing still in progress
   sim.t=tr.doorLockedAt!;doorMotionTick(sim);
   expect(sim.command({c:'manual',train:tr.id,mode:'AM'}).ok).toBe(true);expect(tr.autoStartAt).toBeUndefined();
@@ -80,7 +80,7 @@ describe('paper AM driver work',()=>{
   const{sim,tr}=fixture('AM');
   Object.assign(tr.tasks[0],{doors:false,revenue:false});tr.load=0;
   expect(simulatedAmDoorWork(tr)).toBe(true);updateTrainTasks(sim,tr);
-  expect(tr.autoStartAt!-tr.doorLockedAt!).toBeGreaterThanOrEqual(21.5);
+  expect(tr.autoStartAt!-tr.doorLockedAt!).toBeGreaterThanOrEqual(1.5+OPERATIONS.atoDriverWork.postLockExtraS);
   sim.t=tr.doorLockedAt!;doorMotionTick(sim);expect(simulatedAmDoorWork(tr)).toBe(true);
   sim.t=tr.autoStartAt!;tr.maDist=6;updateTrainTasks(sim,tr);expect(tr.phase).toBe('dwell');
   expect(tr.atoButtons).toEqual({f:false,g:false});tr.maDist=1000;updateTrainTasks(sim,tr);expect(tr.phase).toBe('run');
@@ -158,7 +158,8 @@ describe('paper AM driver work',()=>{
   // confirmation (1.5–3.5 s) and route ticks vary with the shifted clock.
   expect(am.elapsed-dto.elapsed).toBeGreaterThanOrEqual(lower);expect(am.elapsed-dto.elapsed).toBeLessThanOrEqual(upper);
   expect(am.closes.length).toBe(cycles);
-  expect(am.closes.at(-1)!.departure!-am.closes.at(-1)!.locked).toBeGreaterThanOrEqual(21.5);
-  expect(am.closes.at(-1)!.departure!-am.closes.at(-1)!.locked).toBeLessThan(24);
+  const post=OPERATIONS.atoDriverWork.postLockExtraS;
+  expect(am.closes.at(-1)!.departure!-am.closes.at(-1)!.locked).toBeGreaterThanOrEqual(1.5+post);
+  expect(am.closes.at(-1)!.departure!-am.closes.at(-1)!.locked).toBeLessThan(4+post);
  });
 });

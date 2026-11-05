@@ -370,11 +370,11 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
     if (tr.doorSide || tr.doorMotion?.kind === 'closing') return { ok: false, msg: '请先完成车门操作' };
     if (!setMode(sim, tr, 'AM', tr.level, '司机接管ATO')) return { ok: false, msg: '当前条件不能转AM' };
     tr.manual = false; tr.atoDriver = true; tr.reverser = 1; tr.notch = 0;
-    // Player takeover retains the original cab-change budget, including an
-    // AM→AM takeover that did not require a mode transition.
+    // Player takeover uses the player's own cab-change budget, replacing the
+    // simulated driver's (also on an AM→AM takeover without a mode change).
     const task = tr.tasks[0];
     if (tr.phase === 'reversing' && task?.k === 'reverse')
-      tr.dwellUntil = Math.max(tr.dwellUntil, tr.phaseSince + turnbackDwell(tr.mode, task.minTime, driverTurnbackKind(sim.topo, task), false, calibratedRearTurnback(sim.topo,task)));
+      tr.dwellUntil = (tr.phaseSince + turnbackDwell(tr.mode, task.minTime, driverTurnbackKind(sim.topo, task), false, calibratedRearTurnback(sim.topo,task)));
     tr.atoButtons = { f: false, g: false };
     // A takeover during automatic post-lock waiting goes straight to F/G.
     if (tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen) {

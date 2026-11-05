@@ -257,10 +257,11 @@ export const LAYOUT = {
     // 蟠祥路: the mains run on past the double Y to buffers (storage, no scissors;
     // trains reverse in the two middle tracks)
     { station: 0, side: 'west', length: 465, scissors: false, turnback: false },
-    // 航站楼: scissors right behind the platform, both mains on to buffers.
+    // 航站楼: scissors right behind the platform, both mains on to buffers;
+    // a true 交叉渡线, the diagonals cross on one centre (user, 2026-11-05).
     // Assumed usable rescue length: two 186 m consists plus stopping margin.
     // 【假设】D164 视频标定正常折返；450 m 容量仍供连挂救援。
-    { station: 30, side: 'east', length: 450, bufferFromStation: 785, scissorsApproach: 2, scissorsSpacing: 55, scissorsHalfSpan: 10, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
+    { station: 30, side: 'east', length: 450, bufferFromStation: 785, scissorsApproach: 2, scissorsSpacing: 0, scissorsHalfSpan: 10, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
   ] as TailDef[],
   /** two middle tracks behind a double Y (蟠祥路, 国家会展中心, 淞虹路, 上海科技馆) */
   // (PXL: 420 m, model value — holds a coupled rescue pair clear of the throat)
@@ -306,14 +307,14 @@ export const LAYOUT = {
     { id: 'GLL', name: '广兰路中间线', station: 22, west: -170, east: 170, platform: true },
     { id: 'CXZ', name: '创新中路中间线', station: 24, west: -170, east: 170, localEntryShunt: true },
   ] as LoopDef[],
-  /** single crossovers (渡线); a scissors is a '/' and a '\' next to each other */
+  /** single crossovers (渡线) '/' '\'; 'X' a scissors (交叉渡线: both diagonals on one centre, crossing) */
   crossovers: [
     // 虹桥火车站: none — the PDF draws none (it does draw minor ones such as
     // 威宁路 / 凌空路); trains for the 虹桥 hub turn at 国家会展中心
     { station: 6, offset: 215, kind: '/' },
-    // 中山公园: scissors right behind the platform (towards 江苏路)
-    { station: 8, offset: 175, kind: '/' },
-    { station: 8, offset: 295, kind: '\\' },
+    // 中山公园: scissors right behind the platform (towards 江苏路), a true
+    // 交叉渡线 as the 配线图 draws it (user, 2026-11-05)
+    { station: 8, offset: 175, kind: 'X' },
     { station: 12, offset: -215, kind: '/' },
     { station: 27, offset: -215, kind: '\\' },
   ] as CrossoverDef[],
@@ -525,12 +526,13 @@ export const OPERATIONS = {
   passRunMargin: 0.16, // 通过站速度仍45km/h，沿用通过走行余量
   /** DTO锁闭后起步；保留同一份种子采样，AM司机作业在它之上增加。 */
   autoStartDelay: [2.5, 3.5] as const,
-  /** 用户决定（2026-10-23），孟锦程/袁月2026论文，D138：AM非玩家
-   * 司机锁门后确认比DTO多约20s；折返到站→下班发出总差取论文中值。
+  /** 用户决定（2026-11-05，D179）：AM 只是在 DTO 给出发车许可后由司机按 ATO 启动，
+   * 锁门后比 DTO 多约 5 s（D138 按论文取的 20 s 作废）。折返到站→下班发出总差仍取
+   * 孟锦程/袁月2026论文中值（D138）。
    * 物理关门5.7s另计，折返总差包含清客/发车门作业，不能再重复叠加。
    * doorCycles为现有任务组成；legacy保留CM/RM及玩家换端原流程【假设】。 */
   atoDriverWork: {
-    postLockExtraS: 20,
+    postLockExtraS: 5,
     turnbackExtraS: { rear: 67.5, front: 30 },
     turnbackDoorCycles: { rear: 2, front: 1 },
     legacyEndChangeS: 45,

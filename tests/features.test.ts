@@ -22,6 +22,7 @@ import { DOOR_CLOSE_S } from '../src/sim/calibration';
 import { closeDoors } from '../src/sim/psd';
 import { updateTrainTasks } from '../src/sim/ats';
 import { fixtureTrain } from './helpers/fixture-train';
+import { resourceAuthorityBlocker } from '../src/sim/resourceArbitration';
 
 const H = 8 * 3600;
 const st = (sim: Sim, name: string) => sim.topo.stations.find((s) => s.name === name)!;
@@ -461,7 +462,10 @@ describe('DMI logic: movement authority, permitted speed, fleet, message log', (
       if (sid !== undefined) {
         const sg = sim.sig[sid];
         const ar = sg.route >= 0 ? sim.routes.get(sg.route) : undefined;
-        const set = ar && ar.state === 'locked' && ar.cancelAt === 0 && !(ar.entered && !ar.fleeting) && !ar.guide && !sg.failed;
+        // a signal whose route this train's resource admission withholds
+        // ends the authority as a closed one does
+        const set = ar && ar.state === 'locked' && ar.cancelAt === 0 && !(ar.entered && !ar.fleeting) && !ar.guide && !sg.failed
+          && !resourceAuthorityBlocker(sim, tr, sg.route);
         if (!set) return { d: d - 6, why: 'route' };
       }
       const t = ahead(nx.link, nx.dir, d, false);

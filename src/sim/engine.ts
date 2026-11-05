@@ -718,6 +718,7 @@ export class Sim {
     const { topo } = this;
     const sections = new Uint16Array(this.sec.length);
     const sectionTsr = new Uint8Array(this.sec.length);
+    const sectionRoute = new Int16Array(this.sec.length).fill(-1);
     this.sec.forEach((s, i) => {
       let f = 0;
       if (s.occ) f |= SEC.OCC;
@@ -725,6 +726,7 @@ export class Sim {
       if (s.lockRoute >= 0) {
         f |= SEC.LOCK;
         const ar = this.routes.get(s.lockRoute);
+        if (ar) sectionRoute[i] = ar.route;
         if (ar?.fleeting) f |= SEC.ROUTEFLEET;
         if (ar?.manual) f |= SEC.ROUTEMAN;
         if (ar?.guide) f |= SEC.GUIDE;
@@ -820,7 +822,7 @@ export class Sim {
     const tripsPlanned = this.plan.trips.filter((t) => t.revenue && !t.cancelled).length;
     return {
       t: this.t, speed: this.speed, paused: this.paused, dayType: this.plan.dayType, dateLabel: this.config.dateLabel,
-      sections, sectionTsr, switches, signals, platforms, platformWaiting, zones: this.zoneState.slice(), atoLine: this.atoLine, trains,
+      sections, sectionTsr, sectionRoute, switches, signals, platforms, platformWaiting, zones: this.zoneState.slice(), atoLine: this.atoLine, trains,
       depotCounts: this.depotStock.slice(), traces,
       stats: {
         online: this.trainList.length, inService: this.trainList.filter((t) => t.inService).length, late, maxDelay,

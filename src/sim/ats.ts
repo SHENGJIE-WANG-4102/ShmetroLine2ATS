@@ -448,6 +448,9 @@ export function spawnDue(sim: Sim) {
     }
     if (sim.t < b.start.time) continue;
     const dp = topo.depots[b.start.depot];
+    // A duty still in the yard once its first departure is late by R1's
+    // margin has lost its train, as at a stabling place (D182).
+    if (sim.t > firstDep(sim, b) + RELIEF_DELAY) { dutyLost(sim, b, `${dp.name}出段受阻，表号${b.svc}未能按时出段`); continue; }
     // the lead that serves the first trip's direction
     const first0 = b.trips.map(id => sim.plan.trips[id]).find(t => !t.cancelled)!;
     const path = dp.transferPaths[dp.portals.exit[first0.dir].path];
@@ -497,6 +500,23 @@ export function depotSourceBusy(sim: Sim, outGate: number, exitLink: number): bo
     || sim.sec[sim.topo.links[link].section].occ || sim.sec[sim.topo.links[link].section].lockRoute >= 0);
 }
 
+/** The first planned departure of a duty's live trips. */
+function firstDep(sim: Sim, b: Block): number {
+  return b.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled)
+    .map(t => effectiveStops(t)[0]?.dep).find(dep => dep !== undefined) ?? Infinity;
+}
+
+/** R3 for a duty whose train never started: its trips are cancelled and
+ * offered to a standby, which takes them from the first it can still make on
+ * time; with none, the car stays where it is. */
+function dutyLost(sim: Sim, b: Block, why: string) {
+  const live = b.trips.filter(id => !sim.plan.trips[id].cancelled && !sim.plan.trips[id].completed);
+  for (const id of live) cancelTrip(sim.plan.trips[id], why);
+  sim.planDirty = true;
+  sim.log('B', '运营', `${why}，${live.length}趟车次取消`, { key: `lost-${b.id}` });
+  standbyTakeover(sim, b.id, live, why);
+}
+
 function spawnStabled(sim: Sim, b: Block) {
   const { topo } = sim;
   if (b.start.kind !== 'stable') return;
@@ -505,10 +525,8 @@ function spawnStabled(sim: Sim, b: Block) {
   // before the first arrivals turn), later ones in the storage tail, the
   // earlier of those nearer the platform
   const at = b.start.station;
-  const firstDep = (x: Block) => x.trips.map(id => sim.plan.trips[id]).filter(t => !t.cancelled)
-    .map(t => effectiveStops(t)[0]?.dep).find(dep => dep !== undefined) ?? Infinity;
   const rank = sim.plan.blocks.filter((x) => x.start.kind === 'stable' && x.start.station === at && x.trips.some((id) => !sim.plan.trips[id].cancelled))
-    .sort((x, y) => firstDep(x) - firstDep(y)).indexOf(b);
+    .sort((x, y) => firstDep(sim, x) - firstDep(sim, y)).indexOf(b);
   const places = [...new Set([...st.turnbackBerths.map(id => stablingBerth(topo, id)), ...st.storageBerths])];
   // a storage tail holds a train on each of its links
   const placeFree = (x: number) => st.storageBerths.includes(x)
@@ -541,12 +559,8 @@ function spawnStabled(sim: Sim, b: Block) {
   // withdrawal: its trips are cancelled and offered to a yard standby (R3).
   // Left live they were taken later by any train that came to stand here,
   // up to a day late (D157).
-  if (!sim.stabledPool.length && sim.t > firstDep(b) + RELIEF_DELAY) {
-    const live = b.trips.filter(id => !sim.plan.trips[id].cancelled && !sim.plan.trips[id].completed);
-    const why = `${st.name}存车位无车，表号${b.svc}未能出车`;
-    for (const id of live) cancelTrip(sim.plan.trips[id], why);
-    sim.planDirty = true;
-    standbyTakeover(sim, b.id, live, why);
+  if (!sim.stabledPool.length && sim.t > firstDep(sim, b) + RELIEF_DELAY) {
+    dutyLost(sim, b, `${st.name}存车位无车，表号${b.svc}未能出车`);
     return;
   }
   if (bid === undefined) return;
@@ -1545,7 +1559,7 @@ export function runARS(sim: Sim, prepared = false) {
       bindRouteApproach(sim, route, d.train.id);
     const blocked = routeResourceBlocker(sim, d.train, d.route);
     if (blocked) {
-      setArsWait(sim, d.train, 'ROUTE_WAIT', Math.max(-1, blocked.request.id), d.signal,
+      setArsWait(sim, d.train, blocked.precedence ? 'REGULATION' : 'ROUTE_WAIT', Math.max(-1, blocked.request.id), d.signal,
         resourceWaitDetail(sim, d.route, blocked));
       const ar = sim.routes.get(sim.sig[d.signal].route);
       if (ar && !ar.entered && !ar.manual) cancelArsRoute(sim, d.train, d.signal);
@@ -1719,7 +1733,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
     if (resourceBlocker) {
       const active = sim.routes.get(sg.route);
       if (active && !active.entered && !active.manual) cancelArsRoute(sim, tr, sig);
-      setArsWait(sim, tr, 'ROUTE_WAIT', Math.max(-1, resourceBlocker.request.id), sig, resourceWaitDetail(sim, rid, resourceBlocker));
+      setArsWait(sim, tr, resourceBlocker.precedence ? 'REGULATION' : 'ROUTE_WAIT', Math.max(-1, resourceBlocker.request.id), sig, resourceWaitDetail(sim, rid, resourceBlocker));
       return { train: tr, signal: sig, route: rid, prio: plannedTime(goalTask, sim.t), eta, ready: false, dist, via };
     }
     // A reverse platform movement needs CBTC on arrival too: a CBTC train

@@ -16,7 +16,7 @@ import type { RunTimes } from './dynamics';
 import { cancelTrip, type Block, type DayType, type Plan, type PlanStop, type StopTask, type Task, type Trip, type TripKind, type TrackDir } from './model';
 import { MIN_DWELL, plannedDwell } from './calibration';
 import { STATIONS, OPERATIONS, LINE_INFO, DIRECTIONS, SIMULATION, stationOpened, type FixedRun } from '../data/current';
-import { FIXED_LATE_TRAINS } from '../data/current';
+import { FIXED_LATE_TRAINS, POSSESSIONS } from '../data/current';
 import { FIRST_LAST, OFFICIAL_HEADWAYS } from '../data/current';
 import type { ClockBand } from '../data/simulation';
 import { plannedWaiting } from './plannedWaiting';
@@ -4344,11 +4344,15 @@ function restoreCancelledHomes(ctx: PlanContext, plan: Plan, now: number) {
     const ledger = depotLedger(topo,plan);
     const turns = [...terminalOccupancy(plan).values()].flat();
     const plannedMoves = depotMoves(plan.blocks, trips, ctx);
-    for (let offset = 0; earliest + offset < OPENING.dayStart + 86400 - 15*60; offset += 10) {
+    // The main line is cleared for the night's engineering work: a stock
+    // move that cannot arrive before it leaves the car where it is (the next
+    // day plans from the carried yard stock).
+    const lastArrival = POSSESSIONS.nightFrom;
+    for (let offset = 0; earliest + offset < lastArrival; offset += 10) {
       const stops = buildStops(ctx, dir, ex, station, earliest + offset, CARRY_MOVES, t => dwellFactorAt(ctx.dayType, t), () => true);
       const revenue=CARRY_MOVES&&carryingStops(stops,dir,openers);
       if(CARRY_MOVES&&!revenue&&passesOpenStation(stops,dir,openers))continue;
-      if (stops.at(-1)!.arr >= OPENING.dayStart + 86400 - 15*60) break;
+      if (stops.at(-1)!.arr >= lastArrival) break;
       if (depotStartTime(ctx, depot, { dir, stops }) < now + 120 || !index.clear(stops, dir)
         || !storedPlatformsClear(topo,plan,{dir,to:station,stops},end.kind==='stable'?end.berth:undefined)) continue;
       const first = { dir, stops }, [start, clear] = outboundWindow(ctx, depot, first);

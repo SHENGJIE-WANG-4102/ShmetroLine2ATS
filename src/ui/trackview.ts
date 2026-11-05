@@ -121,6 +121,8 @@ export class TrackView {
   // objects
   private sectionG: Graphics[] = [];
   private sectionMain: boolean[] = [];
+  private branchG: { g: Graphics; section: number; link: number }[] = [];
+  private routeLinks = new Map<number, Set<number>>();
   private tsrG: Graphics[] = [];
   private envG: Graphics[] = [];
   private blkG: Graphics[] = [];
@@ -434,6 +436,8 @@ export class TrackView {
     }
 
     // tracks by section
+    this.routeLinks = new Map(topo.routes.map(r => [r.id, new Set(r.steps.map(st => st.link))]));
+    this.branchG = [];
     const boundaryNode = (nid: number) => {
       const n = topo.nodes[nid];
       const secs = new Set(n.links.map((l) => topo.links[l].section));
@@ -444,7 +448,7 @@ export class TrackView {
       const segs: SegHit[] = [];
       const main = s.track === 'DN' || s.track === 'UP';
       const width = detail ? (main ? 9 : 7) : main ? 7 : 5;
-      for (const lid of s.links) {
+      const drawLink = (into: Graphics, lid: number, hits?: SegHit[]) => {
         const l = topo.links[lid];
         for (const sg of geom.linkSegs(lid)) {
           const dx = sg.x2 - sg.x1;
@@ -453,10 +457,11 @@ export class TrackView {
           const gap = detail ? 3 : 1.6;
           const ga = boundaryNode(l.a) && len > 6 ? gap : 0;
           const gb = boundaryNode(l.b) && len > 6 ? gap : 0;
-          g.moveTo(sg.x1 + (dx / len) * ga, sg.y1 + (dy / len) * ga).lineTo(sg.x2 - (dx / len) * gb, sg.y2 - (dy / len) * gb);
-          segs.push(sg);
+          into.moveTo(sg.x1 + (dx / len) * ga, sg.y1 + (dy / len) * ga).lineTo(sg.x2 - (dx / len) * gb, sg.y2 - (dy / len) * gb);
+          hits?.push(sg);
         }
-      }
+      };
+      for (const lid of s.links) drawLink(g, lid, segs);
       g.stroke({ width, color: 0xffffff, cap: 'butt', join: 'round' });
       g.tint = main ? C.trackFree : C.trackFreeSide;
       g.eventMode = 'static';
@@ -468,6 +473,16 @@ export class TrackView {
       this.trackL.addChild(g);
       this.sectionG.push(g);
       this.sectionMain.push(main);
+      // A locked route lights only the track it runs over: the other branch
+      // of a switch section keeps the free-track colour (user, 2026-11-05).
+      if (s.links.length > 1) for (const lid of s.links) {
+        const o = new Graphics();
+        drawLink(o, lid);
+        o.stroke({ width, color: main ? C.trackFree : C.trackFreeSide, cap: 'butt', join: 'round' });
+        o.visible = false;
+        this.trackL.addChild(o);
+        this.branchG.push({ g: o, section: s.id, link: lid });
+      }
       // overlays: TSR (yellow dashes outside the track), weather (blue dashes), blocked (violet ticks)
       const off = s.track === 'DN' ? 11 : s.track === 'UP' ? -11 : -10;
       const mkOv = (color: number, dash: number, offY: number, width2: number) => {
@@ -774,6 +789,14 @@ export class TrackView {
       this.envG[i].visible = (f & SEC.ENV) !== 0;
       const blk = (f & SEC.BLOCK) !== 0;
       this.blkG[i].visible = blk;
+    }
+
+    // (only while the section shows a route colour, as just tinted above)
+    const routeTints = new Set([C.routeGuide, C.routeAuto, C.routeSet]);
+    for (const b of this.branchG) {
+      const route = snap.sectionRoute[b.section];
+      b.g.visible = route >= 0 && routeTints.has(this.sectionG[b.section].tint as number)
+        && !this.routeLinks.get(route)?.has(b.link);
     }
 
     // switches

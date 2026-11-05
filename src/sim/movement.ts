@@ -1190,7 +1190,11 @@ function retainedAuthority(sim: Sim, tr: Train, scan: ScanResult, previous: numb
 
 /** a route the MA relied on was released: recompute and supervise it now */
 export function withdrawAuthority(sim: Sim, tr: Train) {
-  const s = scanAhead(sim, tr, goalBerth(tr));
+  applyAuthority(sim, tr, scanAhead(sim, tr, goalBerth(tr)));
+}
+
+/** Take over a full scan at once, supervising any reduction it makes. */
+function applyAuthority(sim: Sim, tr: Train, s: ScanResult) {
   tr.maFar = s.maDist;
   tr.maFarReason = s.maReason;
   tr.maFarCode = s.maCode;
@@ -1226,8 +1230,13 @@ export function refreshAuthority(sim: Sim) {
     tr.maFarTrain = s.maTrain;
     tr.maSigs = s.maSignals;
     const moving = tr.phase === 'run';
-    // a moving train keeps this step's near scan; only the far end is taken over
-    if (moving && tr.maReason !== MA_CAP_REASON) continue;
+    // a moving train keeps this step's near scan; only the far end is taken
+    // over. A far end now short of the authority it runs on (the maSigs just
+    // published no longer list a signal it passes) is withdrawn at once.
+    if (moving && tr.maReason !== MA_CAP_REASON) {
+      if (s.maDist < tr.maDist - tr.lastDs - 0.5) applyAuthority(sim, tr, s);
+      continue;
+    }
     tr.maDist = s.maDist;
     tr.maReason = s.maReason;
     tr.maCode = s.maCode;

@@ -16,13 +16,14 @@ import { validateCommand } from '../src/sim/commands';
 import type { Command } from '../src/sim/model';
 import { openCall } from '../src/sim/radio';
 import { allowed, TURNBACK } from '../src/sim/fsm';
-import { arbitrateResources, collectResourceRequests, routePhysicalPredecessors, routeResourceBlocker, resourceAdmissionBlocked, resourceAllocation, type ResourceRequest } from '../src/sim/resourceArbitration';
+import { arbitrateResources, collectResourceRequests, routeResourceBlocker, resourceAdmissionBlocked, resourceAllocation, type ResourceRequest } from '../src/sim/resourceArbitration';
 import { blockTasks, depotTasks } from '../src/sim/timetable';
 import { reversedBerthPoint, downstreamTerminal, orderedStations, safeWaitingPoint, buildTopology, linkChain, travelDirection, type Dir, type Topology } from '../src/sim/topology';
 import { profileOf, chainSense, gradeAccelAt, G, type Profile } from '../src/sim/gradient';
 import { fixtureTrains } from './helpers/fixture-train';
 
 let checkpoint: Checkpoint | undefined;
+const routeNamed = (sim: Sim, name: string) => sim.topo.routes.find(r => r.name === name)!.id;
 function fixture(keepThird = false) {
   const sim = new Sim({dayType:'weekday', date:'2026-10-19', dateLabel:'roots', startTime:14400, seed:7, noPossessions:true});
   if (checkpoint) restore(sim, checkpoint);
@@ -46,35 +47,7 @@ function fixture(keepThird = false) {
 }
 
 describe('whole-movement resource admission', () => {
-  it('does not invent a physical predecessor when an alternate route to the same berth is free', () => {
-    const sim=new Sim({dayType:'weekday',dateLabel:'physical-route-or',startTime:14400,seed:7,noPossessions:true});
-    for(const tr of [...sim.trainList])sim.removeTrain(tr);
-    const signal=sim.topo.signals.find(s=>s.name==='X0905')!;
-    const goal=sim.topo.berths.find(b=>b.name==='江苏路 上行站台')!;
-    const straight=sim.topo.routes.find(r=>r.name==='X0905→X0911')!;
-    const side=sim.topo.routes.find(r=>r.name==='X0905→X0911(侧向)')!;
-    expect(sim.routeTable.next.get(goal.id)![signal.id]).toBe(straight.id);
-    const first=sim.topo.links.find(l=>sim.topo.sections[l.section].name==='G0909')!;
-    const second=sim.topo.links.find(l=>sim.topo.sections[l.section].name==='G0910')!;
-    expect(straight.sections).toContain(first.section);expect(side.sections).not.toContain(first.section);
-    const applicant=newTrain(sim,null,signal.link,0,signal.dir,[{link:signal.link,dir:signal.dir}],'applicant');
-    applicant.nextSignal=signal.id;applicant.len=10;
-    expect(routePhysicalPredecessors(sim,applicant,sim.topo.berths.length)).toEqual([]);
-    const blocker=newTrain(sim,null,first.id,70,1,[{link:first.id,dir:1}],'first-blocker');blocker.len=10;
-    const origin=(dep:number)=>({k:'stop' as const,berth:goal.id,station:goal.station,trip:-1,arr:null,dep,doors:false,revenue:false});
-    applicant.tasks=[origin(sim.t+10)];blocker.tasks=[origin(sim.t+20)];
-    const request:ResourceRequest={id:blocker.id,train:blocker,tasks:blocker.tasks,inside:true,safeHere:true,committed:false,
-      time:sim.t,readyAt:sim.t,options:[{phases:[{goal:goal.id,start:{link:first.id,off:70,dir:1},routes:[],
-        path:[{link:goal.link,from:0,to:goal.offset}],distance:100}],sections:new Set([first.section]),
-        choices:[{index:0,berth:goal.id}],resourceLinks:new Set()}]};
-    computeBody(sim,applicant);computeBody(sim,blocker);indexBodies(sim);computeOccupancy(sim);
-    expect(routePhysicalPredecessors(sim,applicant,goal.id)).toEqual([]);
-    expect(arbitrateResources(sim,[request]).decisions.get(blocker.id)).toMatchObject({admitted:false,code:'REGULATION',blocker:applicant.id});
-    const other=newTrain(sim,null,second.id,20,1,[{link:second.id,dir:1}],'second-blocker');other.len=10;
-    computeBody(sim,other);indexBodies(sim);computeOccupancy(sim);
-    expect(new Set(routePhysicalPredecessors(sim,applicant,goal.id))).toEqual(new Set([blocker.id,other.id]));
-    expect(arbitrateResources(sim,[request]).decisions.get(blocker.id)).toMatchObject({admitted:true});
-  });
+  // The alternate-route case lives in tests/route-alternative.test.ts (test line).
   it('lets the physical predecessor clear when an earlier ordinary origin is blocked at its first route', () => {
     const sim=new Sim({dayType:'weekend',date:'2026-10-24',dateLabel:'physical-origin',startTime:14400,seed:7,noPossessions:true});
     for(const tr of [...sim.trainList])sim.removeTrain(tr);
@@ -1285,7 +1258,7 @@ describe('complete resource movement with an unreachable later stage', () => {
 
 function resourceEntranceFollowing(resource: boolean) {
   const { sim, tr, caller, gate, rid, arrival } = resourceEntranceFixture(true, true);
-  for (const route of [rid, 253, 48]) expect(trySetRoute(sim, route, { fleeting: true }).ok).toBe(true);
+  for (const route of [rid, routeNamed(sim, 'S0712→S0708'), routeNamed(sim, 'S0708→S0704')]) expect(trySetRoute(sim, route, { fleeting: true }).ok).toBe(true);
   sim.t += 3;
   updateInterlocking(sim);
   // The lawful predecessor still occupies the shared route behind its head.
@@ -1381,7 +1354,7 @@ describe('source origin at the same physical safe-platform boundary', () => {
 function authorityFaultFixture(speed: number) {
   const { sim, tr, gate, rid, arrival } = resourceEntranceFixture(true);
   tr.tasks = [tr.tasks[0]];
-  for (const route of [rid, 253, 48]) expect(trySetRoute(sim, route, { fleeting: true }).ok).toBe(true);
+  for (const route of [rid, routeNamed(sim, 'S0712→S0708'), routeNamed(sim, 'S0708→S0704')]) expect(trySetRoute(sim, route, { fleeting: true }).ok).toBe(true);
   sim.t += 6; updateInterlocking(sim);
   Object.assign(tr, { off: 60, v: speed, a: 0, mode: 'DTO', manual: false, comm: true, level: 'CBTC',
     eb: false, maCut: false, maSigs: [], nextSignal: gate.id, nextSignalDist: 60 });
@@ -1643,7 +1616,7 @@ function nativeGradeFixture(slope: number, speed: number, distance: number) {
   const head = linkChain(fresh, tr.link, tr.off), sense = chainSense(fresh, tr.link, tr.dir);
   const profile = controlledProfile(fresh, head, sense, [-4000, 4000], [-4000 * slope, 4000 * slope]);
   computeBody(sim, tr); indexBodies(sim); computeOccupancy(sim);
-  for (const route of [rid, 253, 48]) expect(trySetRoute(sim, route, { fleeting: true }).ok).toBe(true);
+  for (const route of [rid, routeNamed(sim, 'S0712→S0708'), routeNamed(sim, 'S0708→S0704')]) expect(trySetRoute(sim, route, { fleeting: true }).ok).toBe(true);
   sim.t += 6; updateInterlocking(sim);
   const open = scanAhead(sim, tr, arrival.id);
   expect(open.maSignals).toContain(gate.id);
