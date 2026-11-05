@@ -29,9 +29,9 @@ powershell -ExecutionPolicy Bypass -File scripts/app-shortcut.ps1
 
 ## Dispatch and drive
 
-- The overview and station views show trains, routes, signals, switches, occupied sections, platforms and yards. Select an object for its commands; use the train list, actual/planned graph and alarm list to locate it.
-- Weekday/weekend diagrams include through and short workings, depot moves, turnbacks, overnight stock and hot spares. A late train at a line end hands its next departure to a hot spare or to the first train ready there, including one that arrived to stable (D148, D156). Dispatch actions include holding, skipping, withdrawals, extra trains and recovery, with radio procedures, fault injection, weather, instructor scenarios and scoring.
-- CBTC is the primary train-control model with TBTC backup. Follow a train for its DMI. DTO/AM run automatically; AM can be taken over for ATO driving, and CM/RM for manual driving.
+- The overview and station views show trains, routes, signals, switches, occupied sections, platforms and yards. A set route lights only the tracks it runs over; 浦东1号2号航站楼 and 中山公园 have true scissors crossovers (D181). Select an object for its commands; use the train list, actual/planned graph and alarm list to locate it.
+- Weekday/weekend diagrams include through and short workings, depot moves and turnbacks. One allocator assigns rolling stock from terminal pools and depot quotas; every train returns to a depot overnight, and hot spares stand only at the two line ends (D178). A late train at a line end hands its next departure to a hot spare or to the first train ready there (D148, D156). A through train planned no earlier than a waiting origin train holds at the previous signal ("按图先让…"); a duty still in the depot 20 minutes after its first departure is cancelled and offered to a standby (D182). Dispatch actions include holding, skipping, withdrawals, extra trains and recovery, with radio procedures, fault injection, weather, instructor scenarios and scoring.
+- CBTC is the primary train-control model with TBTC backup. Follow a train for its DMI. DTO/AM run automatically; an AM driver starts about 5 s after the DTO departure permission (D179). AM can be taken over for ATO driving, and CM/RM for manual driving.
 - The selected train gets the platform close-up, stopping indication and departure countdown in every mode. DEP and the countdown use the same ATS departure clock; H indicates a hold. See D128 in [design decisions](docs/design-decisions.md).
 - CM displays a yellow recommended-speed marker and actual/recommended/permitted values. The advice uses the same ATO target, section budget, running level, limits and braking calculation; the driver's handle still controls traction. AM/DTO/RM do not show this advice.
 - Manual overruns use the train's recently travelled path. Returns up to 5 m can be driven back; longer returns require dispatch consent. A refused return states the actual reason and offers the existing dispatch procedure. Mode changes after a completed stop clear the obsolete retreat state. After a completed return, select forward with the reverser to depart.
@@ -74,16 +74,15 @@ Timetable evidence follows D125:
 
 Topology, gradients, vehicle performance, demand and operating procedures contain documented approximations; they do not constitute an operational railway system.
 
-Known open issues (October 2026):
+Known open issues (November 2026):
 
-- Duty allocation (greedy circulation and depot homes in `timetable.ts`) and the runtime recovery rules (R1/R3, D148, D156, D157) are local fixes layered on each other. A global rework is planned; the offline attempt D144 did not reach a usable solve and is shelved.
-- Two random runs still fail after heavy day-two delays (D158). In one, an overnight train on the 广兰路 down platform blocks a late through train. In the other, trains are still running at 27:45. The integrity checks are unchanged and these runs are not exempted.
-- D165 seed 103 (`--level 2 --wind 2 --density 3:8 --day-type weekday --template ciie`) still reports `CARRIED_UNFINISHED` for train 219/0214 at day two 27:45; its waiting chain ends at stabled train 220/02116 on the 广兰路 middle platform. This remains a D158/P1 overnight storage issue, with no checker exemption.
-- D165 seed 134 with the same settings also reports `CARRIED_UNFINISHED` at day two 27:45; the same failure occurs on the pre-D165 baseline, with the waiting chains ending at train 33/0212 and a G0901 platform-door fault. Fault recovery remains a separate follow-up.
-- First and last trains keep the published minute at every station (D162, D163): 146 of 147 cells fall inside the minute; only the first westbound train at 世纪公园 is 66 s late (the official minute leaves 1 minute, physically too short).
-- Weekday evening timing follows the recordings (D163): level 4 and about 47.5 s dwells from 20:30, level 1 again from 21:40; daytime parameters wait for off-peak recordings.
-- The Gaode comparison has 9 failing bins (10 were accepted in D153).
-- Three depot tests in `timetable.test.ts` (two daily depot homes, one shared depot lead turnback) currently fail; they wait for the rolling-stock redesign.
+- Rolling-stock allocation was rewritten for the diagram (D178), but runtime replacement and extra trains (`standby.ts`, overlay/addTrain) still use the older rules.
+- Twelve Line 14 tests fail after the shared D178 planner: its three daytime siding hot spares get no stock. Line 14 work is paused; these must be fixed before it is merged.
+- One mid-line hot-spare test (`midline-storage`) fails: a depot ends one train over capacity. Line 2 no longer uses mid-line hot spares; the mechanism only survives in that fixture.
+- Extra trains leaving 龙阳路 depot still run about 87 s behind plan (within the 120 s limit); the end-change time on the depot exit is optimistic.
+- Daytime running levels and dwells wait for off-peak recordings (D163).
+
+The latest nine-seed random run (two days, weather and random dispatch actions) passes with no integrity violations (D182). Checks are not relaxed and no failing case is exempted. The Gaode comparison has 7 failing weekday bins (D178); first and last trains fall inside the official minute at every station.
 
 The [bottom-up timing analysis](docs/field/bottom-up-runtime-2026-10.md) has complete door-based candidates for 40/60 directional sections, with stronger evidence for 22. Its margins and dwell rules are proposals only; current timetable parameters remain unchanged. See [modelling decisions](docs/design-decisions.md), [layout](docs/layout-pdf.md), [signalling](docs/signalling-model.md) and [line/vehicle research](reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md).
 
