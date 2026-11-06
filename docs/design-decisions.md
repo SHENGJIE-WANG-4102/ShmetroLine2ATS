@@ -5028,3 +5028,11 @@ D184 收尾的随机压测（`work/fuzz-d184/`，9 例：第二天、天气、�
 **原定第二项（区间运行计划复用）没做**：实测到 07:40 共 1952 次 `sectionPlan`，输入完全相同的只有 100 次（5%），因为每列车的时间预算都不同；去掉预算后 392 种。按完全相同复用只省约 0.5%，不值得。
 
 公共文件：`src/sim/resourceArbitration.ts`、`src/sim/interlocking.ts`、`src/sim/timetable.ts`、`src/sim/engine.ts`、`src/sim/worker.ts`、`src/sim/warmupCache.ts`、`src/sim/buildCache.ts`（新）、`src/sim/idbStore.ts`（新）。
+
+## D187 DMI 速度表下方状态行只留「紧急制动」（2026-11-07，用户决定）
+
+D161 清了消息栏，漏了速度表下方的「监督状态行」（`src/ui/dmi.ts`，代码注释原写「实拍里没有这一行，是推出来的」）。人工驾驶时它会把 ATS 的停车原因原文搬上 DMI（例如「折返发车站台有车，等待平台出清」），代码里能数出约 70 种，另有超速、空转/滑行、非站台侧车门开启、停稳，待开门 5 条固定字样（清单 `work/dmi-status-line.md`）。
+
+用户决定：除「紧急制动」外全删。停车原因仍在 ATS 列车详情和事件日志里；超速的速度数字颜色（黄）不变。
+
+公共文件：`src/ui/dmi.ts`。验证：`tsc --noEmit`、`tests/dmi.test.ts` 5 项通过。

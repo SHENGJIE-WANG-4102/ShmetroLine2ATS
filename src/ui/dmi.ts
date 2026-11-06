@@ -383,20 +383,13 @@ export class Dmi {
       c.beginPath();
       c.moveTo(ax + (left ? -12 : 12), 311); c.lineTo(ax, 297); c.lineTo(ax, 325); c.closePath(); c.fill();
     }
-    // supervision status line (extrapolated: the photos show no such state)
-    let msg = '';
-    let col = C.white;
-    if (eb) { msg = '紧急制动'; col = C.red; }
-    else if (t.v * 3.6 > t.vPermit * 3.6 + 0.5) { msg = '超速'; col = C.yellow; }
-    else if (t.slip) { msg = t.slip === 'slip' ? '空转' : '滑行'; col = C.yellow; }
-    else if (t.manual && t.doorSide && !t.doors) { msg = '非站台侧车门开启'; col = C.red; }
-    else if (t.manual && t.doorsAwait) { msg = '停稳，待开门'; col = C.white; }
-    // 用户决定：no plain「人工驾驶」(the mode field says CM); only a real reason the train stands
-    else if (t.manual && t.halt?.detail && !['人工驾驶', '等待司机加牵引', '司机牵引起步'].includes(t.halt.detail)) { msg = t.halt.detail; col = C.white; }
-    if (msg) {
-      c.font = `bold ${msg.length > 12 ? 19 : 26}px ${FONT}`;
-      c.fillStyle = col;
-      c.fillText(msg, 520, 446, 230);
+    // 用户决定（2026-11-07，D187）：this line shows only 紧急制动. Overspeed,
+    // slip/slide, door and stop-reason texts were extrapolated (no photo shows
+    // them); stop reasons stay in the ATS train detail and the event log.
+    if (eb) {
+      c.font = `bold 26px ${FONT}`;
+      c.fillStyle = C.red;
+      c.fillText('紧急制动', 520, 446, 230);
     }
   }
 
