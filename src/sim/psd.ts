@@ -160,7 +160,12 @@ export function setBypass(sim: Sim, p: number, on: boolean): { ok: boolean; msg:
   ps.psdBypass = false;
   if (ps.psd === 'bypass') {
     if (ps.psdFault && ps.psdTrain >= 0) return { ok: false, msg: `${name} 站台门故障未修复且有车停站，不能取消互锁解除` };
-    go(sim, p, ps.psdTrain >= 0 ? 'open' : 'closed');
+    // The doors follow the train's again: open only while its doors are open
+    // and not closing. A closing begun under the bypass already passed its
+    // PSD step (staff closed them); reopening the PSD here left it open
+    // behind a train with closed doors, which then never got its authority.
+    const tr = sim.trains.get(ps.psdTrain);
+    go(sim, p, tr?.doorsOpen && tr.doorMotion?.kind !== 'closing' ? 'open' : 'closed');
   }
   return { ok: true, msg: `${name} 站台门互锁恢复` };
 }

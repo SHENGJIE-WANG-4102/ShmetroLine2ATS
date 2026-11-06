@@ -2185,7 +2185,15 @@ function returnPathReachable(sim: Sim, tr: Train, berth: number): boolean {
 /** Depots a train running `d` can still return to from `clearChain` on, nearest
  * first: straight in, or by changing ends on the junction station's platform
  * where the leads join against `d` (that platform must be ahead and reachable). */
-function depotsAhead(sim: Sim, tr: Train, d: TrackDir, clearChain: number): { dp: Topology['depots'][number]; index: number }[] {
+/** Work already granted (requested, active or being released) on the line
+ * between chainages `a` and `b`: a train sent that way waits for its end. */
+function possessedBetween(sim: Sim, a: number, b: number): boolean {
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  return sim.possessions.some(p => (p.state === 'requested' || p.state === 'active' || p.state === 'releasing')
+    && p.sections.some(id => sim.topo.sections[id].chainFrom < hi && sim.topo.sections[id].chainTo > lo));
+}
+
+function depotsAhead(sim: Sim, tr: Train, d: TrackDir, clearChain: number, avoidWork = false): { dp: Topology['depots'][number]; index: number }[] {
   const { topo } = sim;
   const where = (dp: Topology['depots'][number]) => {
     const p = dp.portals.entry[d];
@@ -2194,6 +2202,8 @@ function depotsAhead(sim: Sim, tr: Train, d: TrackDir, clearChain: number): { dp
   return topo.depots.map((dp, index) => ({ dp, index }))
     .filter(({ dp }) => {
       const p = dp.portals.entry[d];
+      // (a yard behind granted work is not a way home now: the next one is)
+      if (avoidWork && possessedBetween(sim, sim.trainChain(tr), where(dp))) return false;
       if (!p.reverse) return (d === 'DN' ? dp.junctionChain > clearChain : dp.junctionChain < clearChain) && returnPathReachable(sim, tr, dp.entryBerths[p.path]);
       const c = topo.stations[p.station].chain;
       return (d === 'DN' ? c >= clearChain - 1 : c <= clearChain + 1) && returnPathReachable(sim, tr, platformBerth(topo, p.station, d));
@@ -2346,8 +2356,31 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   // clear-out station, so select a forward return path from that station.
   const clearStation = tr.phase === 'dwell' ? curStop(tr)?.station : tr.inService ? next : undefined;
   const clearChain = clearStation === undefined ? sim.trainChain(tr) : topo.stations[clearStation].chain;
-  const forward = depotsAhead(sim, tr, d, clearChain);
-  const depot = forward[0]?.index ?? nearestDepot(sim, tr.lastStation >= 0 ? tr.lastStation : (next ?? 0), d);
+  // A way home not behind granted work first (a yard ahead, else a rear
+  // turnback to one behind); only when there is none, the way the work holds.
+  const turnFor = (avoidWork: boolean) => {
+    const platform = topo.links[tr.link].platform;
+    const current = tr.phase === 'dwell' ? curStop(tr)?.station
+      : topo.stations.find(st => st.platforms[d] === platform)?.index;
+    // Keep the already issued approach to the normal clear-out platform.
+    // A front turnback would retarget it to the parallel reverse platform,
+    // which may be unreachable once the old route has been entered.
+    const afterClear = (station: number) => clearStation === undefined
+      || (d === 'DN' ? station >= clearStation : station <= clearStation);
+    // (a platform turnback track retargets the clear-out stop like a front turn)
+    const rearOk = (st: number) => { const tb = turnbackAt(topo, st, d); return tb?.kind === 'rear' && topo.berths[tb.berths[0]].kind !== 'platform'
+      && !(avoidWork && possessedBetween(sim, sim.trainChain(tr), topo.stations[st].chain)); };
+    const st = current !== undefined && afterClear(current) && rearOk(current) ? current
+      : turnbackOptions(sim, tr).find(st => afterClear(st) && rearOk(st));
+    return { st, current };
+  };
+  let forward = depotsAhead(sim, tr, d, clearChain, true);
+  let turn = forward.length ? undefined : turnFor(true);
+  if (!forward.length && turn?.st === undefined) {
+    forward = depotsAhead(sim, tr, d, clearChain);
+    turn = forward.length ? undefined : turnFor(false);
+  }
+  let depot = forward[0]?.index ?? nearestDepot(sim, tr.lastStation >= 0 ? tr.lastStation : (next ?? 0), d);
   const reachable = forward.length > 0;
   const tasks: Task[] = [];
   if (tr.phase === 'dwell') {
@@ -2363,18 +2396,7 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   }
   if (reachable) { depotTasks(topo, depot, d, tasks); turnAtClearPlatform(sim, tasks); }
   else {
-    const platform = topo.links[tr.link].platform;
-    const current = tr.phase === 'dwell' ? curStop(tr)?.station
-      : topo.stations.find(st => st.platforms[d] === platform)?.index;
-    // Keep the already issued approach to the normal clear-out platform.
-    // A front turnback would retarget it to the parallel reverse platform,
-    // which may be unreachable once the old route has been entered.
-    const afterClear = (station: number) => clearStation === undefined
-      || (d === 'DN' ? station >= clearStation : station <= clearStation);
-    // (a platform turnback track retargets the clear-out stop like a front turn)
-    const rearOk = (st: number) => { const tb = turnbackAt(topo, st, d); return tb?.kind === 'rear' && topo.berths[tb.berths[0]].kind !== 'platform'; };
-    const tbSt = current !== undefined && afterClear(current) && rearOk(current) ? current
-      : turnbackOptions(sim, tr).find(st => afterClear(st) && rearOk(st));
+    const { st: tbSt, current } = turn!;
     if (tbSt === undefined) return { ok: false, msg: '前方无折返/回段条件' };
     const berth = topo.berths[platformBerth(topo, tbSt, d)];
     const alreadyCleared = current === tbSt && tr.load === 0 && tr.link === berth.link && tr.dir === berth.dir
@@ -2383,7 +2405,8 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     const fake: Trip = { id: -1, no: '', dir: d, kind: 'adj', from: tbSt, to: tbSt, stops: [], revenue: false, block: -1 };
     addTurnback(topo, fake, tasks);
     const back: TrackDir = d === 'DN' ? 'UP' : 'DN';
-    depotTasks(topo, nearestDepot(sim, tbSt, back), back, tasks);
+    depot = nearestDepot(sim, tbSt, back);
+    depotTasks(topo, depot, back, tasks);
   }
   // cancel remaining trips of the block
   if (tr.block >= 0) {
