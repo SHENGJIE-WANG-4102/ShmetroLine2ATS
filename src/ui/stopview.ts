@@ -283,7 +283,8 @@ export class StopView {
       c.strokeStyle = '#89949f'; c.lineWidth = 3;
       c.beginPath(); c.moveTo(x, P(67)); c.lineTo(x, y); c.stroke();
       c.fillStyle = '#10151c'; c.fillRect(x - 7, y - 11, 14, 22);
-      c.fillStyle = board.aspect === 'G' ? C.green : board.aspect === 'Y' || board.aspect === 'GUIDE' ? '#ffe153' : C.red;
+      // DARK: the wayside signal is extinguished for a CBTC train with its route set (D188), not a stop aspect
+      c.fillStyle = board.aspect === 'G' ? C.green : board.aspect === 'Y' || board.aspect === 'GUIDE' ? '#ffe153' : board.aspect === 'DARK' ? '#2a3038' : C.red;
       c.beginPath(); c.arc(x, y, 4, 0, Math.PI * 2); c.fill();
       const text = departureText(board, now);
       if (text !== null) dotNumber(c, text, x - 13, y, text !== 'H' && now > board.at ? '#ff4545' : '#31ef59');

@@ -1,5 +1,5 @@
 import {Sim}from'../../src/sim/engine';
-import {STATIONS}from'../../src/data/current';
+import {STATIONS,OPERATIONS}from'../../src/data/current';
 import {platformBerth,addTurnback}from'../../src/sim/timetable';
 import {computeBody,indexBodies}from'../../src/sim/movement';
 import {ahead}from'../../src/sim/topology';
@@ -21,7 +21,8 @@ export function runAmTurnback(mode:'DTO'|'AM',stationId:string,incoming:'DN'|'UP
  const departure={...arrival,id:departureId,no:'am-dep',from:station,to:next,dir:outgoing,
   stops:[{st:station,arr:start,dep:start,stop:true},{st:next,arr:start+1000,dep:start+1000,stop:true}]};
  sim.plan.trips.push(arrival,departure);
- const tasks:Task[]=[{k:'stop',station,berth:platformBerth(sim.topo,station,incoming),trip:arrivalId,arr:start,dep:null,doors:true,revenue:true}];
+  // the passengers are cleared, as the timetable's terminal calls do (D188)
+ const tasks:Task[]=[{k:'stop',station,berth:platformBerth(sim.topo,station,incoming),trip:arrivalId,arr:start,dep:null,doors:true,revenue:true,minDwell:OPERATIONS.terminalClearS}];
  addTurnback(sim.topo,arrival,tasks);
  const reverse=tasks.find((t):t is Extract<Task,{k:'reverse'}>=>t.k==='reverse')!;
  tasks.push({k:'stop',station,berth:platformBerth(sim.topo,station,outgoing),trip:departureId,arr:null,dep:start,doors:true,revenue:true},

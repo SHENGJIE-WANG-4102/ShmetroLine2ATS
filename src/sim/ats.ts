@@ -1029,7 +1029,9 @@ function platformTurn(topo: Topology, tr: Train, st: StopTask): boolean {
 
 /** change ends at the platform with the doors open, straight into the next trip's stop */
 function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
-  // the change of ends ran while the passengers were cleared (D188, user)
+  // D188 (user): an unattended (DTO) change of ends runs while the passengers
+  // are cleared; a driver's (AM) work comes on top of the time the same turn
+  // takes unattended, which keeps the paper's AM-over-DTO turn delta (D138)
   const changeFrom = Math.min(sim.t, tr.arrivedAt);
   rememberCompletedCall(sim, tr, st);
   tr.tasks.shift();
@@ -1054,7 +1056,10 @@ function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
   setTripFromTasks(sim, tr);
   arriveAtBerth(sim, tr, tr.tasks[0]);
   // no departure before the driver is in the other cab
-  tr.dwellUntil = Math.max(tr.dwellUntil, changeFrom + turnbackDwell(tr.mode, rev.minTime,driverTurnbackKind(sim.topo,rev),simulatedAmDriver(tr),calibratedRearTurnback(sim.topo,rev)));
+  const kind = driverTurnbackKind(sim.topo, rev), rear = calibratedRearTurnback(sim.topo, rev);
+  const unattendedS = turnbackDwell('DTO', rev.minTime, kind, false, rear);
+  const driverS = turnbackDwell(tr.mode, rev.minTime, kind, simulatedAmDriver(tr), rear) - unattendedS;
+  tr.dwellUntil = Math.max(tr.dwellUntil, changeFrom + unattendedS) + Math.max(0, driverS);
 }
 
 /** the stop has a door cycle: passengers, or a clear-out (清客) */

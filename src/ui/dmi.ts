@@ -333,7 +333,11 @@ export class Dmi {
     const state = eb ? 'eb' : t.a > 0.05 ? 'traction' : t.a < -0.12 && t.v > 0.05 ? 'brake' : 'coast';
     // 用户实拍（2026-11-02）：车头图标只在列车静止时显示，动车后消失
     if (t.v < 0.05) trainFront(c, 656, 214, state);
-    if (t.v < 0.05 && startCue(d, now)) startArrow(c, 693, 290);
+    // 用户（2026-11-07，D188）：DTO、ATO、ATPM(CM) 都在允许动车时显示起步箭头；人工驾驶没有自动起步时刻，
+    // 以门关好锁闭、有移动授权、未扣车、到发车时刻前 2 s 为准
+    const manualCue = t.manual && !t.hold && !t.eb && t.maDist > 1 && !t.doors && !t.doorClosing && !t.doorsAwait && !t.doorSide
+      && (!d || d.dep < 0 || d.dep - now <= 2);
+    if (t.v < 0.05 && (startCue(d, now) || manualCue)) startArrow(c, 693, 290);
     // Two distinct symbols: train doors always above AA; PSD only on a platform.
     // 用户确认：photograph shows OPEN leaves; closed leaves meet.
     // Train doors are white, PSD yellow in the reference.
