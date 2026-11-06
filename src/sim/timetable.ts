@@ -2125,8 +2125,9 @@ export function standbyCandidate(ctx: PlanContext, plan: Plan, tail: number[], d
 
 /** Apply a standby takeover: trips `tail[k..]` move from duty `from` to a
  * new duty run by the standby, and are reinstated if their cancellation was
- * caused by losing the original train. Returns the new block. */
-export function applyStandby(plan: Plan, from: number, tail: number[], c: StandbyPlan): Block {
+ * caused by losing the original train. Returns the new block. With `from`
+ * < 0 the standby only makes its move, to `end` (a vacated standby place). */
+export function applyStandby(plan: Plan, from: number, tail: number[], c: StandbyPlan, end?: Block['end']): Block {
   const trips = plan.trips as GenTrip[];
   const taken = tail.slice(c.k);
   const id = plan.blocks.length;
@@ -2144,10 +2145,12 @@ export function applyStandby(plan: Plan, from: number, tail: number[], c: Standb
     delete trip.cancelReason;
     ids.push(t);
   }
-  const old = plan.blocks[from];
-  old.trips = old.trips.filter(t => !taken.includes(t));
-  old.relieved = true;
-  const block: Block = { id, svc: '', start: { kind: 'depot', depot: c.depot, time: c.start }, end: old.end, trips: ids };
+  const old = from >= 0 ? plan.blocks[from] : undefined;
+  if (old) {
+    old.trips = old.trips.filter(t => !taken.includes(t));
+    old.relieved = true;
+  }
+  const block: Block = { id, svc: '', start: { kind: 'depot', depot: c.depot, time: c.start }, end: end ?? old!.end, trips: ids };
   plan.blocks.push(block);
   const maxSvc = Math.max(0, ...plan.blocks.filter((x) => x.svc).map((x) => parseInt(x.svc, 10)));
   numberPlan(plan, maxSvc + 1);

@@ -9,7 +9,7 @@ import {capture,restore} from '../src/sim/state';
 import {unfinishedAtRollover} from '../src/sim/operatingDay';
 import {storageExit} from './helpers/storage-exit';
 import {hotStandby} from '../src/sim/duty/live';
-import {blockTasks,depotLedger} from '../src/sim/timetable';
+import {depotLedger} from '../src/sim/timetable';
 import {makeSim,runFor,runUntil,assertNoCollision,assertIntegrity} from './helpers';
 import {checkSafety} from '../src/sim/invariants';
 import {releaseRoute} from '../src/sim/interlocking';
@@ -114,14 +114,14 @@ describe('dispatcher commands with middle hot spares',()=>{
       expect(sim.plan.trips[trip.id].cancelled).toBe(true);
       expect(suffix.stops.slice(1)).toEqual(trip.stops.slice(cut + 1));
       expect(suffix.stops[0].dep).toBe(trip.stops[cut].dep);
-      if (station === 24) {
-        expect(suffix.stops[0]).toMatchObject({stop:false,noBoard:true});
-        const cover=sim.plan.trips.slice(originalCount).find(t=>!t.revenue&&t.to===station)!;
-        expect(cover.standby).toBe(true);
-        expect(cover.stops.at(-1)!.stop).toBe(false);
-        const reverse=blockTasks(sim.topo,sim.plan,sim.plan.blocks[cover.block]).find(t=>t.k==='reverse'&&t.station===station);
-        expect(reverse?.k==='reverse'&&sim.topo.berths[reverse.chosen].link).toBe(hot.link);
-      }
+      if (station === 24) expect(suffix.stops[0]).toMatchObject({stop:false,noBoard:true});
+      // D184 (user decision 2026-11-06, A): the spare's place is refilled from
+      // the yard the withdrawn train goes to, by a move like a planned spare's
+      const cover=sim.plan.trips.slice(originalCount).find(t=>t.standby&&t.to===station&&t.block!==hot.block)!;
+      expect(cover, `refill ${station}`).toBeDefined();
+      const refill=sim.plan.blocks[cover.block], lostBlock=sim.plan.blocks[lost.block];
+      expect(refill.start.kind==='depot'&&refill.start.depot).toBe(lostBlock.withdrawal?.depot);
+      expect(refill.end.kind==='stable'&&refill.end.berth!==undefined&&sim.topo.berths[refill.end.berth].link).toBe(hot.link);
       const ledger = depotLedger(sim.topo,sim.plan);
       expect(ledger.final).toEqual(ledger.initial);
       expect(suffix.stops[0].dep-now).toBeLessThan(1000);
@@ -138,7 +138,7 @@ describe('dispatcher commands with middle hot spares',()=>{
       expect(departure).toBeDefined();
       expect(departure!.delay).toBeLessThan(60);
     }
-  },240_000);
+  },600_000); // both incidents run to the recovered departure after some 10 000 simulated seconds of warm-up
 
 });
 

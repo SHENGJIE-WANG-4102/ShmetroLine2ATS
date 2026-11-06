@@ -4961,14 +4961,22 @@ D178 提交后 9 种子压测：6 过 3 红（106、107、109），都是第二�
 
 **删除的旧代码**（`src/sim/timetable.ts` 5460→3049 行）：`circulate`、`allocateTerminalServices`、`allocateDepotHomes`、`reuseTerminalReturns`、`reorderTerminalTurns`、`fitOpeningFeeders`、`relieveTerminals`、`spacePortalExits`、`addIntermediateStandbys`、`addFixedRuns`，`buildPlan` 的 shift/stock 递归和 `OLD_DUTY` 开关。删除后 `plan-hash` 不变。
 
+**补热备位**（用户决定 2026-11-06，选 A）：停在热备位上待命、本运用到此为止的热备车（存车线或折返线热备，也是当晚的过夜车或之后自行回段的车）被叫去顶替后，热备位空出；顶替后哪个车场多出一列（退出服务的车回去的那个），就由它另派一列开到该站进位，停稳后就是新的热备车。
+- 进位和计划里的热备进位同样做法（`standbyCandidate`，存车线先试规定的进入方向，再试另一方向），【假设】在下令后 3 h 内每 10 min 找一个时隙，计划校验不新增错误才用；找不到就照常顶替、不补位。
+- 原因：科技馆中途热备车同时是当晚过夜车；顶替后它跑完失车的后半段回北翟路，退出服务的车回龙阳路，科技馆空位、龙阳路多 1 列。现在龙阳路派车回补，车场账平。
+- 日志在顶替句后加「；某车场另派一列补某站热备位」。`applyStandby` 增加只进位的用法（`from < 0` 加给定终点）。
+
 **测试改动**：
 - `tests/timetable.test.ts` 删「terminal service allocation before trip creation」两项（直接测已删除的 `allocateTerminalServices`；同样的性质由全天排图测试覆盖）。
 - 加开两项改期望（取消的车次变少，开出的车次照样验证）：`dispatcher`「CIIE opening-window」原来东行两段找不到北翟路出段时隙被取消，现在由回段途中的底车延长运用接走，3 段全开（标题改为 runs the CIIE opening-window services；跑完 ≥90% 的检查不变）；`round3`「briefly occupied tail」跳过的请求 5→4，贯通车次 1 列不变，每个取消都有原因、0 校验错误。
+- `midline-storage`：两站顶替都检查补位车（从退出服务车所回车场出发，终到热备原股道，标为热备）；原「创新中路覆盖车为空驶、过站不停、折返进位」的期望描述的是旧机制（热备车自己的空驶回程），该热备现在没有后续运用，改为检查补位车。用例时限 240→600 s：以前第一站就断言失败，没跑到时限；现在两站都跑到恢复车次发车，E 核上约 320 s。
 - 其余测试只改 import 路径（`../src/sim/standby` → `../src/sim/duty/live`）。
 
 **结果**：
 - 换车相关 10 个测试文件 72 项全过；全量 `vitest`（不含 soak）98 个文件：14 号线（暂停）的红照旧，2 号线和公共部分除下面一项外全过。
 - `plan-hash` 两种日型拆分前后、删除前后完全一致，所以 validate-plan、firstlast、gaode-compare 结果不变。
-- 未决：`midline-storage`「middle hot spares recover…」车场账差 1 列（36,25,32 对 36,24,32）。重写前的代码在同一场景同样失败（主树 HEAD 实跑）。原因：夹具里科技馆中途热备车的运用止于热备位，它也是当晚的正线过夜车；被叫去顶替后，它跑完失车的后半段回北翟路，退出服务的车回龙阳路，科技馆过夜位空出、龙阳路多 1 列。补位怎么做是运营规则（车场另派一列去补热备位/过夜位，还是空着由次日 D111 丢车交备车），待用户定。2 号线真实数据已不用中途热备，只影响夹具。
+- `midline-storage`「middle hot spares recover…」：重写前后都失败（车场账 36,25,32 对 36,24,32，主树 HEAD 实跑同样失败），按下面「补热备位」修好，7 项全过。
+
+**顺带核对 11-02 平峰**：README 原写「11-02 平峰实测还没用到白天运行等级，图定中位 96 分 13 秒」，已过时——D171 已把 11-02 区间接进 11:00–16:00 的区间等级和余量（96:13 是 D171 之前的模型）。当前图定 11:00–16:00 完整单程中位：工作日东行 99:47（59 趟）、西行 100:14；双休日东行 101:06、西行 101:33（`work/d185/fullrun.ts`）。实测 02A05 东行一趟约 100:08（端点 ±4 s），差约 20 s，单个样本，不再改运行数据；README 删去该未决项。
 
 公共文件：`src/sim/duty/live.ts`（新）、`src/sim/duty/moves.ts`（新）、`src/sim/duty/overlay.ts`（新）、`src/sim/duty/planner.ts`、`src/sim/duty/pool.ts`、`src/sim/timetable.ts`、`src/sim/ats.ts`、`src/sim/dispatcher.ts`、`src/sim/engine.ts`；删除 `src/sim/standby.ts`。

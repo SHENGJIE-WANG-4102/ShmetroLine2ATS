@@ -29,7 +29,7 @@
  */
 import type { Sim } from '../engine';
 import type { Block, Plan, StopTask, TrackDir, Train, Trip } from '../model';
-import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, standbyWindows, effectiveStops, effectiveEnd, buildStops, clearOnToYard, type StandbyPlan } from '../timetable';
+import { applyStandby, depotLedger, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, standbyWindows, effectiveStops, effectiveEnd, buildStops, clearOnToYard, type StandbyPlan } from '../timetable';
 import { platformBerth, departureBerthAfterReverse, storageOccupancy } from '../timetable';
 import { noWorse } from '../planning';
 import { extendTrainTasks, remainingStart, setTripFromTasks, berthHolder } from '../ats';
@@ -337,6 +337,47 @@ function yardTakeOffer(sim: Sim, from: number, tail: number[], why: string): Off
     } }];
 }
 
+/** (time, direction) pairs: every 10 min from `from` to `to`, each direction in turn */
+function* slots(from: number, to: number, dirs: TrackDir[]): Generator<[number, TrackDir]> {
+  for (let at = from; at < to; at += 600) for (const dir of dirs) yield [at, dir];
+}
+
+/** A parked standby's duty ends at its place, where it stands until its
+ * night or its own way home: taking it away vacates the place. The yard the
+ * takeover leaves a train up (where the withdrawn train goes) sends one there
+ * on an empty move to the station, from where it enters the place as a
+ * night car does; it then stands as the hot standby (用户决定 2026-11-06：
+ * 补热备位；【假设】3 h 内第一个可行时隙). `plan` is the plan after the takeover. */
+function refillPlace(sim: Sim, plan: Plan, end: Block['end']): StandbyPlan | null {
+  if (end.kind !== 'stable' || end.berth === undefined) return null;
+  const link = sim.topo.berths[end.berth].link;
+  const place = hotStandbyPlaces(sim.topo).find(p => p.station === end.station && sim.topo.berths[p.berth]?.link === link);
+  if (!place) return null;
+  const { initial, final } = depotLedger(sim.topo, plan);
+  const notBefore = sim.t + STANDBY_NOTICE;
+  for (const d of sim.topo.depots.map((_, i) => i).filter(i => final[i] > initial[i] && sim.depotStock[i] > 0)) {
+    const run: TrackDir = sim.topo.stations[end.station].chain < sim.topo.depots[d].junctionChain ? 'UP' : 'DN';
+    const back: TrackDir = run === 'UP' ? 'DN' : 'UP';
+    // a storage place is entered by its registered storage approach (the
+    // move passes the platform and reverses in); any other runs on into it
+    for (const [at, dir] of slots(notBefore, sim.t + 3 * 3600, place.track === 'storage' ? [back, run] : [run, back])) {
+      const target = { id: plan.trips.length, no: '', dir, kind: 'empty', from: end.station, to: end.station,
+        stops: [{ st: end.station, arr: at, dep: at, stop: true }], revenue: false, block: -1 } as Trip;
+      plan.trips.push(target);
+      const c = standbyCandidate(sim.planCtx, plan, [target.id], d, notBefore, 0, 0, true);
+      plan.trips.pop();
+      if (!c?.stops) continue;
+      const stops = c.standby ? c.stops : c.stops.map((p, i, all) => i === all.length - 1 ? { ...p, stop: true, dep: p.arr } : p);
+      const refill = { ...c, k: 0, stops, standby: true };
+      // (it arrives once the place is clear: a later slot otherwise)
+      const check = structuredClone(plan);
+      applyStandby(check, -1, [], refill, end);
+      if (noWorse(sim, check)) return refill;
+    }
+  }
+  return null;
+}
+
 /** Tier 0 for a lost duty: the hot standby takes the lost trips from the
  * first it can make from its station; a yard standby covers its own later
  * duty in the same step. */
@@ -361,13 +402,26 @@ function hotTakeOffers(sim: Sim, from: number, tail: number[], why: string): Off
     // leaves that yard for the spare's former home. No night stock is invented.
     const cover = own.length ? findStandby(sim, h.block, own, 0, 0, finish, positioningOnly) : null;
     if (own.length && (!cover || cover.k)) continue;
+    const vacated = own.length ? undefined : sim.plan.blocks[h.block].end;
+    let refill: StandbyPlan | null = null;
+    if (vacated?.kind === 'stable') {
+      const plan = structuredClone(sim.plan);
+      finish(plan);
+      refill = refillPlace(sim, plan, vacated);
+    }
     const T = effectiveStops(sim.plan.trips[tail[k]])[cut].st;
     out.push({ id: h.id, rank: 0, k, ready: sim.t + HOT_NOTICE,
-      change: plan => { if (cover) applyYard(sim, plan, h.block, own, cover); return finish(plan); },
+      change: plan => {
+        if (cover) applyYard(sim, plan, h.block, own, cover);
+        const first = finish(plan);
+        if (refill) applyStandby(plan, -1, [], refill, vacated);
+        return first;
+      },
       retask: first => {
         callOut(sim, h, first as number);
         const skipped = k ? `；此前${k}趟来不及接替，仍取消` : '';
-        const msg = `热备车顶替：${sim.topo.stations[T].name}热备车${h.svc}（${h.vehicle}）接替${sim.plan.trips[tail[k]].no}起${tail.length - k}趟车次（${why}）${skipped}`;
+        const again = refill ? `；${sim.topo.depots[refill.depot].name}另派一列补${sim.topo.stations[T].name}热备位` : '';
+        const msg = `热备车顶替：${sim.topo.stations[T].name}热备车${h.svc}（${h.vehicle}）接替${sim.plan.trips[tail[k]].no}起${tail.length - k}趟车次（${why}）${skipped}${again}`;
         sim.log('C', '运营', msg, { key: `hot-${h.id}-${tail[k]}` });
         return { ok: true, msg };
       } });
