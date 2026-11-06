@@ -51,7 +51,7 @@ import { LINE_INFO, OPERATIONS, STATIONS, supportsSignalSystem, unattended } fro
 import { assertScope, currentScope } from '../data/scope';
 import { validateCommand } from './commands';
 import { preparePlan } from './planning';
-import { cmdStandbyRelief, standbyTick } from './standby';
+import { cmdStandbyRelief, standbyTick } from './duty/live';
 import type { RecordedInput } from './diagnostics';
 
 export const FIXED_DT = 0.1;

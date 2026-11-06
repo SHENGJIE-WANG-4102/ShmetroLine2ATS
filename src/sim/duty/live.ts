@@ -1,38 +1,41 @@
 /**
- * Standby trains (备车, D45). A spare vehicle in a yard takes over planned
- * service instead of the service being lost:
+ * 运行时车底池（D178、D184）: the live half of the one duty allocator. The
+ * day plan (planner.ts) matches cars to departures with the terminal pool;
+ * while the day runs, a duty that cannot keep its departures gets its tail
+ * of trips matched to another car by the same pool rule (pool.ts takeCar).
  *
- *  R3 takeover: a duty loses its train (withdrawal, rescue duty, failed train
- *     taken home). The trips that loss cancelled are handed to a standby from
- *     the earliest one it can start on time; earlier ones stay cancelled.
- *  R1 relief: a train will start its next own trip more than RELIEF_DELAY
- *     late. A standby takes over from that departure, on time; the late train
- *     finishes the trips it keeps and returns to the yard.
+ * The demand is the tail of one duty (its trips from some departure on). Each
+ * car that could take the tail from its trip `k` is an offer:
  *
- * A takeover is a plan change like an added train: the standby's empty move
- * from the yard keeps the minimum headway and the declared turnback time
- * (`standbyCandidate`), and the changed plan must add no validator error and
- * keep every yard's stock non-negative before it is applied.
+ *  - tier 0, hot standby (热备, D70/D148) at a line end, crewed in its turnback
+ *    track; it swaps duties with the late train, which turns in for it.
+ *  - tier 1, first-ready (先到先发, D148/D156) at a terminal marked so: the
+ *    train standing there with the next own departure, or after all of them a
+ *    train arriving there to stable; the late train takes its duty instead.
+ *  - tier 2, a yard spare (备车, D45) with its empty or carrying move out.
  *
- * The hot standby (热备, D70) at a line end goes first: crewed in its turnback
- * track, it needs HOT_NOTICE to be ready and takes a departure from its own
- * station. In R1 it swaps duties with the late train arriving there, which
- * becomes the hot standby in its place (终点站换车); in R3 it takes the lost
- * trips, and a yard standby covers its own later duty.
+ * Every offer changes the plan in one atomic step (tails and ends exchanged)
+ * and is admitted only when the changed plan adds no validator error and
+ * keeps every yard's stock non-negative (`noWorse`).
  *
- * At a first-ready terminal (D148) with its standby already out, the late
- * train's departure goes to the train standing there with the next own
- * departure, and the late train takes that later one: departures leave in
- * the order trains are ready, and nobody chases the original duty.
+ * R1 relief (a train predicted more than RELIEF_DELAY late for its next own
+ * departure) takes the offers in D148's tier order, each tier from the
+ * earliest trip it can take. R3 takeover (a duty lost its train) takes the
+ * earliest trip any car can make, the hot standby before a yard spare.
+ *
+ * A car left over leaves the pool to its yard: a relieved train after its
+ * last kept trip, and an idle stabled car whose place another car is due
+ * for (D177).
  */
-import type { Sim } from './engine';
-import type { Block, Plan, StopTask, TrackDir, Train, Trip } from './model';
-import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, standbyWindows, effectiveStops, effectiveEnd, buildStops, clearOnToYard, type StandbyPlan } from './timetable';
-import { noWorse } from './planning';
-import { extendTrainTasks, remainingStart, setTripFromTasks, berthHolder } from './ats';
-import { travelDirection, reversedBerthPoint } from './topology';
-import { routePathStart, walkRouteToBerth } from './routePath';
-import { platformBerth, departureBerthAfterReverse, storageOccupancy } from './timetable';
+import type { Sim } from '../engine';
+import type { Block, Plan, StopTask, TrackDir, Train, Trip } from '../model';
+import { applyStandby, standbyCandidate, minTurn, blockTasks, hotStandbyPlaces, standbyWindows, effectiveStops, effectiveEnd, buildStops, clearOnToYard, type StandbyPlan } from '../timetable';
+import { platformBerth, departureBerthAfterReverse, storageOccupancy } from '../timetable';
+import { noWorse } from '../planning';
+import { extendTrainTasks, remainingStart, setTripFromTasks, berthHolder } from '../ats';
+import { travelDirection, reversedBerthPoint } from '../topology';
+import { routePathStart, walkRouteToBerth } from '../routePath';
+import { takeCar, type PoolCar } from './pool';
 
 /** Notice a standby needs before leaving the yard (s). */
 export const STANDBY_NOTICE = 300;
@@ -45,6 +48,53 @@ export const HOT_NOTICE = 150;
 /** From its turnback track onto the departure platform (s). */
 const HOT_PULL_OUT = 90;
 
+type Result = { ok: boolean; msg: string };
+
+/** A car offered for `tail[k..]` of the demanded duty. */
+interface Offer extends PoolCar {
+  /** 0 hot standby, 1 first-ready, 2 yard spare; a stabler ranks after a
+   * first-ready train with an own departure (D156) */
+  rank: number;
+  k: number;
+  /** the plan change, on a copy for the check, then on the live plan */
+  change(plan: Plan): number | void;
+  /** already validated by its own search (a yard move) */
+  checked?: boolean;
+  /** the trains' tasks and the log once the change is on the live plan */
+  retask(changed: number | void): Result;
+}
+
+/** The offer the pool gives the tail: `tiers` in order (relief, D148) or all
+ * at once, earliest trip first (takeover). */
+function allocate(sim: Sim, tail: number[], tiers: (() => Offer[])[], byTier: boolean): Offer | undefined {
+  const admit = (o: Offer) => {
+    if (o.checked) return true;
+    const plan = structuredClone(sim.plan);
+    o.change(plan);
+    return noWorse(sim, plan);
+  };
+  const rule = { order: 'earliest' as const, maxWait: () => Infinity, rank: (o: Offer) => o.rank, admit };
+  const pick = (offers: Offer[]) => {
+    for (const k of [...new Set(offers.map(o => o.k))].sort((a, b) => a - b)) {
+      const at = effectiveStops(sim.plan.trips[tail[k]])[0]?.dep ?? Infinity;
+      // (an offer is built only where it is in time: its readiness orders it)
+      const car = takeCar(offers.filter(o => o.k === k).map(o => ({ ...o, ready: Math.min(o.ready, at) })), { id: k, at }, rule);
+      if (car) return car;
+    }
+  };
+  if (!byTier) return pick(tiers.flatMap(t => t()));
+  for (const tier of tiers) {
+    const car = pick(tier());
+    if (car) return car;
+  }
+}
+
+function commit(sim: Sim, o: Offer): Result {
+  const changed = o.change(sim.plan);
+  sim.planRev++;
+  sim.planDirty = true;
+  return o.retask(changed);
+}
 
 /** A hot standby standing in its turnback track (D70): its station and the
  * trip it stands for; null for any other train. */
@@ -74,7 +124,7 @@ function from(plan: Plan, b: Block, trip: number): number[] {
   return b.trips.slice(b.trips.indexOf(trip)).filter(id => !plan.trips[id].cancelled && !plan.trips[id].completed);
 }
 
-/** The first trip of `tail` (from `minK`) a hot standby can take on time:
+/** The first trip of `tail` (from `minK`) each hot standby can take on time:
  * the standby, the index, and its own later duty. */
 function hotCandidate(sim: Sim, tail: number[], minK = 0): { h: Train; k: number; own: number[]; cut: number }[] {
   const out: { h: Train; k: number; own: number[]; cut: number }[] = [];
@@ -192,6 +242,18 @@ function moveTrips(plan: Plan, src: number, taken: number[], dst: number) {
   d.end = s.end;
 }
 
+/** Exchange the tails `a` (of duty `x`) and `b` (of duty `y`) with their ends. */
+function swapTails(plan: Plan, x: number, a: number[], y: number, b: number[]) {
+  const bx = plan.blocks[x], by = plan.blocks[y];
+  const [endX, endY] = [bx.end, by.end];
+  for (const id of a) plan.trips[id].block = by.id;
+  for (const id of b) plan.trips[id].block = bx.id;
+  bx.trips = [...bx.trips.filter(id => !a.includes(id)), ...b];
+  by.trips = [...by.trips.filter(id => !b.includes(id)), ...a];
+  bx.end = endY;
+  by.end = endX;
+}
+
 /** the hot standby `h` leaves its track for the duty it now has, from `trip` */
 function callOut(sim: Sim, h: Train, trip: number) {
   const b = sim.plan.blocks[h.block];
@@ -207,8 +269,6 @@ function callOut(sim: Sim, h: Train, trip: number) {
     h.phase='run';h.phaseSince=sim.t;b.train=h.id;sim.blockDone.delete(b.id);
   }
   setTripFromTasks(sim, h);
-  sim.planRev++;
-  sim.planDirty = true;
 }
 
 /** A standby (hot or from the yard) inherits the duty's end, its return to the
@@ -222,49 +282,7 @@ function takeable(plan: Plan, from: number, tail: number[]): boolean {
   return !block.relieved && tail.at(-1) === last;
 }
 
-/** R3 by the hot standby: it takes the lost trips from the first it can make
- * from its station; a yard standby takes over its own later duty, or nothing
- * is changed. */
-function hotTakeover(sim: Sim, from: number, tail: number[], why: string, depotK: number): Block | null {
-  if (!takeable(sim.plan, from, tail)) return null;
-  for (const { h, k, own, cut } of hotCandidate(sim, tail)) {
-    if (k > depotK) break;
-    if (!own.length&&h.phase!=='stabled') continue;
-    const positioningOnly = own.every(id => !sim.plan.trips[id].revenue);
-    const finish = (plan: Plan) => {
-      plan.blocks[h.block].relieved = false;
-      const taken = recoveredTail(sim, plan, tail, k, cut);
-      moveTrips(plan, from, taken, h.block);
-      plan.blocks[from].relieved = true;
-      return taken[0];
-    };
-    // Cover and takeover form one stock transaction. Testing the cover in
-    // isolation would choose the hot duty's old home instead of the lost
-    // duty's home, then incorrectly reject the complete, balanced swap.
-    // For a dedicated spare the covered empty return is also the required
-    // stock transfer: the withdrawn car returns to one yard, its replacement
-    // leaves that yard for the spare's former home. No night stock is invented.
-    const cover = own.length?findStandby(sim, h.block, own, 0, 0, finish, positioningOnly):null;
-    if (own.length&&(!cover || cover.k)) continue;
-    const change = (plan: Plan) => {
-      if(cover)applyYard(sim, plan, h.block, own, cover);
-      return finish(plan);
-    };
-    const plan = structuredClone(sim.plan);
-    change(plan);
-    if (!noWorse(sim, plan)) continue;
-    const T = effectiveStops(sim.plan.trips[tail[k]])[cut].st;
-    const first = change(sim.plan);
-    callOut(sim, h, first);
-    const skipped = k ? `；此前${k}趟来不及接替，仍取消` : '';
-    sim.log('C', '运营', `热备车顶替：${sim.topo.stations[T].name}热备车${h.svc}（${h.vehicle}）接替${sim.plan.trips[tail[k]].no}起${tail.length - k}趟车次（${why}）${skipped}`,
-      { key: `hot-${h.id}-${tail[k]}` });
-    return sim.plan.blocks[h.block];
-  }
-  return null;
-}
-
-/** The standby that takes over `tail` (live trip ids of duty `from`, in
+/** The yard standby that takes over `tail` (live trip ids of duty `from`, in
  * order), validated on a copy of the plan; null when none can. */
 export function findStandby(sim: Sim, from: number, tail: number[], minK = 0, maxK = tail.length - 1, amend?: (plan: Plan) => unknown, allowPositioning = false): YardStandbyPlan | null {
   if (!tail.length || minK > maxK || !takeable(sim.plan, from, tail)) return null;
@@ -302,65 +320,87 @@ export function findStandby(sim: Sim, from: number, tail: number[], minK = 0, ma
   return null;
 }
 
-function apply(sim: Sim, from: number, tail: number[], c: YardStandbyPlan, why: string): Block {
-  const block = applyYard(sim, sim.plan, from, tail, c);
-  sim.planRev++;
-  sim.planDirty = true;
-  const first = sim.plan.trips[tail[c.k]];
-  const skipped = c.k ? `；此前${c.k}趟来不及接替，仍取消` : '';
-  sim.log('C', '运营', `备车顶替：${sim.topo.depots[c.depot].name}备车表号${block.svc}接替${first.no}起${tail.length - c.k}趟车次（${why}）${skipped}`,
-    { key: `standby-${block.id}` });
-  return block;
-}
+// ---------------------------------------------------------------- offers
 
-/** R3: hand the trips a lost train's cancellation dropped to a standby.
- * `tail` lists the trips of duty `from` that this loss cancelled. Applied only
- * by the automatic dispatcher; a trainee dispatcher adds trains by hand. */
-export function standbyTakeover(sim: Sim, from: number, tail: number[], why: string): Block | null {
-  if (!sim.autoDispatch || !tail.length) return null;
+/** Tier 2 for a lost duty: a yard spare takes the tail. */
+function yardTakeOffer(sim: Sim, from: number, tail: number[], why: string): Offer[] {
   const c = findStandby(sim, from, tail);
-  // the hot standby first, unless a yard standby makes an earlier trip
-  const hot = hotTakeover(sim, from, tail, why, c?.k ?? tail.length);
-  if (hot) return hot;
-  return c ? apply(sim, from, tail, c, why) : null;
+  if (!c) return [];
+  return [{ id: -1, rank: 2, k: c.k, ready: c.start, checked: true,
+    change: plan => applyYard(sim, plan, from, tail, c).id,
+    retask: id => {
+      const block = sim.plan.blocks[id as number];
+      const skipped = c.k ? `；此前${c.k}趟来不及接替，仍取消` : '';
+      const msg = `备车顶替：${sim.topo.depots[c.depot].name}备车表号${block.svc}接替${sim.plan.trips[tail[c.k]].no}起${tail.length - c.k}趟车次（${why}）${skipped}`;
+      sim.log('C', '运营', msg, { key: `standby-${block.id}` });
+      return { ok: true, msg };
+    } }];
 }
 
-/** R1 at a line end (终点站换车): the hot standby there takes the late train's
- * duty from its first departure there it can make on time; the late train
- * turns into the standby's track and stands for the standby's own duty. */
-function hotSwap(sim: Sim, tr: Train, tail: number[], minK: number, late: number): { ok: boolean; msg: string } | null {
+/** Tier 0 for a lost duty: the hot standby takes the lost trips from the
+ * first it can make from its station; a yard standby covers its own later
+ * duty in the same step. */
+function hotTakeOffers(sim: Sim, from: number, tail: number[], why: string): Offer[] {
+  if (!takeable(sim.plan, from, tail)) return [];
+  const out: Offer[] = [];
+  for (const { h, k, own, cut } of hotCandidate(sim, tail)) {
+    if (!own.length && h.phase !== 'stabled') continue;
+    const positioningOnly = own.every(id => !sim.plan.trips[id].revenue);
+    const finish = (plan: Plan) => {
+      plan.blocks[h.block].relieved = false;
+      const taken = recoveredTail(sim, plan, tail, k, cut);
+      moveTrips(plan, from, taken, h.block);
+      plan.blocks[from].relieved = true;
+      return taken[0];
+    };
+    // Cover and takeover form one stock transaction. Testing the cover in
+    // isolation would choose the hot duty's old home instead of the lost
+    // duty's home, then incorrectly reject the complete, balanced swap.
+    // For a dedicated spare the covered empty return is also the required
+    // stock transfer: the withdrawn car returns to one yard, its replacement
+    // leaves that yard for the spare's former home. No night stock is invented.
+    const cover = own.length ? findStandby(sim, h.block, own, 0, 0, finish, positioningOnly) : null;
+    if (own.length && (!cover || cover.k)) continue;
+    const T = effectiveStops(sim.plan.trips[tail[k]])[cut].st;
+    out.push({ id: h.id, rank: 0, k, ready: sim.t + HOT_NOTICE,
+      change: plan => { if (cover) applyYard(sim, plan, h.block, own, cover); return finish(plan); },
+      retask: first => {
+        callOut(sim, h, first as number);
+        const skipped = k ? `；此前${k}趟来不及接替，仍取消` : '';
+        const msg = `热备车顶替：${sim.topo.stations[T].name}热备车${h.svc}（${h.vehicle}）接替${sim.plan.trips[tail[k]].no}起${tail.length - k}趟车次（${why}）${skipped}`;
+        sim.log('C', '运营', msg, { key: `hot-${h.id}-${tail[k]}` });
+        return { ok: true, msg };
+      } });
+  }
+  return out;
+}
+
+/** Tier 0 for a late train (终点站换车): the hot standby at a line end takes
+ * its duty from the first departure there it can make on time; the late
+ * train turns into the standby's track and stands for the standby's duty. */
+function hotSwapOffers(sim: Sim, tr: Train, tail: number[], minK: number, late: number): Offer[] {
   const keeps = (id: number) => tr.tasks.findIndex(t => t.k === 'stop' && t.trip === id && t.dep === null);
+  const out: Offer[] = [];
   for (const { h, k, own, cut } of hotCandidate(sim, tail, minK)) {
     if (cut || hotStandbyPlaces(sim.topo).some(p => p.depot && p.station === sim.plan.trips[tail[k]].from)) continue;
     if (!own.length) continue;
     const lastKept = k ? tail[k - 1] : tr.tripId;
     if (keeps(lastKept) < 0) continue;
-    const swap = (plan: Plan) => {
-      const taken = tail.slice(k);
-      const bx = plan.blocks[tr.block], bh = plan.blocks[h.block];
-      const [endX, endH] = [bx.end, bh.end];
-      for (const id of taken) plan.trips[id].block = bh.id;
-      for (const id of own) plan.trips[id].block = bx.id;
-      bx.trips = [...bx.trips.filter(id => !taken.includes(id)), ...own];
-      bh.trips = [...bh.trips.filter(id => !own.includes(id)), ...taken];
-      bx.end = endH;
-      bh.end = endX;
-      plan.trips[lastKept].standby = true;
-    };
-    const plan = structuredClone(sim.plan);
-    swap(plan);
-    if (!noWorse(sim, plan)) continue;
-    swap(sim.plan);
-    const T = sim.plan.trips[tail[k]].from;
-    callOut(sim, h, tail[k]);
-    extendTrainTasks(sim, tr, lastKept);
-    setTripFromTasks(sim, tr);
-    const name = sim.topo.stations[T].name;
-    const msg = `${name}热备车${h.svc}（${h.vehicle}）接替${sim.plan.trips[tail[k]].no}起车次；列车${tr.svc}（${tr.vehicle}）预计晚点${Math.round(late / 60)}分钟，到达${name}后转为热备`;
-    sim.log('C', '运营', `终点站换车：${msg}`, { key: `hotswap-${h.id}-${tail[k]}` });
-    return { ok: true, msg };
+    const taken = tail.slice(k);
+    out.push({ id: h.id, rank: 0, k, ready: sim.t + HOT_NOTICE,
+      change: plan => { swapTails(plan, tr.block, taken, h.block, own); plan.trips[lastKept].standby = true; },
+      retask: () => {
+        const T = sim.plan.trips[tail[k]].from;
+        callOut(sim, h, tail[k]);
+        extendTrainTasks(sim, tr, lastKept);
+        setTripFromTasks(sim, tr);
+        const name = sim.topo.stations[T].name;
+        const msg = `${name}热备车${h.svc}（${h.vehicle}）接替${sim.plan.trips[tail[k]].no}起车次；列车${tr.svc}（${tr.vehicle}）预计晚点${Math.round(late / 60)}分钟，到达${name}后转为热备`;
+        sim.log('C', '运营', `终点站换车：${msg}`, { key: `hotswap-${h.id}-${tail[k]}` });
+        return { ok: true, msg };
+      } });
   }
-  return null;
+  return out;
 }
 
 /** The train on its way into, or standing at, terminal T at the end of its
@@ -374,33 +414,16 @@ function stablesAt(sim: Sim, r: Train, T: number, dir: TrackDir): boolean {
     && r.tasks.slice(1).every(t => t.k === 'stable' || (t.k === 'stop' || t.k === 'reverse') && t.station === T);
 }
 
-/** D156: the train most late (beyond R1's threshold) for its next departure
- * from first-ready terminal T, where `r` now arrives to stable; R1 for it may
- * let `r` take that departure (firstReadySwap). */
-export function lateForStabler(sim: Sim, r: Train): Train | null {
-  const T = r.tasks[0]?.k === 'stop' ? r.tasks[0].station : -1;
-  if (!hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady)) return null;
-  let worst: { tr: Train; late: number } | null = null;
-  for (const tr of sim.trainList) {
-    if (tr === r || tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn || tr.relievedBy
-      || tr.rescuing >= 0 || tr.rescueBy >= 0) continue;
-    const next = sim.plan.trips[dutyTail(sim, tr)[0]];
-    if (!next || next.from !== T || !stablesAt(sim, r, T, next.dir)) continue;
-    const late = predictedLateness(sim, tr);
-    if (late > RELIEF_DELAY && (!worst || late > worst.late)) worst = { tr, late };
-  }
-  return worst?.tr ?? null;
-}
+const firstReadyAt = (sim: Sim, T: number) => hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady);
 
-/** D148 first-ready departure at a terminal whose hot standby is out: the
- * train standing there with the next own departure takes the late train's
- * due one, and the late train takes that later one. A train arriving there
- * to stable ranks after every such departure: it takes the late train's
- * duty, and the late train stables in its place (D156). Otherwise both
- * trains are left for the turnback tracks, and a stabler that took the last
- * one locks out the late train's turnback. */
-function firstReadySwap(sim: Sim, tr: Train, tail: number[], minK: number, late: number): { ok: boolean; msg: string } | null {
+/** Tier 1 for a late train (D148 先到先发, D156): at a first-ready terminal,
+ * the train standing there with the next own departure takes the late
+ * train's due one, and the late train takes that later one. A train
+ * arriving there to stable ranks after every such departure: it takes the
+ * late train's duty, and the late train stables in its place. */
+function firstReadyOffers(sim: Sim, tr: Train, tail: number[], minK: number, late: number): Offer[] {
   const keeps = (id: number) => tr.tasks.findIndex(t => t.k === 'stop' && t.trip === id && t.dep === null);
+  const out: Offer[] = [];
   for (let k = minK; k < tail.length; k++) {
     const D = sim.plan.trips[tail[k]];
     if (D.completed || D.cancelled) continue;
@@ -408,9 +431,9 @@ function firstReadySwap(sim: Sim, tr: Train, tail: number[], minK: number, late:
     const lastKept = k ? tail[k - 1] : tr.tripId;
     // A non-revenue departure (an empty move on to a later duty) passes only
     // to a stabler; otherwise the next departure is looked at as before.
-    if (!hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady) || keeps(lastKept) < 0) {
+    if (!firstReadyAt(sim, T) || keeps(lastKept) < 0) {
       if (!D.revenue) continue;
-      return null;
+      break;
     }
     let best: { r: Train; index: number; trip: number; dep: number } | undefined;
     for (const r of sim.trainList) {
@@ -430,46 +453,80 @@ function firstReadySwap(sim: Sim, tr: Train, tail: number[], minK: number, late:
     }
     if (!best) {
       if (!D.revenue) continue;
-      return null;
+      break;
     }
-    const { r, index } = best;
-    const own = best.trip < 0 ? [] : from(sim.plan, sim.plan.blocks[r.block], best.trip);
-    const swap = (plan: Plan) => {
-      const taken = tail.slice(k);
-      const bx = plan.blocks[tr.block], br = plan.blocks[r.block];
-      const [endX, endR] = [bx.end, br.end];
-      for (const id of taken) plan.trips[id].block = br.id;
-      for (const id of own) plan.trips[id].block = bx.id;
-      bx.trips = [...bx.trips.filter(id => !taken.includes(id)), ...own];
-      br.trips = [...br.trips.filter(id => !own.includes(id)), ...taken];
-      bx.end = endR;
-      br.end = endX;
-    };
-    const plan = structuredClone(sim.plan);
-    swap(plan);
-    if (!noWorse(sim, plan)) continue;
-    swap(sim.plan);
-    const br = sim.plan.blocks[r.block];
-    if (best.trip < 0) {
-      // its stabling steps there pass to the late train
-      const ending = r.tasks.slice(1);
-      extendTrainTasks(sim, r, r.tripId);
-      extendTrainTasks(sim, tr, lastKept, ending);
-    } else {
-      r.tasks = [...r.tasks.slice(0, index), ...blockTasks(sim.topo, sim.plan, br, br.trips.indexOf(tail[k]))];
-      extendTrainTasks(sim, tr, lastKept);
-    }
-    setTripFromTasks(sim, r);
-    setTripFromTasks(sim, tr);
-    sim.planRev++;
-    sim.planDirty = true;
-    const name = sim.topo.stations[T].name;
-    const then = best.trip < 0 ? `到达后在${name}存车` : `改接${sim.plan.trips[best.trip].no}`;
-    const msg = `${name}先到先发：列车${r.svc}（${r.vehicle}）接${D.no}；列车${tr.svc}（${tr.vehicle}）预计晚点${Math.round(late / 60)}分钟，${then}`;
-    sim.log('C', '运营', `终点站换车：${msg}`, { key: `firstready-${r.id}-${D.id}` });
-    return { ok: true, msg };
+    const { r, index } = best, stabler = best.trip < 0;
+    const own = stabler ? [] : from(sim.plan, sim.plan.blocks[r.block], best.trip);
+    const taken = tail.slice(k);
+    out.push({ id: r.id, rank: stabler ? 1.5 : 1, k, ready: sim.t,
+      change: plan => swapTails(plan, tr.block, taken, r.block, own),
+      retask: () => {
+        const br = sim.plan.blocks[r.block];
+        if (stabler) {
+          // its stabling steps there pass to the late train
+          const ending = r.tasks.slice(1);
+          extendTrainTasks(sim, r, r.tripId);
+          extendTrainTasks(sim, tr, lastKept, ending);
+        } else {
+          r.tasks = [...r.tasks.slice(0, index), ...blockTasks(sim.topo, sim.plan, br, br.trips.indexOf(tail[k]))];
+          extendTrainTasks(sim, tr, lastKept);
+        }
+        setTripFromTasks(sim, r);
+        setTripFromTasks(sim, tr);
+        const name = sim.topo.stations[T].name;
+        const then = stabler ? `到达后在${name}存车` : `改接${sim.plan.trips[best!.trip].no}`;
+        const msg = `${name}先到先发：列车${r.svc}（${r.vehicle}）接${D.no}；列车${tr.svc}（${tr.vehicle}）预计晚点${Math.round(late / 60)}分钟，${then}`;
+        sim.log('C', '运营', `终点站换车：${msg}`, { key: `firstready-${r.id}-${D.id}` });
+        return { ok: true, msg };
+      } });
   }
-  return null;
+  return out;
+}
+
+/** Tier 2 for a late train: a yard spare takes over from its next departure
+ * it can make on time; the late train keeps the trips before it, then is
+ * withdrawn at the end of the last one (`standbyTick`). */
+function yardReliefOffer(sim: Sim, tr: Train, tail: number[], minK: number, late: number): Offer[] {
+  const T = sim.plan.trips[tail[minK]]?.from;
+  if (T !== undefined && firstReadyAt(sim, T))
+    sim.log('B', '运营', `${sim.topo.stations[T].name}备车位已用、无先到列车可接：列车${tr.svc}预计晚点${Math.round(late / 60)}分钟`,
+      { key: `standby-short-${T}-${tail[minK]}` });
+  const c = findStandby(sim, tr.block, tail, minK);
+  if (!c) return [];
+  const lastKept = c.k ? tail[c.k - 1] : tr.tripId;
+  const cut = tr.tasks.findIndex(t => t.k === 'stop' && t.trip === lastKept && t.dep === null);
+  if (cut < 0) return [];
+  const from = tr.block;
+  return [{ id: -1, rank: 2, k: c.k, ready: c.start, checked: true,
+    change: plan => applyYard(sim, plan, from, tail, c).id,
+    retask: id => {
+      const block = sim.plan.blocks[id as number];
+      const skipped = c.k ? `；此前${c.k}趟来不及接替，仍取消` : '';
+      sim.log('C', '运营', `备车顶替：${sim.topo.depots[c.depot].name}备车表号${block.svc}接替${sim.plan.trips[tail[c.k]].no}起${tail.length - c.k}趟车次（列车${tr.svc}预计晚点${Math.round(late / 60)}分钟）${skipped}`,
+        { key: `standby-${block.id}` });
+      tr.tasks = tr.tasks.slice(0, cut + 1);
+      const keep = new Set(tr.tasks.flatMap(t => t.k === 'stop' ? [t.berth] : []));
+      for (const [berth, train] of sim.berthRes) if (train === tr.id && !keep.has(berth)) sim.berthRes.delete(berth);
+      tr.relievedBy = block.svc;
+      return { ok: true, msg: `备车表号${block.svc}接替${sim.plan.trips[tail[c.k]].no}起车次；本车运行至${sim.plan.trips[lastKept].no}终点后回段` };
+    } }];
+}
+
+// ---------------------------------------------------------------- entry points
+
+/** R3: hand the trips a lost train's cancellation dropped to a standby.
+ * `tail` lists the trips of duty `from` that this loss cancelled. Applied only
+ * by the automatic dispatcher; a trainee dispatcher adds trains by hand. */
+export function standbyTakeover(sim: Sim, from: number, tail: number[], why: string): Block | null {
+  if (!sim.autoDispatch || !tail.length) return null;
+  let yard: Offer[] | undefined;
+  const yardOffers = () => yard ??= yardTakeOffer(sim, from, tail, why);
+  // the hot standby first, unless a yard standby makes an earlier trip
+  const offer = allocate(sim, tail, [() => hotTakeOffers(sim, from, tail, why).filter(o => o.k <= (yardOffers()[0]?.k ?? tail.length)), yardOffers], false);
+  if (!offer) return null;
+  const before = sim.plan.blocks.length;
+  commit(sim, offer);
+  return offer.rank === 0 ? sim.plan.blocks[sim.trains.get(offer.id)!.block] : sim.plan.blocks[before] ?? null;
 }
 
 /** Trips of the train's duty after its current one that are still to run. */
@@ -492,10 +549,27 @@ export function predictedLateness(sim: Sim, tr: Train): number {
   return ready - next.dep;
 }
 
-/** R1 relief: a standby takes over from the late train's next departure it
- * can make on time; the late train keeps the trips before it, then is
- * withdrawn at the end of the last one (`standbyTick`). */
-export function cmdStandbyRelief(sim: Sim, tr: Train) {
+/** D156: the train most late (beyond R1's threshold) for its next departure
+ * from first-ready terminal T, where `r` now arrives to stable; relief for it
+ * may let `r` take that departure. */
+export function lateForStabler(sim: Sim, r: Train): Train | null {
+  const T = r.tasks[0]?.k === 'stop' ? r.tasks[0].station : -1;
+  if (!firstReadyAt(sim, T)) return null;
+  let worst: { tr: Train; late: number } | null = null;
+  for (const tr of sim.trainList) {
+    if (tr === r || tr.failed || tr.manual || !tr.inService || tr.coupledLen > 0 || tr.withdrawn || tr.relievedBy
+      || tr.rescuing >= 0 || tr.rescueBy >= 0) continue;
+    const next = sim.plan.trips[dutyTail(sim, tr)[0]];
+    if (!next || next.from !== T || !stablesAt(sim, r, T, next.dir)) continue;
+    const late = predictedLateness(sim, tr);
+    if (late > RELIEF_DELAY && (!worst || late > worst.late)) worst = { tr, late };
+  }
+  return worst?.tr ?? null;
+}
+
+/** R1 relief (the `standby` command): the pool takes the late train's tail
+ * in D148's order (hot standby, first-ready, yard spare). */
+export function cmdStandbyRelief(sim: Sim, tr: Train): Result {
   const expired = expiredStablingExchange(sim, tr);
   if (expired) return expired;
   if (tr.failed || tr.manual || tr.coupledLen > 0 || !tr.inService || tr.block < 0 || tr.rescuing >= 0 || tr.rescueBy >= 0)
@@ -503,31 +577,18 @@ export function cmdStandbyRelief(sim: Sim, tr: Train) {
   if (tr.relievedBy) return { ok: false, msg: `已由备车表号${tr.relievedBy}接替` };
   const tail = dutyTail(sim, tr);
   if (!tail.length) return { ok: false, msg: '本车底无后续车次' };
-  const keeps = (id: number) => tr.tasks.findIndex(t => t.k === 'stop' && t.trip === id && t.dep === null);
   // The late train must still be able to stop at the end of what it keeps.
-  const minK = keeps(tr.tripId) >= 0 ? 0 : 1;
+  const minK = tr.tasks.findIndex(t => t.k === 'stop' && t.trip === tr.tripId && t.dep === null) >= 0 ? 0 : 1;
   const late = predictedLateness(sim, tr);
-  const hot = hotSwap(sim, tr, tail, minK, late);
-  if (hot) return hot;
-  const ready = firstReadySwap(sim, tr, tail, minK, late);
-  if (ready) return ready;
-  const T = sim.plan.trips[tail[minK]]?.from;
-  if (T !== undefined && hotStandbyPlaces(sim.topo).some(p => p.station === T && p.firstReady))
-    sim.log('B', '运营', `${sim.topo.stations[T].name}备车位已用、无先到列车可接：列车${tr.svc}预计晚点${Math.round(late / 60)}分钟`,
-      { key: `standby-short-${T}-${tail[minK]}` });
-  const c = findStandby(sim, tr.block, tail, minK);
-  if (!c) return { ok: false, msg: '无可正点接替的备车' };
-  const lastKept = c.k ? tail[c.k - 1] : tr.tripId;
-  const cut = keeps(lastKept);
-  if (cut < 0) return { ok: false, msg: '列车已驶离保留车次终点' };
-  const block = apply(sim, tr.block, tail, c, `列车${tr.svc}预计晚点${Math.round(late / 60)}分钟`);
-  if (!block) return { ok: false, msg: '已截短车次没有可接替的剩余停站' };
-  tr.tasks = tr.tasks.slice(0, cut + 1);
-  const keep = new Set(tr.tasks.flatMap(t => t.k === 'stop' ? [t.berth] : []));
-  for (const [berth, train] of sim.berthRes) if (train === tr.id && !keep.has(berth)) sim.berthRes.delete(berth);
-  tr.relievedBy = block.svc;
-  return { ok: true, msg: `备车表号${block.svc}接替${sim.plan.trips[tail[c.k]].no}起车次；本车运行至${sim.plan.trips[lastKept].no}终点后回段` };
+  const offer = allocate(sim, tail, [
+    () => hotSwapOffers(sim, tr, tail, minK, late),
+    () => firstReadyOffers(sim, tr, tail, minK, late),
+    () => yardReliefOffer(sim, tr, tail, minK, late),
+  ], true);
+  return offer ? commit(sim, offer) : { ok: false, msg: '无可正点接替的备车' };
 }
+
+// ---------------------------------------------------------------- stabling exchange (D166)
 
 /** Read the same reservation calendar used by planning; do not attempt a
  * dispatcher command for a train merely because another train is stabled. */
@@ -560,8 +621,10 @@ export function canExchangeStabling(sim: Sim, incoming: Train): boolean {
   return stablingExchangeCandidate(sim,incoming)!==null;
 }
 
-/** Swap the two duties atomically after a previous reservation expired. */
-function expiredStablingExchange(sim: Sim, incoming: Train): {ok:boolean;msg:string}|null {
+/** The held stabled car takes the incoming train's tail and the incoming
+ * train stables in its place, in one step, after the held car's reservation
+ * expired. */
+function expiredStablingExchange(sim: Sim, incoming: Train): Result | null {
   const candidate=stablingExchangeCandidate(sim,incoming);
   if(!candidate)return null;
   const {arrival,held,a,b,heldSlot,tail,first,destination,depot}=candidate;
@@ -608,6 +671,8 @@ function expiredStablingExchange(sim: Sim, incoming: Train): {ok:boolean;msg:str
   sim.log('C','运营',msg,{key:`expired-slot-${held.id}-${incoming.id}`});
   return {ok:true,msg};
 }
+
+// ---------------------------------------------------------------- cars leaving the pool
 
 /** A relieved train that has finished its last kept trip returns to the yard. */
 export function standbyTick(sim: Sim) {

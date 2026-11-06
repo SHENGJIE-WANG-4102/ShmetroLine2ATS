@@ -5,10 +5,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/engine';
-import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, terminalOverflows, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, departureBerthAfterReverse, allocateTerminalServices, buildStops, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, depotMoves, terminalReuseRejections, type ServiceRequest } from '../src/sim/timetable';
-import { buildTopology, reversedBerthPoint } from '../src/sim/topology';
+import { validatePlan, applyOverlay, OVERLAY_PRESETS, terminalOccupancy, terminalOverflows, storageOccupancy, hotStandbyPlaces, overnightPlaces, TEMPLATES, dayPeriods, yardNeed, depotLedger, serviceStructureIssues, platformBerth, blockTasks, departureBerthAfterReverse, dwellFactorAt, inboundWindow, outboundWindow, MAX_DIAGRAM_SHIFT_S, depotMoves, terminalReuseRejections } from '../src/sim/timetable';
+import { reversedBerthPoint } from '../src/sim/topology';
 import { routePathStart, walkRouteToBerth } from '../src/sim/routePath';
-import { computeRunTimes } from '../src/sim/dynamics';
 import { plannedDwell } from '../src/sim/calibration';
 import type { DayType } from '../src/sim/model';
 import { SCENARIOS } from '../src/sim/scenario';
@@ -390,71 +389,6 @@ describe('D79–D81 Gaode service distribution', () => {
     const returns=s.plan.trips.filter(t=>!t.cancelled&&t.revenue&&t.dir==='DN'&&t.to===19&&t.stops.at(-1)!.arr>=22.5*3600);
     for(const trip of returns) expect(s.plan.blocks[trip.block].end).toEqual({kind:'depot',depot:s.topo.depots.findIndex(yard=>yard.key==='LYD')});
   });
-});
-
-describe('terminal service allocation before trip creation', () => {
-  const topo = buildTopology();
-  const ctx = { topo, rt: computeRunTimes(topo, LINE_INFO.trainLength), dayType: 'weekend' as const };
-  const factor = (time: number) => dwellFactorAt(ctx.dayType, time);
-  const request = (id: number, dir: 'UP' | 'DN', departure: number): ServiceRequest => {
-    const from = dir === 'DN' ? 0 : 30, to = dir === 'DN' ? 30 : 0;
-    return { id, dir, kind: 'big', from, to, revenue: true, stops: buildStops(ctx, dir, from, to, departure, true, factor) };
-  };
-  const incoming = (id: number, at: number) => {
-    let start = at - buildStops(ctx, 'UP', 30, 0, 0, true, factor).at(-1)!.arr;
-    for (let k = 0; k < 8; k++) start -= buildStops(ctx, 'UP', 30, 0, start, true, factor).at(-1)!.arr - at;
-    return request(id, 'UP', start);
-  };
-  for (const hour of [12, 13]) {
-    it(`${hour}: uses an available arrival instead of scheduling another depot car, without editing requests`, () => {
-      const at = hour * 3600;
-      const requests = Array.from({ length: 4 }, (_, id) => request(id, 'DN', at + id * 300));
-      requests.push(incoming(4, at + 2400), request(5, 'DN', at + 2760));
-      const before = structuredClone(requests);
-      for (const service of requests) {
-        for (const stop of service.stops) Object.freeze(stop);
-        Object.freeze(service.stops);
-        Object.freeze(service);
-      }
-      const result = allocateTerminalServices(ctx, Object.freeze(requests));
-      expect(requests).toEqual(before);
-      expect(result.supply.pairs.get(4)).toBe(5);
-      expect(result.supply.feeders.has(5)).toBe(false);
-      const later = [...before.slice(0, 4), incoming(4, at + 2580), before[5]];
-      const changed = allocateTerminalServices(ctx, later);
-      expect(changed.supply.pairs.has(4)).toBe(false);
-      expect(changed.supply.feeders.has(5) || changed.services[5].from !== 0).toBe(true);
-    });
-    it(`${hour}: allocates a burst against real places while preserving every core slot`, () => {
-      const at = hour * 3600;
-      const requests = Array.from({ length: 4 }, (_, id) => request(id, 'DN', at + id * 300));
-      for (let i = 0; i < 10; i++) requests.push(incoming(requests.length, at + 2400 + i * 90));
-      for (let i = 0; i < 10; i++) requests.push(request(requests.length, 'DN', at + 3300 + i * 180));
-      const before = structuredClone(requests);
-      const { services, supply } = allocateTerminalServices(ctx, requests);
-      expect(requests).toEqual(before);
-      expect(services).toHaveLength(requests.length);
-      const intervals: { station: number; from: number; to: number }[] = [];
-      for (const [arrival, departure] of supply.pairs) intervals.push({ station: services[arrival].to,
-        from: services[arrival].stops.at(-1)!.arr, to: services[departure].stops[0].dep });
-      for (const [arrival, move] of supply.withdrawals) intervals.push({ station: services[arrival].to,
-        from: services[arrival].stops.at(-1)!.arr, to: move.stops[0].dep });
-      for (const [departure, move] of supply.feeders) intervals.push({ station: services[departure].from,
-        from: move.stops.at(-1)!.arr, to: services[departure].stops[0].dep });
-      for (const place of intervals) {
-        expect(intervals.filter(other => other.station === place.station && other.from <= place.from && other.to > place.from).length)
-          .toBeLessThanOrEqual(3);
-      }
-      for (const [id, selected] of services.entries()) {
-        for (const call of requests[id].stops.filter(stop => stop.st >= 4 && stop.st <= 22)) {
-          const actual = selected.stops.find(stop => stop.st === call.st)!;
-          expect(actual).toBeDefined();
-          expect(call.st === (selected.dir === 'DN' ? 22 : 4) ? actual.arr : actual.dep)
-            .toBe(call.st === (selected.dir === 'DN' ? 22 : 4) ? call.arr : call.dep);
-        }
-      }
-    });
-  }
 });
 
 describe('laid-out service protection', () => {

@@ -8,7 +8,7 @@ import { platformBerth, tripTasks, buildStops, entryStation, TEMPLATES } from '.
 import { capture, restore } from '../src/sim/state';
 import { carryTrains, DAY_S } from '../src/sim/operatingDay';
 import { closeDoors, openDoors, doorMotionTick } from '../src/sim/psd';
-import { cmdStandbyRelief } from '../src/sim/standby';
+import { cmdStandbyRelief } from '../src/sim/duty/live';
 import { vehicleTick } from '../src/sim/vehicle';
 import { fixtureTrains } from './helpers/fixture-train';
 

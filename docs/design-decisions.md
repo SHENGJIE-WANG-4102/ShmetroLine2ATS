@@ -9,7 +9,8 @@
 
 - 已废弃或被取代：D27（D44）、D50（D72）、D59（D134）、D63（D133）、D68（D72、D91、D178）、D70（D148、D178）、D144（D178）、D158（D170、D178）。
 - 部分过期：D45（R1 门槛，D148）、D72（过夜部分，D170、D178）、D74（夜间巡航，D121）、D91（过夜、中途热备，D178）、D119（`sectionEta`，D127）、D138（AM 锁门后作业，D179）、D166（跨日存车、中途热备，D178）。
-- 旧排图实现，只在 `OLD_DUTY=1` 对比时运行（D178）：D88、D91、D92、D99、D105、D154。
+- 旧排图实现已删除（D184；D178 时还能用 `OLD_DUTY=1` 对比）：D88、D91、D92、D99、D105、D154。
+- 实现搬了位置（D184）：D45、D70、D148、D156、D166、D177 的换车规则从 `src/sim/standby.ts` 搬到 `src/sim/duty/live.ts`；D47 加开的车底运用从 `circulate` 换成 `src/sim/duty/overlay.ts`。
 - 标题状态是写条目时的（「验收中」「待审」「待复审」）：D142、D145、D154、D166。
 - 编号：D164 没有单独成条，D165 和 `line2.ts` 里的「D164」指同一次机场视频标定，内容在 D165；原「D???」14 号线共用接口补编为 D183，位置不动。
 
@@ -4938,3 +4939,36 @@ D178 提交后 9 种子压测：6 过 3 红（106、107、109），都是第二�
 **结果**：压测 9 种子 9 过（`work/fuzz-d182e`，含上面全部修改）。全量 vitest（不含 soak，施工清线修改前）1154 过 / 14 红：14 号线 12 项（D178，暂停）、midline-storage 1 项（D178）、vehicle-withdraw 满载超时（单独重跑 204 s 通过）；施工清线修改后重跑相关 6 个文件 114 项全过。排图校验两日型 0 问题，首末班全部在官方分钟内，高德不合格 7 格（同 D178）。
 
 公共文件：`src/sim/resourceArbitration.ts`、`src/sim/ats.ts`、`src/sim/movement.ts`、`src/sim/interlocking.ts`、`src/sim/env.ts`。
+
+## D184 车底运用整体重写（运行时和加开部分）：同一个终点车底池（2026-11-06）
+
+接 D178（用户决定 2026-11-05：排图和运行时换车一起整体重写，用同一个分配器）。D178 只做了排图；这一条把运行时换车、加开接到同一个车底池上，并删掉旧排图代码。用户 11-06 定的顺序：先重写，压测放最后。
+
+**运行时**（`src/sim/duty/live.ts`，替换 `src/sim/standby.ts`）：
+- 需求是一个车底运用的尾段（从某一趟起的后续车次）。每列能接这段尾段的车是一个 offer：它从第 k 趟起接，一次原子的计划修改（两车尾段和终点对调，或车场备车新开运用），改后计划不新增校验错误、车场库存不为负（`noWorse`）才采用。
+- offer 分三层，就是 D148 的换车顺序：0 热备车；1 先到先发终点上自有下一班最早的车，其后是到此存车的车（D156）；2 车场备车。
+- R1（预计晚点超过 `RELIEF_DELAY`）：按层取，同层最早能接的那一趟优先。R3（失车）：最早能接的那一趟优先，同一趟热备车先于车场备车。两种取法都走 `pool.ts` 的 `takeCar`（新增 `rank`：先比层次，再比就绪先后）。
+- 原来的 hotSwap、firstReadySwap、D156、车场接替、R3 热备/车场顶替都成了 offer；D166 过期存车交换、D177 无任务存车回段、接替后回段保留原样搬进来。R2（`cmdRecoverService`）、R4（`cmdExchangeDuty`）和触发时机（dispatcher 的 R1 每 5 分钟、D156 每 30 秒）不变。
+- 候选和先后与原来一致，日志文字和命令接口不变。唯一的差别是一句回复：车场备车找到了、但本车已驶离保留车次终点时，原来回「列车已驶离保留车次终点」，现在和其他找不到的情况一样回「无可正点接替的备车」。
+
+**动车拟合**（`src/sim/duty/moves.ts`，从 `planner.ts` 拆出）：车场出车、回段、正线调车、存车线进出、端站停车日历、出入段线窗口、车场库存账都在这里，排图和加开共用。纯结构整理：拆分前后 `plan-hash` 两种日型 trips、blocks 完全一致。为加开加了：`notBefore`（运行中改图，出车不早于当前）、`seedBase`/`unseed`（把底图的端站停车、出入段线和车场事件记进日历，可撤出一列底车的出段或回段）、`join`（同站折返/续行或调车接上）。
+
+**加开**（`src/sim/duty/overlay.ts`，替换 `circulate` 的加开分支）：加开车次铺进运行图并在加开区段两端配对后（`applyOverlay`，不变），每条加开链：
+- 链头：先找正要回段的底车延长运用（最近就绪的先，`canExtend` 允许时），再找车场出车。都不行的这一班不开，链上下一班单独再找车（原因「通知时间或沿途进路不足，后续班次继续尝试」，和原来一致）。
+- 链尾：先接还没出段的底车运用（该车免出段），再回段，先回加开出车的车场（每个车场收回的车数等于发出的车数，延长运用的底车回它原来的车场）。回不去的这一班不开，前一班改为回段（「高峰间隔内无回段时隙」）。
+- 加开排不进的车次都列出原因，不改底图车次。
+- 和旧实现对比（`work/d184/ov-*.txt`，04:00 下令，统计跑完加开区段的载客车次）：工作日进博会 允许延长 49/48（新/旧）、不允许 38/44；工作日虹桥 9/11；双休日进博会 61/63；双休日虹桥 26/26；全部 0 校验错误。少的几班在晚高峰 17:00 前后：正线间隔排不进回段车，北翟路、龙阳路两场再收会超容（加开车从川沙出），属真实约束。
+
+**删除的旧代码**（`src/sim/timetable.ts` 5460→3049 行）：`circulate`、`allocateTerminalServices`、`allocateDepotHomes`、`reuseTerminalReturns`、`reorderTerminalTurns`、`fitOpeningFeeders`、`relieveTerminals`、`spacePortalExits`、`addIntermediateStandbys`、`addFixedRuns`，`buildPlan` 的 shift/stock 递归和 `OLD_DUTY` 开关。删除后 `plan-hash` 不变。
+
+**测试改动**：
+- `tests/timetable.test.ts` 删「terminal service allocation before trip creation」两项（直接测已删除的 `allocateTerminalServices`；同样的性质由全天排图测试覆盖）。
+- 加开两项改期望（取消的车次变少，开出的车次照样验证）：`dispatcher`「CIIE opening-window」原来东行两段找不到北翟路出段时隙被取消，现在由回段途中的底车延长运用接走，3 段全开（标题改为 runs the CIIE opening-window services；跑完 ≥90% 的检查不变）；`round3`「briefly occupied tail」跳过的请求 5→4，贯通车次 1 列不变，每个取消都有原因、0 校验错误。
+- 其余测试只改 import 路径（`../src/sim/standby` → `../src/sim/duty/live`）。
+
+**结果**：
+- 换车相关 10 个测试文件 72 项全过；全量 `vitest`（不含 soak）98 个文件：14 号线（暂停）的红照旧，2 号线和公共部分除下面一项外全过。
+- `plan-hash` 两种日型拆分前后、删除前后完全一致，所以 validate-plan、firstlast、gaode-compare 结果不变。
+- 未决：`midline-storage`「middle hot spares recover…」车场账差 1 列（36,25,32 对 36,24,32）。重写前的代码在同一场景同样失败（主树 HEAD 实跑）。原因：夹具里科技馆中途热备车的运用止于热备位，它也是当晚的正线过夜车；被叫去顶替后，它跑完失车的后半段回北翟路，退出服务的车回龙阳路，科技馆过夜位空出、龙阳路多 1 列。补位怎么做是运营规则（车场另派一列去补热备位/过夜位，还是空着由次日 D111 丢车交备车），待用户定。2 号线真实数据已不用中途热备，只影响夹具。
+
+公共文件：`src/sim/duty/live.ts`（新）、`src/sim/duty/moves.ts`（新）、`src/sim/duty/overlay.ts`（新）、`src/sim/duty/planner.ts`、`src/sim/duty/pool.ts`、`src/sim/timetable.ts`、`src/sim/ats.ts`、`src/sim/dispatcher.ts`、`src/sim/engine.ts`；删除 `src/sim/standby.ts`。

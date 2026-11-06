@@ -2,7 +2,7 @@ import './helpers/midline-storage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Sim } from '../src/sim/engine';
 import { newTrain } from '../src/sim/ats';
-import { hotStandby, standbyTakeover } from '../src/sim/standby';
+import { hotStandby, standbyTakeover } from '../src/sim/duty/live';
 import * as timetable from '../src/sim/timetable';
 import * as planning from '../src/sim/planning';
 

@@ -35,7 +35,7 @@ import type { Command, Train } from './model';
 import { unsafeAhead, rescuerFor } from './radio';
 import { goalBerth } from './movement';
 import { routeLeadsTo, rescueBlockedByConsist, exchangePartner, taskGoal } from './ats';
-import { canExchangeStabling, lateForStabler, predictedLateness, RELIEF_DELAY } from './standby';
+import { canExchangeStabling, lateForStabler, predictedLateness, RELIEF_DELAY } from './duty/live';
 
 /** reaction time before answering a call / starting a procedure (s) */
 const REACT = 10;

@@ -8,7 +8,7 @@ import {scanAhead} from '../src/sim/movement';
 import {capture,restore} from '../src/sim/state';
 import {unfinishedAtRollover} from '../src/sim/operatingDay';
 import {storageExit} from './helpers/storage-exit';
-import {hotStandby} from '../src/sim/standby';
+import {hotStandby} from '../src/sim/duty/live';
 import {blockTasks,depotLedger} from '../src/sim/timetable';
 import {makeSim,runFor,runUntil,assertNoCollision,assertIntegrity} from './helpers';
 import {checkSafety} from '../src/sim/invariants';

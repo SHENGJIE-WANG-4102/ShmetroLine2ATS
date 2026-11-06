@@ -4,7 +4,7 @@ import {Sim} from '../src/sim/engine';
 import {newTrain} from '../src/sim/ats';
 import {computeBody,indexBodies} from '../src/sim/movement';
 import {computeOccupancy,releaseRoute} from '../src/sim/interlocking';
-import {hotStandby,standbyTakeover} from '../src/sim/standby';
+import {hotStandby,standbyTakeover} from '../src/sim/duty/live';
 import {hotStandbyPlaces,storageArrivalBerth} from '../src/sim/timetable';
 import * as planning from '../src/sim/planning';
 

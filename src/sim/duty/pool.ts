@@ -24,6 +24,8 @@ export interface PoolRule<C extends PoolCar, D extends PoolDemand> {
   bound?(demand: D): C | undefined;
   /** lateness a car may still have for the departure (s, live only) */
   late?: number;
+  /** a preference ahead of the readiness order (lower first; live: D148 hot standby, first-ready, yard) */
+  rank?(car: C): number;
 }
 
 /** The car `demand` takes from `cars`, or undefined. The car is removed. */
@@ -35,7 +37,8 @@ export function takeCar<C extends PoolCar, D extends PoolDemand>(cars: C[], dema
     cars.splice(cars.indexOf(bound), 1);
     return bound;
   }
-  const ordered = cars.filter(usable).sort((a, b) => rule.order === 'latest' ? b.ready - a.ready : a.ready - b.ready);
+  const rank = rule.rank ?? (() => 0);
+  const ordered = cars.filter(usable).sort((a, b) => rank(a) - rank(b) || (rule.order === 'latest' ? b.ready - a.ready : a.ready - b.ready));
   for (const car of ordered) {
     if (car === bound || !rule.admit(car, demand)) continue;
     cars.splice(cars.indexOf(car), 1);

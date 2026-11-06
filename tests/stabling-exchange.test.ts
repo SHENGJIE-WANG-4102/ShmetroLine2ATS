@@ -1,6 +1,6 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {Sim} from '../src/sim/engine';
-import {canExchangeStabling} from '../src/sim/standby';
+import {canExchangeStabling} from '../src/sim/duty/live';
 import {departureBerthAfterReverse,platformBerth} from '../src/sim/timetable';
 import type {Block,Plan,StopTask,Trip} from '../src/sim/model';
 import * as planning from '../src/sim/planning';

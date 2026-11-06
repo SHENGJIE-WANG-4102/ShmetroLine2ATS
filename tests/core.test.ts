@@ -15,7 +15,7 @@ import { dispatcherTick } from '../src/sim/dispatcher';
 import { faultsTick } from '../src/sim/faults';
 import { updateHalts, rootCause } from '../src/sim/halt';
 import { platformBerth, tripTasks, addTurnback, blockTasks, depotTasks, turnbackAt, validatePlan } from '../src/sim/timetable';
-import { predictedLateness, RELIEF_DELAY } from '../src/sim/standby';
+import { predictedLateness, RELIEF_DELAY } from '../src/sim/duty/live';
 import { OPERATIONS } from '../src/data/current';
 import { arbitrateResources } from '../src/sim/resourceArbitration';
 import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET } from '../src/sim/calibration';

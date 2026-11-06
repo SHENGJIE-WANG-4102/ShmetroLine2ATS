@@ -3,7 +3,7 @@ import { Sim } from '../src/sim/engine';
 import { newTrain } from '../src/sim/ats';
 import { blockTasks, platformBerth } from '../src/sim/timetable';
 import { computeBody, indexBodies } from '../src/sim/movement';
-import { findStandby } from '../src/sim/standby';
+import { findStandby } from '../src/sim/duty/live';
 import { capture, restore } from '../src/sim/state';
 
 /** `done`: index of the trip's last completed call (-1: not started). */

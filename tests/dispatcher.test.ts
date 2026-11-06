@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Sim } from '../src/sim/engine';
 import { exchangePartner } from '../src/sim/ats';
-import { hotStandby, predictedLateness } from '../src/sim/standby';
+import { hotStandby, predictedLateness } from '../src/sim/duty/live';
 import type { StopTask, Train } from '../src/sim/model';
 import { makeSim, runFor, assertNoCollision, assertIntegrity, pickTrain, dirOf } from './helpers';
 
@@ -104,7 +104,7 @@ describe('dispatcher commands', () => {
     expect(worst).toBeLessThanOrEqual(120);
   },240_000);
 
-  it('reports the CIIE opening-window capacity shortfall and runs the feasible services', () => {
+  it('runs the CIIE opening-window services', () => {
     const sim = makeSim('weekday', 9 * 3600);
     // D178: on the pool-planned base the 9:30 slots keep no headway room;
     // the window starts a quarter later
@@ -114,19 +114,16 @@ describe('dispatcher commands', () => {
     expect(ov.ok, ov.msg).toBe(true);
     const added = sim.plan.trips.slice(before).filter(t => t.revenue && t.overlay?.startsWith('ciie'));
     // D79 keeps the base peak until 10:00. The opening request yields two
-    // eastbound sections and one westbound return; the eastbound sections
-    // find no 北翟路 exit between the small-route returns (one every 7.5 min
-    // until 10:45) and are reported.
+    // eastbound sections and one westbound return. D184: the eastbound
+    // sections no longer need a 北翟路 exit between the small-route returns;
+    // base cars running home take them (pool overlay), so all three run.
     // An unavailable origin tail may move out to the next rear turnback;
     // compare the requested section, which keeps its published calls.
     const service = added.filter(t => t.dir==='DN'
       ? t.stops.some(s=>s.st===1)&&t.to===22
       : t.from>=22&&t.stops.some(s=>s.st===22)&&t.to===1);
     expect(service.length).toBe(3);
-    const omitted = service.filter(t => t.cancelled);
-    expect(omitted).toHaveLength(2);
-    expect(omitted.every(t => t.cancelReason === '加开：通知时间或沿途进路不足，后续班次继续尝试')).toBe(true);
-    expect(ov.msg).toContain('2 个车次因能力或库存不足未安排');
+    expect(service.filter(t => t.cancelled)).toHaveLength(0);
     const running = added.filter(t => !t.cancelled);
     expect(running.length).toBeGreaterThan(0);
     const last = Math.max(...running.map(t => t.stops.at(-1)!.arr));

@@ -25,7 +25,7 @@ import { PERF, atoStopReady } from './dynamics';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, rootCause, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
 import { standsAt } from './operatingDay';
-import { standbyTakeover, RELIEF_DELAY } from './standby';
+import { standbyTakeover, RELIEF_DELAY } from './duty/live';
 import { recordTransition } from './invariants';
 import { TURNBACK } from './fsm';
 import { canStopBeforeSignal } from './protection';
