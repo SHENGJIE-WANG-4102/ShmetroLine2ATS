@@ -2350,15 +2350,25 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   // routed; a new forward path from here would run into the buffer stop.
   if (tr.tasks[0]?.k === 'reverse') return { ok: false, msg: '列车正在进入折返线，换端完成后再办理退出服务' };
   const d = dirOf(tr, topo);
-  const ahead = stationsAhead(sim, tr);
-  const next = ahead[0];
+  // The next station is the train's own next stop while it still lies ahead
+  // on its path: a train drawing into a platform is past the station's centre
+  // chainage, yet has not passed the station (fuzz 107, D185). A stop it can
+  // reach only after changing ends is not ahead.
+  const t0 = tr.tasks[0];
+  const own = tr.phase !== 'dwell' && t0?.k === 'stop'
+    && Number.isFinite(distanceToBerthFrom(sim, tr.link, tr.off, tr.dir, t0.berth)) ? t0.station : undefined;
+  const next = own ?? stationsAhead(sim, tr)[0];
   // Clear passengers first. An otherwise reachable depot can be behind the
   // clear-out station, so select a forward return path from that station.
   const clearStation = tr.phase === 'dwell' ? curStop(tr)?.station : tr.inService ? next : undefined;
   const clearChain = clearStation === undefined ? sim.trainChain(tr) : topo.stations[clearStation].chain;
+  const clearBerth = tr.phase === 'dwell' ? curStop(tr)?.berth : clearStation === undefined ? undefined : stopBerthOnPath(sim, tr, clearStation, d);
   // A way home not behind granted work first (a yard ahead, else a rear
-  // turnback to one behind); only when there is none, the way the work holds.
-  const turnFor = (avoidWork: boolean) => {
+  // turnback to one behind, else any turnback ahead of the clear-out station:
+  // a platform turnback track or a station-front crossover, 用户决定
+  // 2026-11-06); only when there is none, the way the work holds.
+  const back: TrackDir = d === 'DN' ? 'UP' : 'DN';
+  const turnFor = (avoidWork: boolean, anyKind = false) => {
     const platform = topo.links[tr.link].platform;
     const current = tr.phase === 'dwell' ? curStop(tr)?.station
       : topo.stations.find(st => st.platforms[d] === platform)?.index;
@@ -2368,14 +2378,28 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     const afterClear = (station: number) => clearStation === undefined
       || (d === 'DN' ? station >= clearStation : station <= clearStation);
     // (a platform turnback track retargets the clear-out stop like a front turn)
-    const rearOk = (st: number) => { const tb = turnbackAt(topo, st, d); return tb?.kind === 'rear' && topo.berths[tb.berths[0]].kind !== 'platform'
-      && !(avoidWork && possessedBetween(sim, sim.trainChain(tr), topo.stations[st].chain)); };
+    // At the clear-out station only onto the berth its issued approach already
+    // leads to (a train drawing into a platform turnback track); elsewhere only
+    // when the train's path still leads onto the arrival berth.
+    const otherOk = (st: number, arrival: number) => anyKind
+      && (st === clearStation ? clearBerth === arrival : st !== current)
+      && Number.isFinite(distanceToBerthFrom(sim, tr.link, tr.off, tr.dir, arrival));
+    const rearOk = (st: number) => {
+      const tb = turnbackAt(topo, st, d);
+      if (!tb) return false;
+      const siding = tb.kind === 'rear' && topo.berths[tb.berths[0]].kind !== 'platform';
+      if (!siding && !otherOk(st, tb.kind === 'rear' ? tb.berths[0] : tb.arrBerth)) return false;
+      const home = topo.depots[nearestDepot(sim, st, back)].junctionChain;
+      return !(avoidWork && (possessedBetween(sim, sim.trainChain(tr), topo.stations[st].chain)
+        || possessedBetween(sim, topo.stations[st].chain, home)));
+    };
     const st = current !== undefined && afterClear(current) && rearOk(current) ? current
-      : turnbackOptions(sim, tr).find(st => afterClear(st) && rearOk(st));
+      : [...(own !== undefined ? [own] : []), ...turnbackOptions(sim, tr)].find(st => afterClear(st) && rearOk(st));
     return { st, current };
   };
   let forward = depotsAhead(sim, tr, d, clearChain, true);
   let turn = forward.length ? undefined : turnFor(true);
+  if (!forward.length && turn?.st === undefined) turn = turnFor(true, true);
   if (!forward.length && turn?.st === undefined) {
     forward = depotsAhead(sim, tr, d, clearChain);
     turn = forward.length ? undefined : turnFor(false);
@@ -2392,7 +2416,7 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     cur.minDwell = 60;
     tasks.push(cur);
   } else if (next !== undefined && tr.inService) {
-    tasks.push({ k: 'stop', berth: stopBerthOnPath(sim, tr, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 60, note: '清客' });
+    tasks.push({ k: 'stop', berth: clearBerth ?? stopBerthOnPath(sim, tr, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 60, note: '清客' });
   }
   if (reachable) { depotTasks(topo, depot, d, tasks); turnAtClearPlatform(sim, tasks); }
   else {
@@ -2404,7 +2428,6 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     if (!alreadyCleared && !tasks.some((t) => t.k === 'stop' && t.station === tbSt)) tasks.push({ k: 'stop', berth: berth.id, station: tbSt, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 20 });
     const fake: Trip = { id: -1, no: '', dir: d, kind: 'adj', from: tbSt, to: tbSt, stops: [], revenue: false, block: -1 };
     addTurnback(topo, fake, tasks);
-    const back: TrackDir = d === 'DN' ? 'UP' : 'DN';
     depot = nearestDepot(sim, tbSt, back);
     depotTasks(topo, depot, back, tasks);
   }

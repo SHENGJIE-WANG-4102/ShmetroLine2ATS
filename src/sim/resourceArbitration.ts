@@ -1167,11 +1167,13 @@ function originPrecedence(sim: Sim, result: ResourceAllocation, train: Train, ri
   if (!result.origins || train.failed) return undefined;
   // Timetable order withholds a route; it never revokes one already set
   // under approach locking (the entrant then waits for this train).
+  // (checked only once an entrant is in question: approach locking needs
+  // every approaching train's braking distance)
   const start = sim.topo.routes[rid].start;
-  if (sim.sig[start].route === rid && approachLocked(sim, start)) return undefined;
   for (const step of sim.topo.routes[rid].steps) {
     const entrants = result.origins.get(sim.topo.links[step.link].platform);
     if (!entrants) continue;
+    if (sim.sig[start].route === rid && approachLocked(sim, start)) return undefined;
     const stop = movementStopAt(sim, train, sim.topo.links[step.link].platform);
     if (!stop) return undefined;
     // Neither the entrant nor the train it waits for may need this train to

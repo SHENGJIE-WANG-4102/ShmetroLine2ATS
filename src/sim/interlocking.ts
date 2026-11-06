@@ -209,11 +209,10 @@ export function signalPassed(sim: Sim, train: number, sig: number) {
 }
 
 export function approachLocked(sim: Sim, sig: number): boolean {
-  if (committedTrain(sim, sig) >= 0) return true;
   for (const tr of sim.trainList) {
     if (tr.nextSignal === sig && tr.nextSignalDist < 600 && tr.v > 0.5) return true;
   }
-  return false;
+  return committedTrain(sim, sig) >= 0;
 }
 
 /** an approaching train that cannot stop before the signal stopping target with the guaranteed emergency brake (-1 none) */
