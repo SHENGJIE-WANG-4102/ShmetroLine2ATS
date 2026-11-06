@@ -410,6 +410,11 @@ export function updateInterlocking(sim: Sim) {
     const ownSecs = new Set<number>();
     for (const b of owner.body) ownSecs.add(topo.links[b.link].section);
     for (let i = 0; i < r.sections.length; i++) if (ownSecs.has(r.sections[i])) ar.occSeen[i] = true;
+    // The owner has been in the route and is now wholly outside it: it backed out
+    // before the end (a route to a buffer it turned short of, e.g. driven by
+    // hand). The sections it never reached protect nothing; sectional release,
+    // which needs them occupied in order, would keep them locked for good (D188).
+    if (ar.occSeen.some(x => x) && !r.sections.some(s => ownSecs.has(s))) { releaseRoute(sim, ar.route); continue; }
     // A turnback may finish at a berth before the end of a longer route to a
     // buffer. The train must actually reach its chosen berth and begin its
     // cab change, or finish stabling at a berth on this route; a mere stop

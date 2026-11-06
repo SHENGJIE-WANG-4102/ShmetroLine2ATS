@@ -5054,8 +5054,10 @@ D161 清了消息栏，漏了速度表下方的「监督状态行」（`src/ui/d
 
 驾驶台（站台前方视图）的发车信号机：灭灯（DARK，CBTC 列车进路已排、信号机为 CBTC 列车灭灯）原先画成红灯，与“进路已给、车能走”矛盾（用户发现），改画成不亮的灯。DMI 起步箭头（用户）：DTO、ATO、ATPM(CM) 都在允许动车时显示；人工驾驶没有自动起步时刻，以门关好锁闭、有移动授权、未扣车、到发车时刻前 2 s 为准（`src/ui/dmi.ts`）。
 
+联锁进路释放漏洞（用户诊断 line2-diagnostics-24663）：041-1014 被人工以 CM 开进机场尾轨（X3105→尽头），没开到尽头就换端开出；逐段解锁要求按顺序占用过每一段，没走到的末段永远不解锁，而进路主人仍在线，整条进路一直锁着，021-1016 在 X3105 前等了 17 分钟、044-4011 堵在其后。修法（`src/sim/interlocking.ts`）：列车进过进路后，车身完全离开这条进路的全部区段时，整条释放（没走到的段已无车要用）。用诊断恢复到 06:51 后继续跑，进路立即释放、两车正常发出。
+
 ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2 中山公园—浦东南路、ZC3 世纪大道—广兰路、ZC4 唐镇—浦东机场）。
 
 单测：首轮 5 个文件失败中，dispatcher、features、round3 共 5 例为与压测并行时超时，单独重跑通过；`terminal-wait-manual` 的 1063→1084 是 14 号线用例（暂停，不管）；am-driver-work 见上。
 
-公共文件：`src/data/types.ts`、`src/sim/timetable.ts`、`src/sim/ats.ts`、`tests/helpers/am-turnback.ts`、`src/ui/trackview.ts`、`src/ui/dmi.ts`、`src/ui/stopview.ts`、`src/ui/geometry.ts`、`src/ui/theme.ts`、`src/ui/app.ts`。
+公共文件：`src/data/types.ts`、`src/sim/timetable.ts`、`src/sim/ats.ts`、`src/sim/interlocking.ts`、`tests/helpers/am-turnback.ts`、`src/ui/trackview.ts`、`src/ui/dmi.ts`、`src/ui/stopview.ts`、`src/ui/geometry.ts`、`src/ui/theme.ts`、`src/ui/app.ts`。
