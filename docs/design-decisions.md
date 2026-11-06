@@ -5001,7 +5001,7 @@ D184 收尾的随机压测（`work/fuzz-d184/`，9 例：第二天、天气、�
 
 公共文件：`src/sim/ats.ts`、`src/sim/psd.ts`。
 
-## D186 预热提速：进路始发让行只在真有入场车时才查接近锁闭（2026-11-06）
+## D186 启动提速：进路始发让行只在真有入场车时才查接近锁闭；运行图在启动之间缓存（2026-11-06）
 
 用户反映：启动预热以前 2–3 s，现在 10 s 以上。
 
@@ -5019,4 +5019,12 @@ D184 收尾的随机压测（`work/fuzz-d184/`，9 例：第二天、天气、�
 
 **剩下的热点**（改后剖析，到 07:40）比较平：ATO 区间运行计划 `sectionPlan` 约 11%（每车每区间一份，每份约 2 ms），资源仲裁约 11%，每步安全检查约 8%，联锁更新约 5%，建图约 9%（其中车底运用找回段路约 5%）。每一项都要较深的改动才省得出几个百分点，这次没动。
 
-公共文件：`src/sim/resourceArbitration.ts`、`src/sim/interlocking.ts`。
+**第二步：运行图在启动之间缓存**（用户选 2026-11-06）。剖析建图（`new Sim`，约 4.4 s）：运行图生成 72%、区间运行时分表 21%，两者都不用随机数（同一进程里第二次建图已经命中内存缓存，0.03 s），所以只是每次启动 worker 都从头算一遍。
+- worker 把两者存进 IndexedDB（`src/sim/buildCache.ts`，库 `atssim-build`）：键是线路加 `src/sim/**`、`src/data/**` 的源码，改任何代码或数据都从头算；同一版本内仍用运行图缓存原来的键（`generatePlan`，含全部规划输入）区分日型、存车等配置。最多存最近 4 份运行图（每份约 1.2 MB）。读不到、库坏了都照常现算。
+- `timetable.ts` 加 `storedPlans`/`restorePlans`（运行图及其附表按车次号存取），`engine.ts` 加 `sharedRunTimes`/`primeRunTimes`；IndexedDB 读写从 `warmupCache.ts` 抽到 `src/sim/idbStore.ts`，两种缓存共用。
+- 顺手修：预热缓存键原来只收 `src/sim/*.ts`，漏了 `src/sim/duty/`（D184 新建），改 `duty/` 的代码不会让旧预热检查点失效；现在两种缓存都收 `src/sim/**`。
+- 验证：用种子 1 建的缓存装进新进程，种子 12345 推进到 10:00，指纹哈希仍是 6012b2f02d0221ee，建图 4.6 s → 0.1 s（node）。浏览器里真实 worker（开发版）「生成运行图」阶段：首次 4052 ms，之后 76 ms、75 ms。改代码或数据后的第一次启动仍要现算。
+
+**原定第二项（区间运行计划复用）没做**：实测到 07:40 共 1952 次 `sectionPlan`，输入完全相同的只有 100 次（5%），因为每列车的时间预算都不同；去掉预算后 392 种。按完全相同复用只省约 0.5%，不值得。
+
+公共文件：`src/sim/resourceArbitration.ts`、`src/sim/interlocking.ts`、`src/sim/timetable.ts`、`src/sim/engine.ts`、`src/sim/worker.ts`、`src/sim/warmupCache.ts`、`src/sim/buildCache.ts`（新）、`src/sim/idbStore.ts`（新）。

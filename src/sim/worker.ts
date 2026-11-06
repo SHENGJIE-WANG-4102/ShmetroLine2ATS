@@ -13,10 +13,15 @@ import { capture, restore, type Checkpoint } from './state';
 import { applyInput, compactCheckpoints, exportDiagnostics, stringifyDiagnostics, type RecordedInput } from './diagnostics';
 import { preparePlan } from './planning';
 import { captureWarmup, readWarmup, restoreWarmup, warmupKey, writeWarmup } from './warmupCache';
+import { buildKey, loadBuild, saveBuild } from './buildCache';
 
 // Vite includes source text as build inputs. Any simulation/data change
-// changes the key automatically, including development worker reloads.
-const warmupSources = import.meta.glob(['./*.ts', '../data/**/*.ts'], { eager: true, query: '?raw', import: 'default' });
+// changes the keys automatically, including development worker reloads.
+// (`**`: the duty planner lives in ./duty, D186)
+const sources = import.meta.glob(['./**/*.ts', '../data/**/*.ts'], { eager: true, query: '?raw', import: 'default' });
+/** the diagram cache's version (buildCache.ts); undefined without crypto */
+let buildId: string | undefined;
+const buildIdReady = buildKey(sources).then(k => { buildId = k; }, () => undefined);
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -66,7 +71,11 @@ async function start(raw: SimConfig) {
   initializing = true;
   const config: SimConfig = { ...raw, startTime: dayTime(raw.startTime) ?? DAY_FIRST, seed: Number.isFinite(raw.seed) ? raw.seed : 1 };
   phase('diagram');
+  await buildIdReady;
+  if (buildId) await loadBuild(buildId);
+  if (generation !== starting) return;
   sim = new Sim(config);
+  if (buildId) saveBuild(buildId);
   sim.pisStation = wantPis;
   sim.dmiTrain = wantDmi;
   speed = 1;
@@ -81,7 +90,7 @@ async function start(raw: SimConfig) {
   if (config.startTime > sim.t) {
     phase('cache');
     let key: string | undefined;
-    try { key = await warmupKey(config, sim.plan, warmupSources); } catch { /* Normal warm-up below. */ }
+    try { key = await warmupKey(config, sim.plan, sources); } catch { /* Normal warm-up below. */ }
     const cached = key ? await readWarmup(key) : null;
     if (generation !== starting) return;
     if (cached && Math.abs(cached.t - config.startTime) < FIXED_DT + 1e-6) {
@@ -116,6 +125,7 @@ function rollover() {
   post({ type: 'dayArchive', date: old.config.date!, json: stringifyDiagnostics(exportDiagnostics(old, cmdLog.slice(0, cmdLog.length - pending.length))) });
   flushEvents(true);
   sim = new Sim(config, old);
+  if (buildId) saveBuild(buildId);
   sim.speed = speed;
   sim.paused = paused;
   sim.autoDispatch = old.autoDispatch;

@@ -1229,6 +1229,31 @@ export function generatePlan(ctx: PlanContext): Plan {
   return plan;
 }
 
+/** A pristine diagram with its key and side tables (trips by id), as the
+ * worker keeps it between launches (buildCache.ts, D186). */
+export interface StoredPlan { key: string; plan: Plan; identities?: [number, ServiceIdentity][]; issues: PlanIssue[]; rejected: string[] }
+
+export function storedPlans(): StoredPlan[] {
+  return [...generatedPlans].map(([key, plan]) => {
+    const identities = laidOutService.get(plan);
+    return { key, plan, ...(identities ? { identities: [...identities].map(([trip, identity]): [number, ServiceIdentity] => [trip.id, identity]) } : {}),
+      issues: generationIssues.get(plan) ?? [], rejected: rejectedTurns.get(plan) ?? [] };
+  });
+}
+
+/** Seeds the cache above. The source digest in buildCache.ts stands for every
+ * input the key does not spell out (the planning code itself). */
+export function restorePlans(stored: readonly StoredPlan[]) {
+  for (const s of stored) {
+    if (generatedPlans.has(s.key)) continue;
+    if (s.identities) laidOutService.set(s.plan, new Map(s.identities.map(([id, identity]) => [s.plan.trips[id], identity])));
+    generationIssues.set(s.plan, s.issues);
+    rejectedTurns.set(s.plan, s.rejected);
+    if (generatedPlans.size >= 8) generatedPlans.delete(generatedPlans.keys().next().value!);
+    generatedPlans.set(s.key, s.plan);
+  }
+}
+
 function buildPlan(ctx: PlanContext): Plan {
   const { requests, periods, firstService: published, issues: layoutIssues } = layoutService(ctx);
   const fixedDraft = CARRY_MOVES ? draftFixedPassengerSupply(ctx, requests, published, ctx.fixedRuns ?? FIXED_LATE_TRAINS) : {pairs: [], anchors: [], starts:new Map<number,number>(), issues: []};

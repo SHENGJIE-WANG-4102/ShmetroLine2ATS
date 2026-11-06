@@ -62,6 +62,11 @@ let sharedTopo: Topology | null = null;
 let sharedRt: RunTimes | null = null;
 let sharedTable: RouteTable | null = null;
 
+/** The run times depend only on the code and line data: the worker keeps them
+ * between launches (buildCache.ts, D186). */
+export const sharedRunTimes = (): RunTimes | null => sharedRt;
+export function primeRunTimes(rt: RunTimes) { sharedRt ??= rt; }
+
 export class Sim {
   topo: Topology;
   rt: RunTimes;
@@ -210,7 +215,7 @@ export class Sim {
     this.config = config = { ...config, scope: currentScope() };
     if (!sharedTopo) {
       sharedTopo = buildTopology();
-      sharedRt = computeRunTimes(sharedTopo, LINE_INFO.trainLength);
+      sharedRt ??= computeRunTimes(sharedTopo, LINE_INFO.trainLength);
       sharedTable = buildRouteTable(sharedTopo);
     }
     this.topo = sharedTopo;
