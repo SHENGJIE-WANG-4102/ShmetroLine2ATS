@@ -19,13 +19,16 @@ export const C = {
   textBright: 0xffffff,
   line: Number.parseInt(LINE.branding.color.replace('#', ''), 16),
 
-  // track states
-  trackFree: 0x3a4c60,
-  trackFreeSide: 0x2f3e4f,
-  routeAuto: 0x3b5a4d,
-  routeSet: 0x46d47c,
+  // track states. 用户决定（2026-11-07，D188）：卡斯柯 TACS 画法——浅蓝轨道，
+  // 占用红色，进路为轨道上的细绿线（只画列车前方）。
+  trackFree: 0x7fb6dc,
+  trackFreeSide: 0x5a88ab,
+  routeAuto: 0x2fd36a,
+  routeSet: 0x2fd36a,
   routeGuide: 0xe8eef5,
-  occComm: 0x60758c,
+  /** occupied track (a train's actual extent, or a whole section by axle counting) */
+  occupied: 0xe53030,
+  occComm: 0xe53030,
   occAxle: 0xff9a3c,
   disturbed: 0xff4040,
   preset: 0xffd400,
@@ -43,7 +46,10 @@ export const C = {
   sigMast: 0x6f8193,
 
   // platforms
-  platform: 0x1d2c3b,
+  platform: 0x3a87c6,
+  /** platform screen doors, the line on the platform's track side */
+  psdClosed: 0x2fd36a,
+  psdOpen: 0xe53030,
   platformHold: 0xffc400,
   platformSkip: 0x5cc8ff,
   crowdLow: 0x3e6b8a,
@@ -57,7 +63,12 @@ export const C = {
   trainManual: 0xe08cff,
   trainFail: 0xff4040,
   trainBoxFill: 0x0b131c,
-  trainBoxBorder: 0x3a4b5c,
+  trainBoxBorder: 0x4f9fdc,
+  /** head marker of a train (CASCO TACS: an amber arrow block at the head) */
+  /** switch point ring and number (CASCO, D188) */
+  switchRing: 0xd9bf6a,
+  switchLabel: 0x57d97a,
+  trainHead: 0xf2b134,
   onTime: 0x9fb4c8,
   early: 0x5cc8ff,
   slightLate: 0xffc400,

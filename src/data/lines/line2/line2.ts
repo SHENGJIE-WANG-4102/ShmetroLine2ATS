@@ -388,11 +388,16 @@ const TERMINAL_STANDBY_WINDOWS = {
   weekend: [{ from: 6 * 3600, need: 21 * 3600, to: 21 * 3600 }],
 };
 
+/** 用户决定（2026-11-07，D188）：终到清客 60 s，排图和运行时共用。【假设】未实测；
+ * 旁证：11-02 E05 机场停稳 6023 s、开门 6027 s，录到 6089 s 未见关门警示。 */
+const TERMINAL_CLEAR_S = 60;
+/** 用户决定（2026-11-07，D188）：广兰路中间线站台换端 26 s。 */
+const GLL_CHANGE_ENDS_S = 26;
 /** D171：所有站后折返共用11-02机场视频的三段作业。 */
 const REAR_TURNBACK = { entryRunS: 41, changeEndsS: 56, exitRunS: 38 };
 // D171【规划预算假设】：用户确认30km/h近位的站后三段约150s（PIS约151s）。
 // 它已排除前清客60s和后始发22.7s；共同包络向上取10s为240，不按站另写物理时分。
-const REAR_TURNBACK_MIN = Math.ceil((60 + 22.7 + 150) / 10) * 10;
+const REAR_TURNBACK_MIN = Math.ceil((TERMINAL_CLEAR_S + 22.7 + 150) / 10) * 10;
 
 export const OPERATIONS = {
   atoRandomOverrunProbability: 0,
@@ -444,7 +449,10 @@ export const OPERATIONS = {
   // on the platform without a run into a tail.
   minTurnback: { ...Object.fromEntries([
     ...LAYOUT.pairs, ...LAYOUT.tails.filter(tail => tail.turnback !== false), ...LAYOUT.sidings.filter(siding => siding.turnback !== false),
-  ].map(place => [STATIONS[place.station].id, REAR_TURNBACK_MIN])), GLL: 100 } as Record<string, number>,
+  ].map(place => [STATIONS[place.station].id, REAR_TURNBACK_MIN])), GLL: Math.max(TERMINAL_CLEAR_S, GLL_CHANGE_ENDS_S) + 30 } as Record<string, number>,
+  // GLL：清客与换端同时进行（用户），再开门上客约30 s【假设】；D188 前按 30＋40＋30＝100 依次相加
+  platformChangeEndsS: { GLL: GLL_CHANGE_ENDS_S } as Record<string, number>,
+  terminalClearS: TERMINAL_CLEAR_S,
   rearTurnback: REAR_TURNBACK,
   // 小交路折返在中间线站台换端候发；不作为日间或过夜存车点（D170）。
   longWaitPlatformStations: ['GLL'] as const,

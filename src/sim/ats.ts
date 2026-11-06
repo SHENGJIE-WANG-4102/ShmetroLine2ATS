@@ -1029,6 +1029,8 @@ function platformTurn(topo: Topology, tr: Train, st: StopTask): boolean {
 
 /** change ends at the platform with the doors open, straight into the next trip's stop */
 function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
+  // the change of ends ran while the passengers were cleared (D188, user)
+  const changeFrom = Math.min(sim.t, tr.arrivedAt);
   rememberCompletedCall(sim, tr, st);
   tr.tasks.shift();
   const rev = tr.tasks.shift();
@@ -1052,7 +1054,7 @@ function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
   setTripFromTasks(sim, tr);
   arriveAtBerth(sim, tr, tr.tasks[0]);
   // no departure before the driver is in the other cab
-  tr.dwellUntil = Math.max(tr.dwellUntil, sim.t + turnbackDwell(tr.mode, rev.minTime,driverTurnbackKind(sim.topo,rev),simulatedAmDriver(tr),calibratedRearTurnback(sim.topo,rev)));
+  tr.dwellUntil = Math.max(tr.dwellUntil, changeFrom + turnbackDwell(tr.mode, rev.minTime,driverTurnbackKind(sim.topo,rev),simulatedAmDriver(tr),calibratedRearTurnback(sim.topo,rev)));
 }
 
 /** the stop has a door cycle: passengers, or a clear-out (清客) */

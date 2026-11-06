@@ -9,7 +9,7 @@
  * section IDs only appear when zoomed in, on toggle, or in the station view.
  */
 import { CanvasTextMetrics, Container, Graphics, Text, type FederatedPointerEvent } from 'pixi.js';
-import type { Topology } from '../sim/topology';
+import { nextLink, type Topology } from '../sim/topology';
 import type { Snapshot, TrainSnap } from '../sim/model';
 import { SEC, SW, PLT, SIG_ASPECT } from '../sim/model';
 import { LINE, STATIONS, LINE_INFO, DIRECTIONS, stationOpened } from '../data/current';
@@ -93,6 +93,9 @@ export interface ViewOpts {
   /** text size factor of the dynamic/static labels (1 = design sizes) */
 }
 
+/** 【假设】How far before the end of its track section a train is given the next one (D188); sections run about 350 m (median). */
+const ROUTE_NEXT_M = 100;
+
 export class TrackView {
   root = new Container();
   readonly mode: 'overview' | 'detail';
@@ -121,14 +124,16 @@ export class TrackView {
   // objects
   private sectionG: Graphics[] = [];
   private sectionMain: boolean[] = [];
-  private branchG: { g: Graphics; section: number; link: number }[] = [];
-  private routeLinks = new Map<number, Set<number>>();
+  /** the route of each link, in its direction of travel (D188 route overlay) */
+  private routeG = new Graphics();
+  private routeKey = '';
   private tsrG: Graphics[] = [];
   private envG: Graphics[] = [];
   private blkG: Graphics[] = [];
   private swGfx: { sw: number; node: number; n: Graphics; r: Graphics; x: Graphics; lk: Graphics; p: P }[] = [];
   private sigGfx: (SignalGfx | null)[] = [];
-  private platGfx: ({ rect: Graphics; bar: Graphics; x: number; y: number; w: number; h: number; up: boolean } | null)[] = [];
+  /** `edgeTop`: the platform's track side (its screen doors) is its top edge */
+  private platGfx: ({ rect: Graphics; bar: Graphics; x: number; y: number; w: number; h: number; edgeTop: boolean } | null)[] = [];
   private yardGfx: { depot: number; box: Graphics; veh: Graphics; x: number; y: number; w: number; h: number; key: string }[] = [];
   private trains = new Map<number, TrainGfx>();
   private statics: StaticLabel[] = [];
@@ -366,7 +371,8 @@ export class TrackView {
       rect.on('pointerout', this.hov(null));
       const bar = new Graphics();
       this.platL.addChild(rect, bar);
-      this.platGfx.push({ rect, bar, x: x0, y: y0, w: x1 - x0, h: y1 - y0, up });
+      // an inner UP face has its track above, an inner DN (or middle-track) face below; a side platform the reverse
+      this.platGfx.push({ rect, bar, x: x0, y: y0, w: x1 - x0, h: y1 - y0, edgeTop: up !== side });
     }
 
     // station names, transfer chips, km posts
@@ -436,8 +442,6 @@ export class TrackView {
     }
 
     // tracks by section
-    this.routeLinks = new Map(topo.routes.map(r => [r.id, new Set(r.steps.map(st => st.link))]));
-    this.branchG = [];
     const boundaryNode = (nid: number) => {
       const n = topo.nodes[nid];
       const secs = new Set(n.links.map((l) => topo.links[l].section));
@@ -473,16 +477,6 @@ export class TrackView {
       this.trackL.addChild(g);
       this.sectionG.push(g);
       this.sectionMain.push(main);
-      // A locked route lights only the track it runs over: the other branch
-      // of a switch section keeps the free-track colour (user, 2026-11-05).
-      if (s.links.length > 1) for (const lid of s.links) {
-        const o = new Graphics();
-        drawLink(o, lid);
-        o.stroke({ width, color: main ? C.trackFree : C.trackFreeSide, cap: 'butt', join: 'round' });
-        o.visible = false;
-        this.trackL.addChild(o);
-        this.branchG.push({ g: o, section: s.id, link: lid });
-      }
       // overlays: TSR (yellow dashes outside the track), weather (blue dashes), blocked (violet ticks)
       const off = s.track === 'DN' ? 11 : s.track === 'UP' ? -11 : -10;
       const mkOv = (color: number, dash: number, offY: number, width2: number) => {
@@ -532,6 +526,9 @@ export class TrackView {
       }
     }
 
+    // routes are drawn over the free track, under the occupied (red) extent
+    this.trackL.addChild(this.routeG);
+
     // buffer stops
     const bufG = new Graphics();
     for (const n of topo.nodes) {
@@ -564,9 +561,12 @@ export class TrackView {
             const dx = o.x - p.x;
             const dy = o.y - p.y;
             const len = Math.hypot(dx, dy) || 1;
-            const a = detail ? 5 : 4;
-            const b = detail ? 22 : 14;
-            g.moveTo(p.x + (dx / len) * a, p.y + (dy / len) * a).lineTo(p.x + (dx / len) * Math.min(b, len * 0.6), p.y + (dy / len) * Math.min(b, len * 0.6)).stroke({ width: detail ? 14 : 10, color: C.bg });
+            const a = detail ? 9 : 6;
+            const b = detail ? 18 : 12;
+            // under 40 % of the leg: on a short leg between two switches (scissors
+            // crossover) the two switches' gaps must not meet and erase it (D188)
+            const e = Math.min(b, len * 0.35);
+            if (e > a) g.moveTo(p.x + (dx / len) * a, p.y + (dy / len) * a).lineTo(p.x + (dx / len) * e, p.y + (dy / len) * e).stroke({ width: detail ? 14 : 10, color: C.bg });
           }
           g.visible = false;
           return g;
@@ -585,11 +585,13 @@ export class TrackView {
         // single lock (white ring) / block (violet ring) indicator
         const lk = new Graphics().circle(p.x, p.y, detail ? 17 : 11).stroke({ width: detail ? 3 : 2.5, color: 0xffffff });
         lk.visible = false;
-        this.swL.addChild(gn, gr, x, lk, hit);
+        // switch point ring (CASCO, D188): the track runs on through it; the leg not set keeps a short gap
+        const ring = new Graphics().circle(p.x, p.y, detail ? 8 : 6).stroke({ width: detail ? 2.5 : 2, color: C.switchRing });
+        this.swL.addChild(gn, gr, ring, x, lk, hit);
         this.swGfx.push({ sw: si, node: nid, n: gn, r: gr, x, lk, p });
         // ID label
         const name = sw.name.replace(/^P/, '');
-        const tl = this.mkText(name, 20, C.textDim, { mono: true });
+        const tl = this.mkText(name, 20, C.switchLabel, { mono: true });
         const w = textWidth(name, 20, true);
         const isUp = topo.links[n.toe!].track === 'UP';
         const isDn = topo.links[n.toe!].track === 'DN';
@@ -769,20 +771,19 @@ export class TrackView {
     const detail = this.mode === 'detail';
     const { topo } = this;
 
-    // Symbols stay the same length; the grey occupied sections use real detection.
+    // The head marker shows where a train is and which way it runs; the red
+    // occupied track is its real extent.
     this.updateTrainBodies(snap);
     const occupied=this.updateTrainOccupation(snap);
 
-    // sections
+    // sections (CASCO TACS, D188): free track light blue, occupation red;
+    // a locked route is the thin green line drawn below, not a section colour
     for (let i = 0; i < this.sectionG.length; i++) {
       const f = snap.sections[i];
       let c: number;
       if (f & SEC.DIST) c = this.blink ? C.disturbed : 0x6a1a1a;
       else if (f & SEC.PRESET) c = blinkSlow ? C.preset : 0x6a5a00;
-      else if (f & SEC.OCC && !(f & SEC.COMM)) c = C.occAxle;
-      else if (f & SEC.OCC && !occupied.has(i)) c = C.occComm;
-      else if (f & SEC.GUIDE) c = C.routeGuide;
-      else if (f & SEC.LOCK) c = f & SEC.ROUTEFLEET ? C.routeAuto : C.routeSet;
+      else if (f & SEC.OCC && (!(f & SEC.COMM) || !occupied.has(i))) c = C.occupied;
       else c = this.sectionMain[i] ? C.trackFree : C.trackFreeSide;
       if (this.sectionG[i].tint !== c) this.sectionG[i].tint = c;
       this.tsrG[i].visible = (f & SEC.TSR) !== 0;
@@ -791,13 +792,7 @@ export class TrackView {
       this.blkG[i].visible = blk;
     }
 
-    // (only while the section shows a route colour, as just tinted above)
-    const routeTints = new Set([C.routeGuide, C.routeAuto, C.routeSet]);
-    for (const b of this.branchG) {
-      const route = snap.sectionRoute[b.section];
-      b.g.visible = route >= 0 && routeTints.has(this.sectionG[b.section].tint as number)
-        && !this.routeLinks.get(route)?.has(b.link);
-    }
+    this.updateRoutes(snap);
 
     // switches
     for (const g of this.swGfx) {
@@ -875,7 +870,7 @@ export class TrackView {
       const f = snap.platforms[i];
       const esp = (f & PLT.ESP) !== 0;
       if (!stationOpened(this.topo.platforms[i].station)) { g.rect.tint = 0x454b50; g.bar.clear(); continue; }
-      g.rect.tint = esp ? (this.blink ? 0x7a1010 : 0x3a0a0a) : f & PLT.HOLD ? 0x3a3010 : C.platform;
+      g.rect.tint = esp ? (this.blink ? 0x7a1010 : 0x3a0a0a) : f & PLT.HOLD ? 0x8a6a10 : C.platform;
       g.bar.clear();
       if (this.layers.pax) {
         const w = snap.platformWaiting[i];
@@ -883,12 +878,17 @@ export class TrackView {
         if (frac > 0.02) {
           const col = w > 1200 ? C.crowdHigh : w > 700 ? C.crowdMid : C.crowdLow;
           const bh = Math.max(4, Math.min(8, g.h * 0.28));
-          const by = g.up ? g.y + 2 : g.y + g.h - bh - 2;
+          // (on the side away from the track: the screen-door line is on it)
+          const by = g.edgeTop ? g.y + g.h - bh - 2 : g.y + 2;
           g.bar.rect(g.x + 3, by, (g.w - 6) * frac, bh).fill({ color: col });
         }
       }
-      const fault = (f & PLT.PSDFAULT) !== 0;
-      if (fault) g.bar.rect(g.x, g.up ? g.y - 3 : g.y + g.h, g.w, 3).fill({ color: f & PLT.BYPASS ? C.occAxle : this.blink ? C.fault : 0x5a1010 });
+      // screen doors along the track side (用户决定 D188, CASCO TACS): green
+      // closed and locked, red open; a fault flashes, an isolated door is orange
+      const psd = f & PLT.PSDFAULT ? (f & PLT.BYPASS ? C.occAxle : this.blink ? C.fault : 0x5a1010)
+        : f & PLT.PSDOPEN ? C.psdOpen : C.psdClosed;
+      const lh = detail ? 4 : 3;
+      g.bar.rect(g.x, g.edgeTop ? g.y : g.y + g.h - lh, g.w, lh).fill({ color: psd });
     }
 
     // yards
@@ -902,6 +902,81 @@ export class TrackView {
         const p = this.trainPoint(tr);
         if (p) this.centerOn(p.x, p.y, undefined, 0.25);
       }
+    }
+  }
+
+  /** The route ahead of each train, given one track section at a time
+   * (用户决定 2026-11-07, D188, as on Shanghai lines 3/4): from the train head
+   * to the end of the section it is in, and the next section only once the
+   * head is within ROUTE_NEXT_M of it, never beyond the train's authority or
+ * the stop it runs in to, nor
+   * onto track that is occupied, unlocked or under axle-counter reset. */
+  private routeShown(snap: Snapshot): { link: number; dir: 1 | -1; lo: number; hi: number; guide: boolean }[] {
+    const { topo } = this;
+    const pos = (sw: number) => snap.switches[sw] & SW.MOVING ? null : snap.switches[sw] & SW.R ? 'R' as const : 'N' as const;
+    const out: { link: number; dir: 1 | -1; lo: number; hi: number; guide: boolean }[] = [];
+    for (const tr of snap.trains) {
+      // a train running in to stop shows its way only up to the stop, not the route it leaves by (用户, D188)
+      // and one standing at its stop shows the way out only once its doors are closed (用户, D188)
+      const atStop = tr.stopDist >= 0 && tr.stopDist <= 1 && tr.v < 0.1;
+      if (atStop && (tr.doors || tr.doorClosing || tr.doorsAwait)) continue;
+      // nor one that is turning back: its way on runs the other way once it has changed ends (用户, D188)
+      if (tr.tbStage === 'reverse' || tr.tbStage === 'manual' || tr.tbStage === 'arrive' && (atStop || tr.stopDist < 0)) continue;
+      const end = tr.stopDist > 1 ? Math.min(tr.maDist, tr.stopDist) : tr.maDist;
+      if (!(end > 0)) continue;
+      let link = tr.link, dir = tr.dir, from = tr.off, dist = 0, sections = 0;
+      for (let i = 0; i < 100; i++) {
+        const len = topo.links[link].len;
+        const left = dir === 1 ? len - from : from;
+        const take = Math.min(left, end - dist);
+        const f = snap.sections[topo.links[link].section];
+        if (take > 0.5) out.push({ link, dir, lo: dir === 1 ? from : from - take, hi: dir === 1 ? from + take : from, guide: (f & SEC.GUIDE) !== 0 });
+        dist += left;
+        if (dist >= end) break;
+        const next = nextLink(topo, link, dir, pos);
+        if (!next) break;
+        const sec = topo.links[next.link].section;
+        if (sec !== topo.links[link].section) {
+          const g = snap.sections[sec];
+          if (++sections > 1 || dist > ROUTE_NEXT_M || !(g & SEC.LOCK) || g & (SEC.OCC | SEC.DIST | SEC.PRESET)) break;
+        }
+        link = next.link; dir = next.dir; from = dir === 1 ? 0 : topo.links[link].len;
+      }
+    }
+    return out;
+  }
+
+  /** A route is a thin line on the track with marks pointing the way it runs
+   * (CASCO TACS), starting at the train head (routeShown): track the train has
+   * passed returns to the free colour at once (用户决定, D188). */
+  private updateRoutes(snap: Snapshot) {
+    const { geom } = this;
+    const items = this.routeShown(snap);
+    const key = items.map(it => `${it.link}${it.dir}:${Math.round(it.lo)}-${Math.round(it.hi)}${it.guide ? 'g' : ''}`).join(',');
+    if (key === this.routeKey) return;
+    this.routeKey = key;
+    const g = this.routeG.clear();
+    const detail = this.mode === 'detail';
+    const w = detail ? 3.5 : 2.5, a = detail ? 7 : 5, gap = detail ? 90 : 60;
+    for (const guide of [false, true]) {
+      const own = items.filter(it => it.guide === guide);
+      if (!own.length) continue;
+      for (const it of own) for (const sg of geom.linkSpan(it.link, it.lo, it.hi)) g.moveTo(sg.x1, sg.y1).lineTo(sg.x2, sg.y2);
+      g.stroke({ width: w, color: guide ? C.routeGuide : C.routeSet, cap: 'butt' });
+      // direction marks; a span's segments run with the link offset (dir 1)
+      let marks = false;
+      for (const it of own) for (const sg of geom.linkSpan(it.link, it.lo, it.hi)) {
+        const [x1, y1, x2, y2] = it.dir === 1 ? [sg.x1, sg.y1, sg.x2, sg.y2] : [sg.x2, sg.y2, sg.x1, sg.y1];
+        const len = Math.hypot(x2 - x1, y2 - y1);
+        if (len < a * 3) continue;
+        const ux = (x2 - x1) / len, uy = (y2 - y1) / len;
+        for (let d = Math.min(gap / 2, len - a); d < len; d += gap) {
+          const cx = x1 + ux * d, cy = y1 + uy * d;
+          g.moveTo(cx - ux * a - uy * a, cy - uy * a + ux * a).lineTo(cx, cy).lineTo(cx - ux * a + uy * a, cy - uy * a - ux * a);
+          marks = true;
+        }
+      }
+      if (marks) g.stroke({ width: w, color: guide ? C.routeGuide : C.routeSet, cap: 'round', join: 'miter' });
     }
   }
 
@@ -942,10 +1017,10 @@ export class TrackView {
     if (tr.manual) return C.trainManual;
     if (tr.mode === 'RM') return C.trainRm;
     if (tr.level !== 'CBTC' || !tr.comm) return C.trainNonComm;
-    return C.trainCbtc;
+    return C.trainHead;
   }
 
-  /** Draw fixed-length symbols independently of the grey occupied sections. */
+  /** The occupied track of communicating trains, from their actual extent. */
   private updateTrainOccupation(snap:Snapshot):Set<number> {
     const paths=snap.trains.filter(t=>t.comm&&t.level==='CBTC').flatMap(t=>this.geom.trainOccupiedPath(t));
     const occupied=new Set(paths.map(s=>s.section));
@@ -957,40 +1032,37 @@ export class TrackView {
         if(!(f&SEC.OCC)||!(f&SEC.COMM)||(f&(SEC.DIST|SEC.PRESET)))continue;
         this.occupiedG.moveTo(s.x1,s.y1).lineTo(s.x2,s.y2);
       }
-      // Keep the grey occupation visible around the constant-size symbol.
-      const width=Math.max(this.mode==='detail'?9:7,((this.mode==='detail'?13:10)+8)/this.z);
-      this.occupiedG.stroke({width,color:C.occComm,cap:'butt',join:'round'});
+      // the actual occupied extent, as wide as the main track (CASCO TACS, D188)
+      this.occupiedG.stroke({width:this.mode==='detail'?9:7,color:C.occupied,cap:'butt',join:'round'});
     }
     return occupied;
   }
 
-  /** Draw the train symbol without using it as an occupation measurement. */
+  /** The head marker (CASCO TACS, D188): an arrow block at the train's head
+   * pointing the way it runs. It is not an occupation measurement. */
   private updateTrainBodies(snap: Snapshot) {
     const swPos = (sw: number) => (snap.switches[sw] & SW.R ? 'R' : 'N') as 'N' | 'R';
     const seen = new Set<number>();
-    const w = this.mode === 'detail' ? 13 : 10;
+    const detail = this.mode === 'detail';
+    const hw = detail ? 9 : 7, len = detail ? 26 : 20;
     for (const tr of snap.trains) {
       seen.add(tr.id);
       let tg = this.trains.get(tr.id);
       if (!tg) tg = this.createTrain(tr);
       const color = this.bodyColor(tr);
       const sel = this.store.selection?.kind === 'train' && this.store.selection.id === tr.id;
-      const segs = this.geom.trainBody(tr, swPos);
-      const bodyKey = `${segs.map(s => `${s.x1.toFixed(1)},${s.y1.toFixed(1)},${s.x2.toFixed(1)},${s.y2.toFixed(1)}`).join(';')}|${this.z}|${color}|${sel}`;
+      const first = this.geom.trainBody(tr, swPos)[0];
+      const bodyKey = first ? `${first.x1.toFixed(1)},${first.y1.toFixed(1)},${first.x2.toFixed(1)},${first.y2.toFixed(1)}|${color}|${sel}` : '';
       if (bodyKey !== tg.bodyKey) {
         tg.bodyKey = bodyKey;
         tg.body.clear();
-        let drawn = false;
-        let tail: {x:number;y:number} | undefined;
-        for (const s of segs) {
-            if (!tail || Math.hypot(tail.x-s.x1,tail.y-s.y1)>.01) tg.body.moveTo(s.x1, s.y1);
-            tg.body.lineTo(s.x2, s.y2);
-            tail={x:s.x2,y:s.y2};
-            drawn = true;
-        }
-        if (drawn) {
-          if (sel) tg.body.stroke({ width: (w + 8)/this.z, color: C.selection, alpha: 0.5, cap: 'butt', join: 'round' });
-          tg.body.stroke({ width: w/this.z, color, cap: 'butt', join: 'round' });
+        const d = first && Math.hypot(first.x2 - first.x1, first.y2 - first.y1);
+        if (first && d) {
+          // u: from the head towards the tail; n: across the track
+          const ux = (first.x2 - first.x1) / d, uy = (first.y2 - first.y1) / d, nx = -uy, ny = ux;
+          const at = (along: number, across: number) => [first.x1 + ux * along + nx * across, first.y1 + uy * along + ny * across];
+          tg.body.poly([...at(0, 0), ...at(hw, hw), ...at(len, hw), ...at(len, -hw), ...at(hw, -hw)])
+            .fill({ color }).stroke({ width: sel ? 3 : 1.5, color: sel ? C.selection : 0x101820 });
         }
       }
     }

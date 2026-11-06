@@ -46,9 +46,12 @@ function defaultScale(): number {
  * Overview geometry for a viewport: wrap the line over the number of rows
  * that lets the whole line be seen at the largest zoom (1 = full size).
  */
-function overviewParams(topo: Topology, vw: number, vh: number): GeomParams {
-  const [a, b] = lineWindow(topo);
-  const NEED = LINE.ui.overviewWidth; // world width the whole line needs for readable station names
+function overviewParams(topo: Topology, vw: number, vh: number, zone = -1): GeomParams {
+  const [lo, hi] = lineWindow(topo);
+  // one ZC area (D188): its own stretch of line, twice the overview's room, intervals to length
+  const z = topo.zones[zone];
+  const a = z ? Math.max(lo, z.chainFrom) : lo, b = z ? Math.min(hi, z.chainTo) : hi;
+  const NEED = LINE.ui.overviewWidth * (z ? 0.5 : 1); // world width the whole line needs for readable station names
   const BASE = 500; // minimum row height
   const PAD = 80; // room for the first row's windows / last row's names when zoomed out
   let rows = 1;
@@ -66,6 +69,7 @@ function overviewParams(topo: Topology, vw: number, vh: number): GeomParams {
     chainFrom: a, chainTo: b, rows, width, marginL: 150, marginR: 150, rowH, top: 0,
     upY: 200 + off, midY: 240 + off, dnY: 280 + off,
     depotDy: { q: 50, z: 66, j1: 80, j2: 94, gate: 108 + off }, detail: false, padBottom: fits ? 0 : PAD, padTop: fits ? 0 : PAD,
+    ...(z ? { lengthScale: true, nodeMargin: 300 } : {}),
   };
 }
 
@@ -80,6 +84,8 @@ export class App {
   private viewLayer = new Container();
   overview: TrackView | null = null;
   private overviewKey = '';
+  /** line overview showing the whole line (-1) or one ZC area (D188) */
+  private ovZone = loadPref('ovZone', -1);
   station: StationView;
   mode: 'overview' | 'station' = 'overview';
   graph: TrainGraph;
@@ -117,7 +123,11 @@ export class App {
       close: () => this.closeStation(),
       hover: (sel) => this.hover(sel),
       openYard: (d) => this.openYard(d),
-      built: () => { this.applyTextResolution(); this.placeStationView(); },
+      built: () => {
+        // a station view rebuilt by itself (another station picked in it, a resize) replaces the one on screen
+        if (this.mode === 'station' && this.station.view) this.attach(this.station.view.root);
+        this.applyTextResolution(); this.placeStationView();
+      },
     });
 
     const panelHooks = {
@@ -221,8 +231,9 @@ export class App {
     this.viewLayer.visible = R.view.h > 40;
     // overview: rebuild when the geometry changes, otherwise just resize the viewport
     if (R.view.h > 40) {
-      const p = overviewParams(this.topo, R.view.w, R.view.h);
-      const key = `${p.rows}|${p.width}|${p.rowH}`;
+      const zone = this.topo.zones[this.ovZone] ? this.ovZone : -1;
+      const p = overviewParams(this.topo, R.view.w, R.view.h, zone);
+      const key = `${zone}|${p.rows}|${p.width}|${p.rowH}`;
       if (!this.overview || key !== this.overviewKey) this.buildOverview(p, key);
       else this.overview.setViewport(R.view.w, R.view.h);
       if (this.mode === 'station') this.station.resize(R.view.w, R.view.h - 64);
@@ -379,8 +390,17 @@ export class App {
       if (stSel.value !== '') this.openStation(Number(stSel.value));
       stSel.value = '';
     } }, h('option', { value: '' }, '车站图…'), ...this.topo.stations.map((s) => h('option', { value: s.index }, s.name))) as HTMLSelectElement;
+    // 全线 or one ZC area (用户决定 2026-11-07, D188)
+    const zoneSel = h('select', { title: '显示全线或单个 ZC 区域（各区域按长度均分，区间按比例显示）', onchange: () => {
+      this.ovZone = Number(zoneSel.value);
+      savePref('ovZone', this.ovZone);
+      if (this.overview) this.overview.follow = -1;
+      this.layout();
+    } }, h('option', { value: -1 }, '全线'), ...this.topo.zones.map((z) => h('option', { value: z.id }, z.name))) as HTMLSelectElement;
+    zoneSel.value = String(this.topo.zones[this.ovZone] ? this.ovZone : -1);
     return h('div', { style: 'display:contents' },
       h('span', { class: 'ttl' }, '线路总览'),
+      zoneSel,
       h('span', { class: 'lbl' }, '图层'),
       lay('sig', '信号机', '显示全部信号机编号（放大后自动显示）'),
       lay('sec', '区段', '显示区段编号（放大后自动显示）'),

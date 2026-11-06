@@ -1535,7 +1535,8 @@ export function clearOnToYard(ctx: PlanContext, trips: GenTrip[], block: Block, 
   const dir = ahead1 ? last.dir : back, turn = ahead1 ? 0 : minTurn(last.to);
   const index = new DepIndex(trips.filter(t => t !== last));
   const openers=openingAnchors(trips);
-  for (let wait = 30; wait <= 180; wait += 10) {
+  // (running on the same way, the train first clears its passengers: D188)
+  for (let wait = ahead1 && last.revenue ? Math.max(30, OPERATIONS.terminalClearS ?? 0) : 30; wait <= 180; wait += 10) {
     const start = Math.max(last.stops.at(-1)!.arr+turn,options?.notBefore??-Infinity)+wait;
     const stops = buildStops(ctx,dir,last.to,rule.station,start,CARRY_MOVES,1);
     const revenue=CARRY_MOVES&&carryingStops(stops,dir,openers);
@@ -2416,6 +2417,12 @@ export function blockTasks(topo: Topology, plan: Plan, block: Block, fromTrip = 
     if (before?.standby && dep) dep.standby = true;
     const nextRaw = ids.slice(k + 1).map(i => plan.trips[i]).find(t => !t.cancelled);
     const next = nextRaw && effectiveTrip(nextRaw);
+    // 终到清客（D188）: the passengers leave unless the train runs on with them
+    const clearS = OPERATIONS.terminalClearS ?? 0;
+    if (clearS > 0 && trip.revenue && !(next?.revenue && next.dir === trip.dir)) {
+      const last = tasks.slice(first).filter((t): t is StopTask => t.k === 'stop' && t.trip === trip.id).at(-1);
+      if (last?.doors) last.minDwell = Math.max(last.minDwell ?? 0, clearS);
+    }
     if (next) {
       if (next.dir !== trip.dir) {
         const hot = trip.standby && hotStandbyPlaces(topo).find(p => p.station === trip.to && p.depot);
@@ -2595,8 +2602,10 @@ export function addTurnback(topo: Topology, trip: Trip, tasks: Task[]) {
   if (!tb) return;
   if (tb.kind === 'rear') {
     // a platform turnback track (广兰路 middle track): set down there, not on the main
-    if (topo.berths[tb.berths[0]].kind === 'platform') retargetArrival(tasks, trip.to, tb.berths[0]);
-    tasks.push({ k: 'reverse', berths: tb.berths, chosen: tb.berths[0], station: trip.to, minTime: 40 });
+    const platform = topo.berths[tb.berths[0]].kind === 'platform';
+    if (platform) retargetArrival(tasks, trip.to, tb.berths[0]);
+    const minTime = platform ? OPERATIONS.platformChangeEndsS?.[STATIONS[trip.to].id] ?? 40 : 40;
+    tasks.push({ k: 'reverse', berths: tb.berths, chosen: tb.berths[0], station: trip.to, minTime });
   } else {
     // station-front: retarget the arrival stop to the opposite platform
     retargetArrival(tasks, trip.to, tb.arrBerth);

@@ -40,6 +40,8 @@ export interface GeomParams {
   padBottom?: number;
   /** same above the first row (train windows stacked above the up track) */
   padTop?: number;
+  /** station intervals drawn closer to their real lengths (a ZC area view, D188) instead of the compact line overview */
+  lengthScale?: boolean;
 }
 
 export interface RowDef { from: number; to: number; x0: number; x1: number; top: number }
@@ -87,6 +89,7 @@ export class Geometry {
       const nsw = swCh.filter((c) => c > a && c < b).length;
       const isStationInterval = chains.includes(a) && chains.includes(b);
       if (p.detail) weights.push(0.6 + Math.pow(d / 1000, 0.5) * 0.5 + 0.12 * nsw);
+      else if (p.lengthScale) weights.push(0.3 + 0.5 * d / 1000 + 0.3 * nsw);
       else weights.push((isStationInterval ? 1 : 0.42) + 0.13 * Math.min(4, d / 1000) + 0.075 * nsw);
     }
     // rows: split the cumulative weight; wraps at the middle of a station interval clear of switches
@@ -147,7 +150,8 @@ export class Geometry {
         const sw = [0];
         for (let i = 1; i < inside.length; i++) {
           const len = inside[i] - inside[i - 1];
-          sw.push(sw[i - 1] + (p.detail ? 14 + Math.pow(len, 0.72) : 4 + Math.pow(len, 0.6)));
+          // station views: a larger floor per node gap spreads short gaps (crossovers) apart (D188; was 14)
+          sw.push(sw[i - 1] + (p.detail ? 40 + Math.pow(len, 0.72) : 4 + Math.pow(len, 0.6)));
         }
         const tot = sw[sw.length - 1] || 1;
         for (let i = k === 0 ? 0 : 1; i < inside.length; i++) {
@@ -315,7 +319,13 @@ export class Geometry {
     return out;
   }
 
-  platformWidth(): number { return PLATFORM_WIDTH; }
+  /** Platform symbol width: fixed on the line overview; true to scale in a
+   * station view, where track and occupation are drawn to scale (用户, D188). */
+  platformWidth(): number {
+    const p = this.p;
+    if (!p.detail) return PLATFORM_WIDTH;
+    return Math.max(PLATFORM_WIDTH, LINE_INFO.platformLength * (p.width - p.marginL - p.marginR) / (p.chainTo - p.chainFrom));
+  }
   /** One symbol length throughout this drawing, including intervals and depot leads. */
   platformTrainLength(): number { return this.platformWidth() * LINE_INFO.trainLength / LINE_INFO.platformLength; }
 

@@ -246,6 +246,10 @@ export interface CoreLineData {
     /** Station IDs where long turnback waits remain at the platform. */
     longWaitPlatformStations?: readonly string[];
     platformTurnClear: Record<string, number>;
+    /** Minimum dwell when a revenue trip ends and its passengers are cleared (清客), planning and runtime alike; absent = passenger exchange only. */
+    terminalClearS?: number;
+    /** Change of ends on a platform turnback track (s), by station ID; absent = 40. */
+    platformChangeEndsS?: Record<string, number>;
     depotReturns: {
         depot: string;
         dir: "UP" | "DN";
