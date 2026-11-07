@@ -5,6 +5,7 @@ import { LINE } from '../data/current';
  * glossary of the signalling terms used on screen. F1 / “?” reopens it.
  */
 import { h, clear } from './dom';
+import { C, hex } from './theme';
 import { loadPref, savePref } from './layout';
 
 interface Page { title: string; body: () => HTMLElement }
@@ -51,9 +52,9 @@ const PAGES: Page[] = [
       h('div', {},
         h('h3', {}, '轨道区段'),
         h('ul', { style: 'list-style:none;padding:0' },
-          sw('#3a4c60', '空闲'), sw('#3b5a4d', '自动通过进路锁闭'), sw('#46d47c', '人工/ARS 进路锁闭'),
-          sw('#60758c', 'CBTC 列车占用（正常）'), sw('#ff9a3c', '计轴占用（非通信车，需注意）'), sw('#ff4040', '故障占用（报警）'),
-          sw('#ffd400', '预复位待压道 / 临时限速（黄色虚线）'), sw('#b07cff', '封锁 / 施工封锁（紫色斜线）'), sw('#5cc8ff', '大风/暴雨限速（蓝色虚线）')),
+          sw(hex(C.trackFree), '空闲'), sw(hex(C.routeSet), '进路（列车前方细线，逐段给出）'), sw(hex(C.routeGuide), '引导进路'),
+          sw(hex(C.occComm), 'CBTC 列车占用'), sw(hex(C.occAxle), '计轴占用（非通信车，需注意）'), sw(hex(C.disturbed), '故障占用（报警）'),
+          sw(hex(C.preset), '预复位待压道 / 临时限速（黄色虚线）'), sw(hex(C.blocked), '封锁 / 施工封锁（紫色斜线）'), sw(hex(C.env), '大风/暴雨限速（蓝色虚线）')),
       ),
       h('div', {},
         h('h3', {}, '列车车次窗'),
