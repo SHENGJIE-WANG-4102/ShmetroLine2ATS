@@ -3059,7 +3059,9 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
       if (t.dir !== dir) continue;
       for (const s of t.stops) {
         const block = plan.blocks[t.block];
-        const next = block && plan.trips[block.trips[block.trips.indexOf(t.id) + 1]];
+        // (the train's next trip actually run: a cancelled one in between, e.g. the
+        // withdrawal an added service replaced, does not part the train from it — D189)
+        const next = block && block.trips.slice(block.trips.indexOf(t.id) + 1).map(id => plan.trips[id]).find(x => x && !x.cancelled);
         if (s === t.stops.at(-1) && next?.dir === t.dir && next.from === s.st) continue;
         if (!byStation.has(s.st)) byStation.set(s.st, []);
         byStation.get(s.st)!.push({ t: s.dep, no: t.no, block: t.block, trip:t.id });

@@ -17,7 +17,7 @@ import {
   TEMPLATES, periodAt, openingAnchors, DEPOT_ENTRY_CLEAR, depotMoves, terminalOccupancy,
 } from '../timetable';
 import { OPERATIONS, STATIONS } from '../../data/current';
-import { ahead } from '../topology';
+import { ahead, sharedTransferLink } from '../topology';
 import type { PoolCar, PoolDemand } from './pool';
 
 /** longest an intermediate turnback holds a car beyond its turn (s; validatePlan LAYOVER_LONG) */
@@ -98,7 +98,12 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   /** shortest stop of a car running on at `st` from `at`: passengers alight and board (planned dwell) */
   const throughMin = (st: number, dir: TrackDir, at: number) => Math.max(THROUGH_MIN, plannedDwell(ctx.dayType, st, dir, at, dwellFactorAt(ctx.dayType, at)));
   /** longest stand of a car at `st` leaving at `at` */
-  const waitLimit = (st: number, turn: boolean, at: number) => !turn ? THROUGH_WAIT : lineEnd(st) ? lineEndStand(st, at) : minTurn(st) + INTERMEDIATE_WAIT;
+  // D189: an intermediate station with two or more turnback tracks (淞虹路) stands a turning
+  // car on its own track like a line end: its turn and one interval of the departures there
+  // (the evening small-route arrivals fall 3 min before a departure: too short to turn, so
+  // they take the next one, 12 min on — not a reason to swap cars through the yard).
+  const ownTracks = (st: number) => topo.stations[st].turnbackBerths.filter(b => topo.berths[b].kind !== 'platform').length > 1;
+  const waitLimit = (st: number, turn: boolean, at: number) => !turn ? THROUGH_WAIT : lineEnd(st) || ownTracks(st) ? lineEndStand(st, at) : minTurn(st) + INTERMEDIATE_WAIT;
   const openers = openingAnchors(services);
   const index = new DepIndex(services);
   /** last service departure per station and direction */
@@ -127,6 +132,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     // (every committed hold passed this check: only the ones near the new one can overflow with it)
     if (terminalOverflows(topo, st, combined.filter(p => p.to >= held.from - 3600 && p.from <= held.to + 3600)).length) return false;
     if (!tailOrderClear(topo, st, list, held.from, held.to)) return false;
+    if (!leadRoom(st, held.from, held.to)) return false;
     // Off-peak and while a standby stands, keep the arrival platform free:
     // only a peak arrival wave may hold a car on it.
     const standby = standbyPlaces.get(st) ?? [];
@@ -194,11 +200,13 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const exitClear = (depot: number, dir: TrackDir, stops: PlanStop[]) => {
     const [start, clear] = outboundWindow(ctx, depot, { dir, stops });
     const lead = depotLeadLink(topo, depot, false, dir);
+    if (!leadRoom(exitStation(topo, depot, dir), start, clear, lead)) return false;
     return lead === undefined || inbound.every(m => m.depot !== depot || depotLeadLink(topo, depot, true, m.dir) !== lead || clear <= m.from || start >= m.to);
   };
   const entryClear = (depot: number, dir: TrackDir, to: number, stops: PlanStop[]) => {
     const [from, until] = inboundWindow(topo, depot, { to, stops });
     const lead = depotLeadLink(topo, depot, true, dir);
+    if (!leadRoom(entryStation(topo, depot, dir), from, until, lead)) return false;
     return lead === undefined || outbound.every(m => m.depot !== depot || depotLeadLink(topo, depot, false, m.dir) !== lead || m.to <= from || m.from >= until);
   };
   const exits: { yard: number; at: number }[] = [];
@@ -220,6 +228,41 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const inbound: { depot: number; dir: TrackDir; from: number; to: number; at: number; car?: number }[] = [];
   const outbound: { depot: number; dir: TrackDir; from: number; to: number }[] = [];
   const addExit = (x: (typeof exits)[number]) => { ledgerVersion++; exits.push(x); };
+  /** D189: where the turnback tracks are also the depot leads (淞虹路 1/2 道), a turning
+   * car stands on one of them from its arrival to its departure, and a yard move
+   * passes over its own lead: every turn must find one track free of the moves
+   * and the other turns for its whole stand. `track`: the new window's lead, or
+   * undefined for a new turn (any track). */
+  // (only where a turning car may wait on them, plannedWaitBerth: two or more such tracks)
+  const sharedTurnLeads = (st: number) => topo.stations[st].turnbackBerths.length > 1
+    && topo.stations[st].turnbackBerths.some(b => sharedTransferLink(topo, topo.berths[b].link));
+  const leadRoom = (st: number, from: number, to: number, track?: number) => {
+    if (st < 0 || !sharedTurnLeads(st)) return true;
+    const tracks = topo.stations[st].turnbackBerths.map(b => topo.berths[b].link);
+    type W = { from: number; to: number; track?: number };
+    const near = (w: W) => w.from < to + 3600 && w.to > from - 3600;
+    const pinned: W[] = [
+      ...outbound.filter(m => exitStation(topo, m.depot, m.dir) === st).map(m => ({ from: m.from, to: m.to, track: depotLeadLink(topo, m.depot, false, m.dir) })),
+      ...inbound.filter(m => entryStation(topo, m.depot, m.dir) === st).map(m => ({ from: m.from, to: m.to, track: depotLeadLink(topo, m.depot, true, m.dir) })),
+    ].filter(near);
+    const turns: W[] = (places.get(st) ?? []).filter(near).map(h => ({ from: h.from, to: h.to }));
+    (track === undefined ? turns : pinned).push({ from, to, track });
+    turns.sort((a, b) => a.from - b.from);
+    const busy = new Map<number, W[]>(tracks.map(t => [t, pinned.filter(w => w.track === t)]));
+    // a move on a lead that is not one of the tracks (or unknown) blocks nothing here
+    const clash = (t: number, w: W) => busy.get(t)!.some(o => o.from < w.to && o.to > w.from);
+    const place = (k: number): boolean => {
+      if (k === turns.length) return true;
+      for (const t of tracks) {
+        if (clash(t, turns[k])) continue;
+        busy.get(t)!.push(turns[k]);
+        if (place(k + 1)) return true;
+        busy.get(t)!.pop();
+      }
+      return false;
+    };
+    return place(0);
+  };
   const addInbound = (m: (typeof inbound)[number]) => { ledgerVersion++; inbound.push(m); };
   const dropInbound = (i: number) => { ledgerVersion++; inbound.splice(i, 1); };
   /** a cheap headway pre-test of the slot at `at`: the move built at a

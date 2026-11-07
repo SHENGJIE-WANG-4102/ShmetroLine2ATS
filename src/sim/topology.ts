@@ -42,6 +42,10 @@ export interface WaitingStage {
   path?: readonly { link: number; from: number; to: number }[];
   afterTurn?: boolean;
   protectedLinks?: ReadonlySet<number>;
+  /** the station's own turnback stub that is also a depot lead (淞虹路 1/2 道):
+   * a turning train waits there for its departure; the lead's use by yard moves is
+   * booked against the turn by the plan (reserve / turnLeadConflict), not refused here */
+  turnbackLead?: boolean;
 }
 
 /** Compare positions along an explicitly oriented path, including a path
@@ -395,7 +399,7 @@ export function safeWaitingPoint(topo: Topology, at: number | WaitingPoint, leng
       || (previous.dir === 1 ? previousLink.b : previousLink.a) !== (dir === 1 ? link.a : link.b)) return false;
     link = previousLink; dir = previous.dir; off = dir === 1 ? link.len : 0;
   }
-  if (body.some(part => sharedTransferLink(topo, part.link.id))) return false;
+  if (!next.turnbackLead && body.some(part => sharedTransferLink(topo, part.link.id))) return false;
   const kind = (part: { link: TLink }) => topo.sections[part.link.section]?.kind;
   const resources = topologyResourceLinks(topo);
   if (body.every(part => resources.has(part.link.id) && (kind(part) === 'tail' || kind(part) === 'siding'))) return true;

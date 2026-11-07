@@ -38,6 +38,11 @@ function findTurn(topo: Topology, accepts: (berths: number[]) => boolean) {
   throw new Error('fixture needs this topology capability');
 }
 
+/** D189: a turnback track that is also the only depot lead there (远东大道出入段线) stays
+ * no waiting place; two or more such tracks (淞虹路 1/2 道) are, see below. */
+const soleSharedLead = (topo: Topology) => (berths: number[]) => berths.length === 1
+  && berths.every(b => sharedTransferLink(topo, topo.berths[b].link));
+
 describe('pure planned waiting evidence', () => {
   it.each(['weekday', 'weekend'] as const)('%s allocation only connects duties at safe waiting points', dayType => {
     const sim = new Sim({ dayType, dateLabel: 'planned waiting allocation', startTime: 14400, seed: 1 });
@@ -45,7 +50,7 @@ describe('pure planned waiting evidence', () => {
   });
 
   it('rejects a long connection on actual shared transfer choices', () => {
-    const topo = buildTopology(), turn = findTurn(topo, berths => berths.every(b => sharedTransferLink(topo, topo.berths[b].link)));
+    const topo = buildTopology(), turn = findTurn(topo, soleSharedLead(topo));
     const plan = pair(topo, turn.station, turn.dir, minTurn(turn.station) + 600), before = JSON.stringify(plan);
     const result = plannedWaiting({ topo }, plan);
     expect(result.issues).toHaveLength(1);
@@ -55,6 +60,14 @@ describe('pure planned waiting evidence', () => {
     expect(JSON.stringify(plan)).toBe(before);
     expect(plannedWaiting({topo},plan,{connection:{block:0,arrival:0,departure:1}})).toEqual(result);
     expect(plannedWaiting({topo},plan,{connection:{block:1,arrival:0,departure:1}}).waits).toEqual([]);
+  });
+
+  it('lets a turning train wait on one of two turnback tracks that double as depot leads (D189, 淞虹路)', () => {
+    const topo = buildTopology(), turn = findTurn(topo, berths => berths.length > 1 && berths.every(b => sharedTransferLink(topo, topo.berths[b].link)));
+    const result = plannedWaiting({ topo }, pair(topo, turn.station, turn.dir, minTurn(turn.station) + 600));
+    expect(result.issues).toEqual([]);
+    expect(result.waits[0]).toMatchObject({ safe: true, reason: 'SAFE_WAITING_POINT' });
+    expect([...result.waits[0].safeBerths].sort()).toEqual([...turn.berths].sort());
   });
 
   it('allows a full-length wait on an independent rear track', () => {
@@ -75,7 +88,7 @@ describe('pure planned waiting evidence', () => {
   });
 
   it('does not use the safe arrival platform to approve a turn whose next stage is shared', () => {
-    const topo = buildTopology(), turn = findTurn(topo, berths => berths.every(b => sharedTransferLink(topo, topo.berths[b].link)));
+    const topo = buildTopology(), turn = findTurn(topo, soleSharedLead(topo));
     const plan = pair(topo, turn.station, turn.dir, minTurn(turn.station) + 600);
     expect(safeWaitingPoint(topo, platformBerth(topo, turn.station, turn.dir), LINE_INFO.trainLength)).toBe(true);
     expect(plannedWaiting({ topo }, plan).issues).toHaveLength(1);
@@ -95,7 +108,7 @@ describe('pure planned waiting evidence', () => {
   });
 
   it('uses the existing turn-work budget without granting extra waiting time', () => {
-    const topo = buildTopology(), turn = findTurn(topo, berths => berths.every(b => sharedTransferLink(topo, topo.berths[b].link)));
+    const topo = buildTopology(), turn = findTurn(topo, soleSharedLead(topo));
     const normal = plannedWaiting({ topo }, pair(topo, turn.station, turn.dir, minTurn(turn.station)));
     expect(normal.issues).toEqual([]);
     expect(normal.waits[0].reason).toBe('NORMAL_WORK');
@@ -112,7 +125,7 @@ describe('pure planned waiting evidence', () => {
   });
 
   it('includes a connection crossing the scope boundary and states uncovered work', () => {
-    const topo = buildTopology(), turn = findTurn(topo, berths => berths.every(b => sharedTransferLink(topo, topo.berths[b].link)));
+    const topo = buildTopology(), turn = findTurn(topo, soleSharedLead(topo));
     const plan = pair(topo, turn.station, turn.dir, 900);
     expect(plannedWaiting({ topo }, plan, { from: time + 600 }).issues).toHaveLength(1);
     expect(plannedWaiting({ topo }, plan, { from: time + 901 }).issues).toEqual([]);

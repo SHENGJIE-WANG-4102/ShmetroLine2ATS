@@ -101,7 +101,14 @@ export function plannedWaitBerth(topo: Topology, arrival: Trip, departure: Trip,
       result = !!point && goal !== undefined && safeWaitingPoint(topo, { ...point,
         incoming: routeHistory.slice().reverse().map(s => ({ link: s.link, dir: -s.dir as Dir })),
       }, LINE_INFO.trainLength, { afterTurn: true, destination: goal, path: project(topo, point, goal) });
-    } else result = safeWaitingPoint(topo, { link: b.link, off: b.offset, dir: b.dir, incoming: routeHistory }, LINE_INFO.trainLength);
+    } else {
+      // 用户（2026-11-07）：淞虹路小交路必须在淞虹路折返，不许入一列出一列。折返线兼出入段线时，
+      // 折返车就在该线上候发（D189）；出入段对该线的占用由排图的折返预约与出入段时窗错开。
+      // 只限有两条以上折返线的站：一条候发时另一条仍通车场（单条出入段线不许占着候班）。
+      const turnbacks = arrivalEnd === undefined ? [] : topo.stations[arrivalEnd]?.turnbackBerths ?? [];
+      const turnbackLead = turning && (b.kind === 'tail' || b.kind === 'siding') && turnbacks.length > 1 && turnbacks.includes(berth);
+      result = safeWaitingPoint(topo, { link: b.link, off: b.offset, dir: b.dir, incoming: routeHistory }, LINE_INFO.trainLength, { turnbackLead });
+    }
     cache!.set(key, result);
     return result;
   };

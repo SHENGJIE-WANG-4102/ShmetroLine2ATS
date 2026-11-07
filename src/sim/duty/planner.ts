@@ -270,15 +270,17 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       d.stops = stops.slice(i).map(p => ({ ...p }));
       d.stops[0].arr = d.stops[0].dep;
       const car = spare.find(c => c.station === k && c.trip.next === undefined && !endOf.has(c.trip.id) && releasable(c.trip.id) && connectAt(c.trip, d, k));
-      if (car) { link(car.trip, d); spare.splice(spare.indexOf(car), 1); dropHeld(car.trip.id); return true; }
+      if (car) { link(car.trip, d); spare.splice(spare.indexOf(car), 1); dropHeld(car.trip.id); reindex(d, stops); return true; }
       const w: Want = { ...want, station: k, at: dep(d) };
-      if (yards.slice().sort((a, b) => distanceTo(a, k) - distanceTo(b, k)).some(y => feed(y, w))) return true;
+      if (yards.slice().sort((a, b) => distanceTo(a, k) - distanceTo(b, k)).some(y => feed(y, w))) { reindex(d, stops); return true; }
     }
     d.from = from; d.stops = stops;
     return false;
   };
   /** a run cut short at a new end (its dwell there dropped) keeps the
    * headway to the trains passing that stop; `was`: its stops before */
+  /** a run cut short keeps its place in the headway index as it now runs */
+  const reindex = (t: GenTrip, was: PlanStop[]) => { index.remove({ dir: t.dir, stops: was }); index.add(t); };
   const endClear = (a: GenTrip, was: PlanStop[]) => index.clear([a.stops.at(-1)!], a.dir, MIN_HEADWAY, was);
   const trimEnd = (car: Car, only?: Yard): boolean => {
     const a = car.trip;
@@ -297,7 +299,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       const yard = (only ? [only] : yards.filter(y => y.depot >= 0).sort((x, y) => Number(due(y) > 0) - Number(due(x) > 0) || distanceTo(x, k) - distanceTo(y, k)))
         .find(y => homeBy(c, y));
       if (yard && mv.dry) { a.to = to; a.stops = stops; return true; }
-      if (yard) { returned.set(yard.id, (returned.get(yard.id) ?? 0) + 1); return true; }
+      if (yard) { returned.set(yard.id, (returned.get(yard.id) ?? 0) + 1); reindex(a, stops); return true; }
     }
     a.to = to; a.stops = stops;
     return false;
@@ -368,7 +370,8 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     if (!T('end-headway', endClear(a, stops))) { a.to = to; a.stops = stops; return false; }
     if (!mv.dry) dropHeld(a.id);
     const ok = homeBy({ ...car, station: k, ready: arr(a) + THROUGH_MIN }, yard);
-    if (ok && !mv.dry) return true;
+    // D189: the headway index keeps the run as it now ends (it held the dropped calls)
+    if (ok && !mv.dry) { reindex(a, stops); return true; }
     a.to = to; a.stops = stops;
     return ok;
   };
