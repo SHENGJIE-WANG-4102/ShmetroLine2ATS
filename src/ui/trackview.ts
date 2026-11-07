@@ -372,7 +372,8 @@ export class TrackView {
       const bar = new Graphics();
       this.platL.addChild(rect, bar);
       // an inner UP face has its track above, an inner DN (or middle-track) face below; a side platform the reverse
-      this.platGfx.push({ rect, bar, x: x0, y: y0, w: x1 - x0, h: y1 - y0, edgeTop: up !== side });
+      // (广兰路的中间线站台面不论属哪个方向，股道都在下方：站台门画在下沿，用户 2026-11-07)
+      this.platGfx.push({ rect, bar, x: x0, y: y0, w: x1 - x0, h: y1 - y0, edgeTop: p.pool !== undefined ? false : up !== side });
     }
 
     // station names, transfer chips, km posts

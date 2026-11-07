@@ -300,7 +300,7 @@ export interface Train {
   /** Driver closing retains the ATS display target independently of door readiness;
    * readyAt identifies the readiness clock at capture, so a later ATS adjustment wins.
    * The platform remains until five seconds after the head leaves it. */
-  departureDisplay?: { stop: StopTask; at?: number; readyAt?: number; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number };
+  departureDisplay?: { stop: StopTask; at?: number; readyAt?: number; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number; departedAt?: number };
   load: number;
   delay: number;
   hold: boolean;
@@ -438,7 +438,7 @@ export interface DmiData {
   stopErr: number | null;
   /** Platform sign, located from the departure signal; never a DMI countdown. */
   departureBoard?: { at: number; signalName: string; signalOffset: number; aspect: Aspect;
-    held: boolean; headLeftAt?: number; remaining: number; side: '' | 'L' | 'R'; station: number };
+    held: boolean; headLeftAt?: number; departedAt?: number; stood: boolean; remaining: number; side: '' | 'L' | 'R'; station: number };
   /** stopping window indicator (hexagon) */
   stopWin: 'none' | 'ahead' | 'aligned' | 'short' | 'over';
   vEbi: number;

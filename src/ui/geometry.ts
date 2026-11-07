@@ -358,8 +358,16 @@ export class Geometry {
         for(let i=a+1;i<xs.length;i++) xs[i]+=extra*Math.min(1,(points[i]-span.a)/(span.b-span.a));
       }
       rd.x1=xs.at(-1)!;
-      this.width=Math.max(this.width,rd.x1+this.p.marginR);
     }
+    // 用户（2026-11-07）：总览各行一样长。上面按站台、股道最小宽度撑开后各行伸长不一，
+    // 再把较短的行等比拉到最长那行（只放大，撑开的最小宽度仍然满足）。
+    const right=Math.max(...this.rows.map(rd=>rd.x1));
+    for (let row=0;row<this.maps.length;row++) {
+      const map=this.maps[row], rd=this.rows[row], k=(right-rd.x0)/Math.max(1,rd.x1-rd.x0);
+      map.xs=map.xs.map(x=>rd.x0+(x-rd.x0)*k);
+      rd.x1=right;
+    }
+    this.width=Math.max(this.width,right+this.p.marginR);
   }
 
   /** Fixed-length train symbol. Track occupation comes from the simulation,

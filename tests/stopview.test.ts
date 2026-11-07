@@ -18,18 +18,20 @@ describe('stopping close-up scale', () => {
     expect(stopViewDoorState({doors:false,doorSide:'R',doorClosing:true},false)).toBe('closing');
     expect(stopViewDoorState({doors:false,doorSide:'',doorClosing:false},true)).toBe('closed');
   });
-  it('counts down through zero, then counts overtime; hold is H, off five seconds after head exit', () => {
+  it('counts down through zero, then counts overtime; hold is H; lit once stopped, off five seconds after starting', () => {
     expect(departureSeconds(100, 72)).toBe(28);
     expect(departureSeconds(100, 79)).toBe(21);
     expect(departureSeconds(100, 100)).toBe(0);
     expect(departureSeconds(100, 101)).toBe(1);
     expect(departureSeconds(-1, 72)).toBeNull();
-    const board={at:100,signalName:'test',signalOffset:6,aspect:'R' as const,held:false,remaining:0,side:'L' as const,station:12};
+    const board={at:100,signalName:'test',signalOffset:6,aspect:'R' as const,held:false,stood:true,remaining:0,side:'L' as const,station:12};
+    expect(departureText({...board,stood:false},79)).toBeNull();
     expect(departureText({...board,held:true},79)).toBe('H');
     expect(departureText({...board,held:true},105)).toBe('H');
-    expect(departureText({...board,headLeftAt:102},106.9)).toBe('6');
-    expect(departureText({...board,headLeftAt:102},107)).toBeNull();
-    expect(departureText({...board,headLeftAt:102,held:true},107)).toBeNull();
+    expect(departureText({...board,departedAt:102},106.9)).toBe('6');
+    expect(departureText({...board,departedAt:102},107)).toBeNull();
+    expect(departureText({...board,departedAt:102,headLeftAt:110},107)).toBeNull();
+    expect(departureText({...board,departedAt:102,held:true},107)).toBeNull();
   });
   it('fits the departure signal beyond the stop without a zoom discontinuity', () => {
     for (const rem of [300, FREEZE_REM, 10, 0, -1]) {

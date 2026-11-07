@@ -123,6 +123,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     if (found) departureBoard = { at: dep, signalName: topo.signals[found.sig].name,
       signalOffset: found.dist, aspect: sim.sig[found.sig].aspect,
       held: tr.hold || sim.plat[b.platform].hold, headLeftAt: tr.departureDisplay?.headLeftAt,
+      departedAt: tr.departureDisplay?.departedAt, stood: dwelling || tr.departureDisplay?.departedAt !== undefined,
       remaining: tr.departureDisplay?.remaining ?? err, side: tr.departureDisplay?.side ?? platformSide(sim, tr, b.platform), station: current.station };
   }
   const doorFault = tr.vfault?.kind === 'door' && tr.vfault.stage !== 'armed';

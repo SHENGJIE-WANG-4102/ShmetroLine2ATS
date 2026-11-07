@@ -432,7 +432,9 @@ export function updateOnboard(sim: Sim) {
     if (tr.failed || tr.phase === 'stabled') continue;
     const zone = sim.zoneState[topo.links[tr.link].zone];
     const avail = cbtcAvailable(sim, tr);
-    if (tr.manual && (tr.mode !== 'CM' || tr.level === 'CBTC')) continue;
+    // 人工驾驶只有 CM 走下面的级别转换：CM-CBTC 的车到了转 TBTC 的区域，停站时同样降级
+    // （用户 2026-11-07：TBTC 下停过站还显示 CBTC）；通信中断的呼叫仍只给自动驾驶的车
+    if (tr.manual && tr.mode !== 'CM') continue;
     // ---- RM authority used up → supervised mode again
     if (tr.mode === 'RM') {
       if (tr.rmAuth > 0 || tr.coupledLen > 0 || tr.tasks[0]?.k === 'rescue') continue;
@@ -444,6 +446,7 @@ export function updateOnboard(sim: Sim) {
     // ---- degrade CBTC → TBTC
     if (tr.level === 'CBTC') {
       const standing = tr.v < 0.1;
+      if (tr.manual && !tr.comm) continue;
       if (!tr.comm) {
         // comm loss at standstill without EB (e.g. during a dwell): driver asks to degrade
         if (standing && !sim.calls.some((c) => c.state === 'ringing' && c.kind === 'degrade' && c.train === tr.id)) callDegrade(sim, tr);
@@ -467,10 +470,12 @@ export function updateOnboard(sim: Sim) {
         continue;
       }
       if (!standing || !supportsSignalSystem('TBTC')) continue;
-      if (tr.phase === 'dwell') setMode(sim, tr, 'AM', 'TBTC', tr.forceLevel === 'TBTC' ? '强制TBTC，停站降级' : '区域转TBTC，停站降级');
+      // 用户（2026-11-07）：人工驾驶（CM）的车停站时同样降到 TBTC，仍为人工驾驶
+      const degraded = tr.manual || tr.mode === 'CM' ? 'CM' : 'AM';
+      if (tr.phase === 'dwell') setMode(sim, tr, degraded, 'TBTC', tr.forceLevel === 'TBTC' ? '强制TBTC，停站降级' : '区域转TBTC，停站降级');
       else if (tr.phase === 'run' && (zone === 'ZCFAIL' || tr.maDist < 40)) {
         // no ZC movement authority: the driver changes over where the train stands
-        requestMode(sim, tr, 'AM', 'TBTC');
+        requestMode(sim, tr, degraded, 'TBTC');
         sim.log('I', '列车', `列车 ${trainLabel(tr)} ${zone === 'ZCFAIL' ? 'ZC故障，' : ''}原地降级TBTC后备（司机操作约${MODE_CHANGE_TIME}秒）`, { train: tr.id });
       }
       continue;

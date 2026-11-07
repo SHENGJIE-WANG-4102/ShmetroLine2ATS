@@ -819,9 +819,13 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
         driverDoor(sim,tr,platformSide(sim,tr,p));
         return;
       }
+      // 用户（2026-11-07）：ATO 关门时站停倒计时不许跳变。关门前显示的 DEP 就是按
+      // 图定关门预算倒推的发车时刻，关门后照旧显示它（与司机关门同一做法）。
+      const displayAt = dwellDepartureAt(tr);
       const extra = closeDoors(sim, tr, p);
       if (extra < 0) return;
       setDepartureReadyAt(tr, Math.max(sim.t + DOOR_CLOSE_S + extra, tr.autoStartAt ?? 0));
+      tr.departureDisplay = { stop: st, at: displayAt, readyAt: tr.dwellUntil, side: platformSide(sim, tr, p) };
     }
     if (tr.doorsOpen || !psdSafe(ps) || sim.t < (tr.manual ? tr.doorLockedAt ?? 0 : tr.dwellUntil)) return;
     if (!tr.manual && !tr.atoDriver && sim.t < (tr.autoStartAt ?? 0)) return;
@@ -859,7 +863,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     tr.intervalWait = undefined;
     tr.intervalRelease = undefined;
     const remaining = stopError(sim, tr);
-    tr.departureDisplay = { stop: st, at: dwellDepartureAt(tr), remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p) };
+    tr.departureDisplay = { stop: st, at: dwellDepartureAt(tr), remaining: Number.isFinite(remaining) ? remaining : undefined, side: platformSide(sim, tr, p), departedAt: sim.t };
     rememberCompletedCall(sim, tr, st);
     tr.tasks.shift();
     ps.lastDep = sim.t;

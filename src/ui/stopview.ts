@@ -123,8 +123,11 @@ export function departureSeconds(at: number, now: number): number | null {
   return Number.isFinite(at) && at >= 0 ? at >= now ? Math.ceil(at - now) : Math.floor(now - at) : null;
 }
 
+/** 用户决定（2026-11-07）：TDT 列车停稳后亮，起步 5 s 熄灭（进站途中不亮）。 */
 export function departureText(board: DmiData['departureBoard'], now: number): string | null {
-  if (!board || board.headLeftAt !== undefined && now - board.headLeftAt >= 5) return null;
+  if (!board || !board.stood) return null;
+  const gone = board.departedAt ?? board.headLeftAt;
+  if (gone !== undefined && now - gone >= 5) return null;
   if (board.held) return 'H';
   const seconds = departureSeconds(board.at, now);
   return seconds === null ? null : String(seconds);
