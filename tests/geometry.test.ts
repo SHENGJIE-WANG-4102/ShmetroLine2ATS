@@ -13,6 +13,7 @@ function geometry() {
     links:[{a:0,b:1,len:1000,chainA:0,chainB:1000,section:0},{a:1,b:2,len:20,chainA:1000,chainB:1020,section:1},
       {a:2,b:3,len:500,chainA:1020,chainB:1520,section:2},{a:1,b:4,len:50,section:3}],berths:[],platforms:[],
   } as unknown as Topology});
+  Object.defineProperty(g,'p',{value:{detail:false}});
   g.pos=[{row:0,x:0,y:0},{row:0,x:100,y:0},{row:0,x:120,y:20},{row:0,x:180,y:20},{row:0,x:80,y:-30}];
   return g;
 }
@@ -27,7 +28,8 @@ describe('fixed train symbols with independent occupancy',()=>{
         const drawn=segs.reduce((n,s)=>n+Math.hypot(s.x2-s.x1,s.y2-s.y1),0);
         expect(drawn,berth.name).toBeGreaterThanOrEqual(g.platformTrainLength());
       }
-      for(const _ of topo.platforms) expect(g.platformWidth()).toBe(72);
+      // overview: one fixed symbol; station view: the platform's length at the view's scale (用户, D188)
+      expect(g.platformWidth()).toBe(detail?Math.max(72,LINE_INFO.platformLength*3100/(window[1]-window[0])):72);
       for(const berth of topo.berths.filter(b=>b.kind==='platform')) {
         if(!g.pos[topo.links[berth.link].a]||!g.pos[topo.links[berth.link].b])continue;
         const link=topo.links[berth.link];

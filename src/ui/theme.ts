@@ -64,10 +64,10 @@ export const C = {
   trainFail: 0xff4040,
   trainBoxFill: 0x0b131c,
   trainBoxBorder: 0x4f9fdc,
-  /** head marker of a train (CASCO TACS: an amber arrow block at the head) */
   /** switch point ring and number (CASCO, D188) */
   switchRing: 0xd9bf6a,
   switchLabel: 0x57d97a,
+  /** head marker of a train (CASCO TACS: an amber arrow block at the head) */
   trainHead: 0xf2b134,
   onTime: 0x9fb4c8,
   early: 0x5cc8ff,

@@ -1059,7 +1059,11 @@ function turnOnPlatform(sim: Sim, tr: Train, st: StopTask) {
   const kind = driverTurnbackKind(sim.topo, rev), rear = calibratedRearTurnback(sim.topo, rev);
   const unattendedS = turnbackDwell('DTO', rev.minTime, kind, false, rear);
   const driverS = turnbackDwell(tr.mode, rev.minTime, kind, simulatedAmDriver(tr), rear) - unattendedS;
-  tr.dwellUntil = Math.max(tr.dwellUntil, changeFrom + unattendedS) + Math.max(0, driverS);
+  // (the boarding dwell, then the driver; a timetabled departure later than
+  // that absorbs the driver's work like any other slack)
+  const ready = Math.max(tr.depReadyAt, changeFrom + unattendedS) + Math.max(0, driverS);
+  tr.depReadyAt = Math.max(tr.depReadyAt, ready);
+  tr.dwellUntil = Math.max(tr.dwellUntil, changeFrom + unattendedS, ready);
 }
 
 /** the stop has a door cycle: passengers, or a clear-out (清客) */
@@ -2189,9 +2193,6 @@ function returnPathReachable(sim: Sim, tr: Train, berth: number): boolean {
   return false;
 }
 
-/** Depots a train running `d` can still return to from `clearChain` on, nearest
- * first: straight in, or by changing ends on the junction station's platform
- * where the leads join against `d` (that platform must be ahead and reachable). */
 /** Work already granted (requested, active or being released) on the line
  * between chainages `a` and `b`: a train sent that way waits for its end. */
 function possessedBetween(sim: Sim, a: number, b: number): boolean {
@@ -2200,6 +2201,9 @@ function possessedBetween(sim: Sim, a: number, b: number): boolean {
     && p.sections.some(id => sim.topo.sections[id].chainFrom < hi && sim.topo.sections[id].chainTo > lo));
 }
 
+/** Depots a train running `d` can still return to from `clearChain` on, nearest
+ * first: straight in, or by changing ends on the junction station's platform
+ * where the leads join against `d` (that platform must be ahead and reachable). */
 function depotsAhead(sim: Sim, tr: Train, d: TrackDir, clearChain: number, avoidWork = false): { dp: Topology['depots'][number]; index: number }[] {
   const { topo } = sim;
   const where = (dp: Topology['depots'][number]) => {
@@ -2383,7 +2387,7 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     // A front turnback would retarget it to the parallel reverse platform,
     // which may be unreachable once the old route has been entered.
     const afterClear = (station: number) => clearStation === undefined
-      || (d === 'DN' ? station >= clearStation : station <= clearStation);
+      || station === clearStation || ahead(d, clearStation, station);
     // (a platform turnback track retargets the clear-out stop like a front turn)
     // At the clear-out station only onto the berth its issued approach already
     // leads to (a train drawing into a platform turnback track); elsewhere only
@@ -2420,10 +2424,10 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     cur.doors = true;
     if (tr.coupledLen > 0) cur.rescueClear = 'all';
     cur.dep = null;
-    cur.minDwell = 60;
+    cur.minDwell = OPERATIONS.terminalClearS ?? 60;
     tasks.push(cur);
   } else if (next !== undefined && tr.inService) {
-    tasks.push({ k: 'stop', berth: clearBerth ?? stopBerthOnPath(sim, tr, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: 60, note: '清客' });
+    tasks.push({ k: 'stop', berth: clearBerth ?? stopBerthOnPath(sim, tr, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: OPERATIONS.terminalClearS ?? 60, note: '清客' });
   }
   if (reachable) { depotTasks(topo, depot, d, tasks); turnAtClearPlatform(sim, tasks); }
   else {

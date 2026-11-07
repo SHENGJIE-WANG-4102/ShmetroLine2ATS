@@ -319,12 +319,13 @@ export class Geometry {
     return out;
   }
 
-  /** Platform symbol width: fixed on the line overview; true to scale in a
-   * station view, where track and occupation are drawn to scale (用户, D188). */
+  /** Platform symbol width: fixed on the line overview; in a station view the
+   * platform's length at the view's mean metres-per-pixel (用户, D188; node
+   * gaps there are not linear, so this is to scale on average). */
   platformWidth(): number {
     const p = this.p;
     if (!p.detail) return PLATFORM_WIDTH;
-    return Math.max(PLATFORM_WIDTH, LINE_INFO.platformLength * (p.width - p.marginL - p.marginR) / (p.chainTo - p.chainFrom));
+    return Math.max(PLATFORM_WIDTH, LINE_INFO.platformLength * (p.width - p.marginL - p.marginR) / Math.max(1, p.chainTo - p.chainFrom));
   }
   /** One symbol length throughout this drawing, including intervals and depot leads. */
   platformTrainLength(): number { return this.platformWidth() * LINE_INFO.trainLength / LINE_INFO.platformLength; }

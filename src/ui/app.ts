@@ -447,7 +447,7 @@ export class App {
     const head = (t: string) => h('div', { class: 'h' }, t);
     const el = h('div', { class: 'legend-pop', onclick: () => this.toggleLegend() },
       head('轨道区段'),
-      ...i(C.trackFree, '空闲'), ...i(C.routeAuto, '自动通过进路'), ...i(C.routeSet, '进路锁闭'), ...i(C.occComm, 'CBTC 列车占用'),
+      ...i(C.trackFree, '空闲'), ...i(C.routeSet, '进路（列车前方细线，逐段给出）'), ...i(C.occComm, 'CBTC 列车占用'),
       ...i(C.occAxle, '计轴占用（非通信车）'), ...i(C.disturbed, '故障占用'), ...i(C.preset, '预复位 / 临时限速'), ...i(C.blocked, '封锁 / 施工'),
       ...i(C.env, '大风/暴雨限速'), ...i(C.routeGuide, '引导进路'),
       head('信号机'),
@@ -456,8 +456,11 @@ export class App {
       head('列车车次窗（表号-车次）'),
       ...i(C.onTime, '正点'), ...i(C.slightLate, '晚点 2–5 分'), ...i(C.late, '晚点 > 5 分'), ...i(C.early, '早点 > 1 分'),
       ...i(C.fault, '故障 / 紧急制动'), ...i(C.nonService, '非载客'), ...i(C.trainManual, '人工驾驶'), ...i(C.platformHold, '扣车'),
+      ...i(C.trainHead, '车头'),
       head('站台 / 道岔'),
-      ...i(C.crowdLow, '候车人数（条长）'), ...i(C.crowdHigh, '站台拥挤'), ...[h('b', { style: 'background:transparent;border:3px solid #e8eef5' }), h('span', {}, '道岔单锁')], ...[h('b', { style: 'background:transparent;border:3px solid #b07cff' }), h('span', {}, '道岔封锁')],
+      ...i(C.psdClosed, '站台门关闭'), ...i(C.psdOpen, '站台门打开'),
+      ...i(C.crowdLow, '候车人数（条长）'), ...i(C.crowdHigh, '站台拥挤'),
+      ...[h('b', { style: `background:transparent;border:2px solid ${hex(C.switchRing)};border-radius:50%` }), h('span', {}, '道岔岔尖（未开通一侧留缺口）')], ...[h('b',{ style: 'background:transparent;border:3px solid #e8eef5' }), h('span', {}, '道岔单锁')], ...[h('b', { style: 'background:transparent;border:3px solid #b07cff' }), h('span', {}, '道岔封锁')],
       h('div', { class: 'h', style: 'font-size:20px;color:var(--text-dim)' }, '点击关闭'),
     );
     const R = this.R;
