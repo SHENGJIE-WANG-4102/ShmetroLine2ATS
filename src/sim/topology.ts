@@ -227,6 +227,8 @@ export interface TRoute {
   length: number;
   wrongDir: boolean;
   diverging: boolean;
+  /** 用户决定（2026-11-08）：进出折返线、侧线、尽头线和出入段的进路，开放时亮白灯 */
+  shunt?: boolean;
   /** default automatic (fleeting) route */
   fleeting: boolean;
   /** berths that lie on this route (reached while traversing it) */
@@ -372,6 +374,15 @@ export function sharedTransferLink(topo: Topology, link: number): boolean {
  * Without that next-stage proof the platform is not a safe boundary
  * (including a platform-to-depot cab change).
  * No timetable, signal state, driving level or train-specific state is read. */
+/** 站内有两条以上折返线时，其中兼作出入段线的一条可供折返车候发（D189，淞虹路 1/2 道）。
+ * 单条出入段线（远东大道）不算：它被占着时车场就进出不了。 */
+export function turnbackLeadBerth(topo: Topology, berth: number | undefined): boolean {
+  const b = berth === undefined ? undefined : topo.berths[berth];
+  if (!b || b.kind !== 'tail' && b.kind !== 'siding') return false;
+  const list = topo.stations[b.station]?.turnbackBerths ?? [];
+  return list.length > 1 && list.includes(b.id);
+}
+
 export function safeWaitingPoint(topo: Topology, at: number | WaitingPoint, length: number, next: WaitingStage = {}): boolean {
   const berth = typeof at === 'number' ? topo.berths[at] : undefined;
   if (typeof at === 'number' && !berthFits(topo, at, length)) return false;
@@ -1615,6 +1626,7 @@ export function buildTopology(): Topology {
     }
     r.limit = limit;
     r.wrongDir = wrong > 80;
+    r.shunt = r.steps.some((s) => { const kind = sections[links[s.link].section]?.kind; return kind === 'siding' || kind === 'tail' || kind === 'depot'; });
     const sig = signals[r.start];
     r.fleeting = !r.diverging && !r.wrongDir && (sig.role === 'start' || sig.role === 'home') && r.end >= 0 && r.steps.every((s) => {
       const l = links[s.link];

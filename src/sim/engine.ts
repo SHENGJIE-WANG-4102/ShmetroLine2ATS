@@ -17,7 +17,7 @@ import type {
   SimEvent, Snapshot, SwitchState, Train, TrainSnap, ZoneState, StopTask, RadioCall, Possession, EnvState, YardState, VehicleRecord,
   Metrics, ScenarioState, ScenarioReport, StopScore, Bookmark, Incident,
 } from './model';
-import { SEC, SW, SIGF, PLT, SIG_ASPECT } from './model';
+import { SEC, SW, SIGF, PLT, SIG_ASPECT, TDT_OFF_AFTER_DEPART_S } from './model';
 import {
   computeOccupancy, updateInterlocking, trySetRoute, cancelRoute, moveSwitch, sectionUnlock, signalPassed, type CmdResult,
 } from './interlocking';
@@ -390,7 +390,8 @@ export class Sim {
         if (display.remaining !== undefined) display.remaining -= tr.lastDs;
         const platform = this.topo.berths[display.stop.berth].platform;
         if (display.headLeftAt === undefined && this.topo.links[tr.link].platform !== platform) display.headLeftAt = this.t;
-        if (display.headLeftAt !== undefined && this.t - display.headLeftAt >= 5) tr.departureDisplay = undefined;
+        const gone = display.departedAt ?? display.headLeftAt;
+        if (gone !== undefined && this.t - gone >= TDT_OFF_AFTER_DEPART_S) tr.departureDisplay = undefined;
       }
       if (tr.lastDs > 0) {
         const km = tr.lastDs / 1000, record = this.vehicles.get(tr.vehicle);
@@ -799,6 +800,8 @@ export class Sim {
         body, v: tr.v, level: tr.level, comm: tr.comm, mode: tr.mode, eb: tr.eb, phase: tr.phase, delay: tr.delay,
         tbStage: tr.tbStage, depotStage: tr.depotStage,
         load: tr.load, hold: tr.hold, failed: tr.failed, doors: tr.doorsOpen, doorClosing: tr.doorMotion?.kind === 'closing', doorSide: tr.doorSide, doorsAwait: tr.doorsAwait,
+        stopWorkDone: tr.phase === 'dwell' && !tr.doorsOpen && !tr.doorMotion && !tr.doorsAwait
+          && ((tr.doorLockedAt ?? -Infinity) > tr.arrivedAt || !(t0?.k === 'stop' && t0.doors)),
         platSide: t0?.k === 'stop' && this.topo.berths[t0.berth].platform >= 0 && (tr.phase === 'dwell' || (tr.stopDist >= 0 && tr.stopDist < 400)) ? platformSide(this, tr, this.topo.berths[t0.berth].platform) : '',
         inService: tr.inService, hot: hotMark(tr), chain: this.trainChain(tr),
         maReason: tr.maReason, maDist: tr.maDist, vPermit: tr.vPermit, nextSig: tr.nextSignal,

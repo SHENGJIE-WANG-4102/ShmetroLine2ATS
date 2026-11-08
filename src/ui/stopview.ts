@@ -11,8 +11,8 @@
  *
  * Far out the scale follows the distance still to go, with the eye at the left
  * and the end door (and a little beyond) at the right edge, so the whole
- * platform and train are in view. Once the cab reaches PSD door 2-5 the zoom
- * stops (用户决定): from there on the scale is fixed and the train runs across
+ * platform and train are in view. Once the cab reaches PSD door 5-1 the zoom
+ * stops (用户决定，11-08 由 2-5 改为 5-1): from there on the scale is fixed and the train runs across
  * the picture towards the last pillar, so its distance and speed read true.
  *
  * Geometry is approximate 【假设】: cars of 23.25 m (8 × = 186 m), five doors
@@ -22,21 +22,26 @@
  * car's front door) 【假设】.
  */
 import { h } from './dom';
-import type { TrainSnap, DmiData } from '../sim/model';
+import { TDT_OFF_AFTER_DEPART_S, type TrainSnap, type DmiData } from '../sim/model';
 import { LINE as CURRENT_LINE, STATIONS } from '../data/current';
 import { FONT_CN } from './theme';
 
-const W = 760;
+/** logical length along the track (drawn bottom → top: the train runs upwards, 用户决定 2026-11-08 竖排放 DMI 右侧) */
+export const STOPVIEW_W = 1320;
+const W = STOPVIEW_W;
+/** logical width across the track (top = driver's left = screen left) */
 const H = 200;
 const FONT = `Arial, "Helvetica Neue", Helvetica, sans-serif, ${FONT_CN}`;
-/** screen x of the driver's eye while the view still zooms */
-const XE_FAR = 176;
+/** position of the driver's eye (from the back end of the view) while the view still zooms:
+ * just clear of the caption at the bottom, so the fixed view reaches down to PSD door 5-1 (用户 2026-11-08) */
+const XE_FAR = 100;
 /** PSD door (car-door) the cab passes when the zoom stops */
-const FREEZE_AT = { car: 2, door: 5 };
+const FREEZE_AT = { car: 5, door: 1 };
 /** screen x kept for the end of the view ahead: the end door and a little beyond */
 const X_AHEAD = W - 24;
-/** across the track the picture shrinks with the scale (true proportions), down to this */
-const K_MIN = 0.3;
+/** across the track the picture used to shrink with the scale; in the tall narrow view it keeps its
+ * full width at every scale, else it narrows to a thin line far out (用户 2026-11-08) */
+const K_MIN = 1;
 /** the line it shrinks towards: the middle of the view */
 const Y0 = 95;
 /** metres shown beyond the stopping point (pillar): the end door and some wall */
@@ -123,11 +128,11 @@ export function departureSeconds(at: number, now: number): number | null {
   return Number.isFinite(at) && at >= 0 ? at >= now ? Math.ceil(at - now) : Math.floor(now - at) : null;
 }
 
-/** 用户决定（2026-11-07）：TDT 列车停稳后亮，起步 5 s 熄灭（进站途中不亮）。 */
+/** 用户决定（2026-11-07/08）：TDT 像信号机一样一直立在那里，只亮灭：列车停稳后亮，起步 10 s 熄灭（进站途中不亮）。 */
 export function departureText(board: DmiData['departureBoard'], now: number): string | null {
   if (!board || !board.stood) return null;
   const gone = board.departedAt ?? board.headLeftAt;
-  if (gone !== undefined && now - gone >= 5) return null;
+  if (gone !== undefined && now - gone >= TDT_OFF_AFTER_DEPART_S) return null;
   if (board.held) return 'H';
   const seconds = departureSeconds(board.at, now);
   return seconds === null ? null : String(seconds);
@@ -136,13 +141,23 @@ export function departureText(board: DmiData['departureBoard'], now: number): st
 const DIGITS = ['111101101101111', '010110010010111', '111001111100111', '111001111001111', '101101111001001',
   '111100111001111', '111100111101111', '111001001001001', '111101111101111', '111101111001111'];
 
-function dotNumber(c: CanvasRenderingContext2D, text: string, right: number, y: number, color = '#31ef59') {
-  const pitch = 3, w = text.length * 12 + 6, x = right - w;
+const TDT_SLOTS = 3;
+/** TDT 屏体固定画出（三位点阵，灭灯时只见暗点），有内容时右对齐点亮。 */
+function tdtBoard(c: CanvasRenderingContext2D, text: string | null, right: number, y0: number, color = '#31ef59') {
+  const pitch = 3, w = TDT_SLOTS * 12 + 6;
+  // the view is drawn rotated: turn the board about its centre so that it reads upright
+  c.save(); c.translate(right - w / 2, y0); c.rotate(Math.PI / 2);
+  const x = -w / 2, y = 0;
   c.fillStyle = '#07110b'; c.fillRect(x, y - 11, w, 23);
+  c.strokeStyle = '#2a3038'; c.lineWidth = 1; c.strokeRect(x + .5, y - 10.5, w - 1, 22);
+  const dot = (slot: number, p: number) => { c.beginPath(); c.arc(x + 5 + slot * 12 + p % 3 * pitch, y - 6 + Math.floor(p / 3) * pitch, 1.1, 0, Math.PI * 2); c.fill(); };
+  c.fillStyle = '#12261a';
+  for (let slot = 0; slot < TDT_SLOTS; slot++) for (let p = 0; p < 15; p++) dot(slot, p);
+  if (text === null) { c.restore(); return; }
+  const shown = text.length > TDT_SLOTS ? '9'.repeat(TDT_SLOTS) : text, first = TDT_SLOTS - shown.length;
   c.fillStyle = color;
-    [...text].forEach((n, i) => [...(n === 'H' ? '101101111101101' : DIGITS[Number(n)])].forEach((bit, p) => {
-    if (bit === '1') { c.beginPath(); c.arc(x + 5 + i * 12 + p % 3 * pitch, y - 6 + Math.floor(p / 3) * pitch, 1.1, 0, Math.PI * 2); c.fill(); }
-  }));
+  [...shown].forEach((n, i) => [...(n === 'H' ? '101101111101101' : DIGITS[Number(n)])].forEach((bit, p) => { if (bit === '1') dot(first + i, p); }));
+  c.restore();
 }
 
 /** a step of `base` metres, coarsened so that marks stay at least `minPx` apart */
@@ -161,8 +176,9 @@ export class StopView {
 
   setResolution(r: number) {
     this.res = Math.max(1, r);
-    this.el.width = Math.round(W * this.res);
-    this.el.height = Math.round(H * this.res);
+    // rotated: the canvas is H wide and W tall
+    this.el.width = Math.round(H * this.res);
+    this.el.height = Math.round(W * this.res);
   }
 
   /** distance the head still has to go to its stopping point, NaN when no stop is near */
@@ -177,12 +193,16 @@ export class StopView {
     const side = board?.side || t.platSide;
     const rem = board?.side && Number.isFinite(board.remaining) ? board.remaining : StopView.remaining(t);
     const show = !!side && Number.isFinite(rem) && rem < STOPVIEW_RANGE;
-    this.el.style.display = show ? 'block' : 'none';
+    // keep its place beside the DMI when hidden, so the DMI does not jump
+    this.el.style.visibility = show ? 'visible' : 'hidden';
     if (!show) return;
     const c = this.ctx;
-    c.setTransform(this.res, 0, 0, this.res, 0, 0);
+    // logical (x along the track, y across) → screen (y, W − x): the train runs upwards
+    c.setTransform(0, -this.res, this.res, 0, 0, W * this.res);
     c.fillStyle = C.bg;
     c.fillRect(0, 0, W, H);
+    /** text drawn upright on screen at a logical point */
+    const upright = (x: number, y: number, draw: () => void) => { c.save(); c.translate(x, y); c.rotate(Math.PI / 2); draw(); c.restore(); };
     const { px: PX, xe: XE } = stopViewScale(rem, Math.max(BEYOND, (board?.signalOffset ?? 0) + 5));
     // drawn for a platform on top (driver's left); mirrored otherwise
     const top = side === 'L';
@@ -255,10 +275,12 @@ export class StopView {
           const lw = c.measureText(label).width + (small ? 4 : 6);
           const cx = sx(dc);
           // (plates and the stop board keep their size at every scale)
-          c.fillStyle = C.sign;
-          c.fillRect(cx - lw / 2, P(45) - ph / 2, lw, ph);
-          c.fillStyle = C.number;
-          c.fillText(label, cx, P(45) + 0.5);
+          upright(cx, P(45), () => {
+            c.fillStyle = C.sign;
+            c.fillRect(-lw / 2, -ph / 2, lw, ph);
+            c.fillStyle = C.number;
+            c.fillText(label, 0, 0.5);
+          });
         });
       }
       // the last pillar, the end door (端门, swinging) and the stop board 8
@@ -276,7 +298,7 @@ export class StopView {
         c.font = `bold 19px ${FONT}`;
         c.textAlign = 'center';
         c.textBaseline = 'alphabetic';
-        c.fillText('8', sx(0), by + 20);
+        upright(sx(0), by + 13, () => c.fillText('8', 0, 7));
       }
     }
 
@@ -287,12 +309,12 @@ export class StopView {
       c.beginPath(); c.moveTo(x, P(67)); c.lineTo(x, y); c.stroke();
       c.fillStyle = '#10151c'; c.fillRect(x - 7, y - 11, 14, 22);
       // DARK: the wayside signal is extinguished for a CBTC train with its route set (D188), not a stop aspect
-      c.fillStyle = board.aspect === 'G' ? C.green : board.aspect === 'Y' || board.aspect === 'GUIDE' ? '#ffe153' : board.aspect === 'DARK' ? '#2a3038' : C.red;
+      c.fillStyle = board.aspect === 'G' ? C.green : board.aspect === 'W' ? '#eef3f8' : board.aspect === 'Y' || board.aspect === 'GUIDE' ? '#ffe153' : board.aspect === 'DARK' ? '#2a3038' : C.red;
       c.beginPath(); c.arc(x, y, 4, 0, Math.PI * 2); c.fill();
       const text = departureText(board, now);
-      if (text !== null) dotNumber(c, text, x - 13, y, text !== 'H' && now > board.at ? '#ff4545' : '#31ef59');
+      tdtBoard(c, text, x - 13, y, text !== null && text !== 'H' && now > board.at ? '#ff4545' : '#31ef59');
       c.fillStyle = '#ffffff'; c.font = `10px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText(board.signalName, x, P(55));
+      upright(x, P(55), () => c.fillText(board.signalName, 0, 0));
     }
 
     // ---- the train: the nose EYE ahead of the eye, cars behind it
@@ -343,20 +365,23 @@ export class StopView {
     c.closePath();
     c.fill();
 
-    // ---- caption: station and side; the error once standing
-    c.textAlign = 'left';
-    c.textBaseline = 'alphabetic';
-    c.font = `15px ${FONT}`;
-    c.fillStyle = C.dim;
-    const capY = top ? H - 6 : 16;
+    // ---- caption in screen space at the bottom (behind the train; ahead stays clear):
+    // station and side, and the error once standing
+    c.setTransform(this.res, 0, 0, this.res, 0, 0);
     const st = STATIONS[board?.station ?? t.nextStation]?.name ?? '';
-    c.fillText(`${st}  站台在${top ? '左' : '右'}侧`, 10, capY);
+    c.fillStyle = 'rgba(11,15,22,.85)';
+    c.fillRect(0, W - 70, H, 70);
+    c.textAlign = 'center';
+    c.textBaseline = 'alphabetic';
+    c.fillStyle = C.dim;
+    c.font = `15px ${FONT}`;
+    c.fillText(`${st}`, H / 2, W - 52, H - 8);
+    c.fillText(`站台在${top ? '左' : '右'}侧`, H / 2, W - 33);
     if (t.v < 0.05) {
       const e = Math.abs(rem);
-      c.textAlign = 'right';
-      c.font = `bold 17px ${FONT}`;
+      c.font = `bold 18px ${FONT}`;
       c.fillStyle = e <= 0.3 ? C.green : e <= 1 ? C.eye : C.red;
-      c.fillText(`${rem >= 0 ? '欠标' : '过标'} ${e.toFixed(2)} m`, W - 10, capY);
+      c.fillText(`${rem >= 0 ? '欠标' : '过标'} ${e.toFixed(2)} m`, H / 2, W - 10);
     }
   }
 }

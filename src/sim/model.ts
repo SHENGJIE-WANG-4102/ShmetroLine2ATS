@@ -21,7 +21,8 @@ export type EbCause = '' | 'atp' | 'overspeed' | 'comm' | 'zc' | 'spad' | 'rm' |
 export type ForceLevel = 'AUTO' | 'CBTC' | 'TBTC';
 export type TrackDir = 'DN' | 'UP';
 export type ZoneState = 'CBTC' | 'TBTC' | 'ZCFAIL';
-export type Aspect = 'R' | 'G' | 'Y' | 'GUIDE' | 'DARK' | 'FAIL';
+/** W：白灯，进出折返线/侧线/车场的进路开放（用户决定 2026-11-08） */
+export type Aspect = 'R' | 'G' | 'Y' | 'GUIDE' | 'DARK' | 'FAIL' | 'W';
 
 // ---------------------------------------------------------------- plan
 
@@ -188,12 +189,18 @@ export interface UtoVehicleState {
   stage: 'sleep' | 'power' | 'pantograph' | 'selfTest' | 'ready' | 'clear' | 'wash';
   until: number; cycles: number; lastTakeoverDay?: string;
 }
+/** 用户决定（2026-11-08）：TDT 起步后 10 s 熄灭 */
+export const TDT_OFF_AFTER_DEPART_S = 10;
+
 export interface Train {
   uto?: UtoControlState;
   utoDoorWarningAt?: number;
   dmiAcknowledged?: string[];
   randomOverrunBerth?: number;
   randomOverrunM?: number;
+  /** 本次自动对标的停车误差（m，正为过标）及所属停车位（OPERATIONS.atoStopAccuracy） */
+  atoStopBias?: number;
+  atoStopBiasBerth?: number;
   id: number;
   vehicle: string;
   svc: string;
@@ -300,6 +307,7 @@ export interface Train {
   /** Driver closing retains the ATS display target independently of door readiness;
    * readyAt identifies the readiness clock at capture, so a later ATS adjustment wins.
    * The platform remains until five seconds after the head leaves it. */
+  /** 用户决定（2026-11-08）：TDT 起步 10 s 后熄灭；发车显示保留到那时 */
   departureDisplay?: { stop: StopTask; at?: number; readyAt?: number; remaining?: number; side: '' | 'L' | 'R'; headLeftAt?: number; departedAt?: number };
   load: number;
   delay: number;
@@ -745,6 +753,8 @@ export interface TrainSnap {
   doorClosing: boolean;
   doorSide: '' | 'L' | 'R';
   doorsAwait: boolean;
+  /** standing at its stop with the station work done: doors closed and locked again (or no door work) */
+  stopWorkDone?: boolean;
   /** side of the platform at the stop the train stands at or approaches ('' none) */
   platSide: '' | 'L' | 'R';
   inService: boolean;
@@ -1002,6 +1012,6 @@ export type FromWorker =
 // bit flags for packed state arrays
 export const SEC = { OCC: 1, COMM: 2, LOCK: 4, DIST: 8, PRESET: 16, TSR: 32, TRAIN: 64, ROUTEFLEET: 128, BLOCK: 256, POSS: 512, ENV: 1024, ROUTEMAN: 2048, GUIDE: 4096 } as const;
 export const SW = { R: 1, MOVING: 2, FAILED: 4, LOCKED: 8, SINGLE: 16, FIELD: 32, TARGET_R: 64, BLOCKED: 128 } as const;
-export const SIG_ASPECT: Aspect[] = ['R', 'G', 'Y', 'GUIDE', 'DARK', 'FAIL'];
+export const SIG_ASPECT: Aspect[] = ['R', 'G', 'Y', 'GUIDE', 'DARK', 'FAIL', 'W'];
 export const SIGF = { ROUTE: 8, ARSOFF: 16, AUTOPASS: 32, FAILED: 64, MANUAL: 128 } as const;
 export const PLT = { HOLD: 1, SKIP: 2, ESP: 4, PSDOPEN: 8, PSDFAULT: 16, BYPASS: 32, TRAIN: 64, SURGE: 128 } as const;

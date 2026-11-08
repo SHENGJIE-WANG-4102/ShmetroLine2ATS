@@ -367,14 +367,16 @@ export class CommandPanel {
     if (this.dmiTrain !== id) { this.dmi.reset(); this.dmiTrain = id; }
     this.store.send({ type: 'dmi', train: id });
     this.dmi.showLever(isPlayerDriving(t0));
-    this.el.append(this.dmi.el);
-    this.el.append(this.stopView.el);
-    if (t0.atoDriver) this.el.append(h('div', { class: 'keys' }, 'ATO启动：发车条件满足后同时按住 F + G'));
-    if (isPlayerDriving(t0)) this.el.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 右门 · ', h('b', {}, 'U'), ' 左门 · 鼠标滚轮/点击手柄档位'));
-    if (isPlayerDriving(t0)) this.el.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
+    // 用户决定（2026-11-08）：对标近景竖排放在 DMI 右侧，比 DMI 长；它靠右浮动，
+    // DMI 下面的列车信息、按钮顺着排到它左边，不留空白
+    const flow = h('div', { class: 'drv-flow' }, this.stopView.el, this.dmi.el);
+    this.el.append(flow);
+    if (t0.atoDriver) flow.append(h('div', { class: 'keys' }, 'ATO启动：发车条件满足后同时按住 F + G'));
+    if (isPlayerDriving(t0)) flow.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 右门 · ', h('b', {}, 'U'), ' 左门 · 鼠标滚轮/点击手柄档位'));
+    if (isPlayerDriving(t0)) flow.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
     const scores = h('div', { class: 'scores' });
-    if (t0.drv || t0.manual) this.el.append(h('div', { class: 'sect-title' }, '人工驾驶记录（对标误差 / 得分）'), scores);
-    this.el.append(this.liveKv(() => {
+    if (t0.drv || t0.manual) flow.append(h('div', { class: 'sect-title' }, '人工驾驶记录（对标误差 / 得分）'), scores);
+    flow.append(this.liveKv(() => {
       const t = this.store.snap!.trains.find((x) => x.id === id);
       if (!t) return [['状态', '已下线']];
       const dir = this.trainDir(t);
@@ -409,8 +411,8 @@ export class CommandPanel {
     const tbOpts = topo.stations.filter((s) => turnbackAt(topo, s.index, 'DN') || turnbackAt(topo, s.index, 'UP'));
     const intervalHeld = t0.halt?.code === 'INTERVAL_LIMIT';
     const release = t0.hold || intervalHeld;
-    this.el.append(h('div', { class: 'sect-title' }, '调度命令'));
-    this.el.append(h('div', { class: 'cmdgrid' },
+    flow.append(h('div', { class: 'sect-title' }, '调度命令'));
+    flow.append(h('div', { class: 'cmdgrid' },
       this.btn(release ? '放行' : '扣车', { title: `${release ? '放行' : '扣车'} 列车 ${formatTrainNumber(t0.svc, t0.trip, true)}`, cmd: { c: 'trainHold', train: id, on: !release },
         detail: intervalHeld ? '仅放行本站这一次区间限车，仍须信号开放并满足ATP防护。' : undefined }),
       this.btn('恢复接续', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 故障恢复接续`, cmd: { c: 'recoverService', train: id }, detail: '仅在已完成车次的终点停站办理。取消已错过的完整往返车次，按原图接续同一终点的近期始发；无近期接续则保留计划，须另行人工调整。已完成车次和历史晚点保留。' }),
@@ -426,16 +428,16 @@ export class CommandPanel {
       const tb = turnbackAt(topo, s.index, dir);
       return h('option', { value: s.index }, `${s.name}（${tb ? tb.kind === 'rear' ? '站后' : '站前' : '反向折返'}）`);
     })) as HTMLSelectElement;
-    this.el.append(h('div', { class: 'form' }, h('label', {}, '跳停'), skipSel,
+    flow.append(h('div', { class: 'form' }, h('label', {}, '跳停'), skipSel,
       this.btn('设置跳停', () => void confirmAndSend(this.store, { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 跳停 ${STATIONS[Number(skipSel.value)].name}`, cmd: { c: 'trainSkip', train: id, station: Number(skipSel.value), on: true } }))));
-    this.el.append(h('div', { class: 'form' }, h('label', {}, '人工折返'), tbSel,
+    flow.append(h('div', { class: 'form' }, h('label', {}, '人工折返'), tbSel,
       this.btn('折返', () => tbSel.value && void confirmAndSend(this.store, { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 人工折返于 ${STATIONS[Number(tbSel.value)].name}`, cmd: { c: 'turnback', train: id, station: Number(tbSel.value) }, detail: '列车在折返站清客折返，按调整车次接续反方向运营。' }), 'primary')));
     if (t0.failed) {
       const behind = this.store.snap!.trains.filter((x) => x.id !== id && this.trainDir(x) === dir && (dir === 'DN' ? x.chain < t0.chain : x.chain > t0.chain))
         .sort((a, b) => Math.abs(a.chain - t0.chain) - Math.abs(b.chain - t0.chain)).slice(0, 4);
       const rs = h('select', {}, ...behind.map((x) => h('option', { value: x.id }, `${formatTrainNumber(x.svc, x.trip, true)}（后方 ${Math.round(Math.abs(x.chain - t0.chain))}m）`))) as HTMLSelectElement;
-      this.el.append(h('div', { class: 'sect-title' }, '故障救援'));
-      this.el.append(h('div', { class: 'form' }, h('label', {}, '救援列车'), rs,
+      flow.append(h('div', { class: 'sect-title' }, '故障救援'));
+      flow.append(h('div', { class: 'form' }, h('label', {}, '救援列车'), rs,
         this.btn('组织救援', () => rs.value && void confirmAndSend(this.store, { title: `组织列车 ${rs.selectedOptions[0]?.textContent} 救援故障列车 ${formatTrainNumber(t0.svc, t0.trip, true)}`, cmd: { c: 'rescue', failed: id, rescuer: Number(rs.value) }, critical: true, detail: '救援列车清客后以RM模式接近连挂（≤3km/h），推送故障车至前方站清客后回段。' }), 'danger')));
     }
     this.live?.();

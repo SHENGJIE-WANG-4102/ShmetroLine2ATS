@@ -71,7 +71,7 @@ export function drawStatusGrid(c: CanvasRenderingContext2D, t: TrainSnap, d: Dmi
   const phaseText: Record<TrainSnap['phase'], string> = { run: t.v > .05 ? '运行' : '停车', dwell: '停站', reversing: '折返', stabled: '停放', coupling: '连挂', failed: '故障', depotExit: '出段' };
   text(phaseText[t.phase], 440, 30, 20);
   const departure = d?.departureBoard;
-  const granted = departure && !departure.held && !t.eb && (['G', 'Y', 'GUIDE'].includes(departure.aspect) || departure.aspect === 'DARK' && t.maDist > 0);
+  const granted = departure && !departure.held && !t.eb && (['G', 'Y', 'W', 'GUIDE'].includes(departure.aspect) || departure.aspect === 'DARK' && t.maDist > 0);
   text('发车授权', 560, 30, 20); text(departure ? granted ? '允许' : '等待' : '--', 652, 30, 20);
 
   // ---- speed dial, 0–90 km/h, 0 at lower left

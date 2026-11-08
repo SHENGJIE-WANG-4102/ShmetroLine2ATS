@@ -195,6 +195,8 @@ export interface CoreLineData {
   OPERATIONS: {
     /** Per approach, independent of weather; zero preserves the existing adhesion model. */
     atoRandomOverrunProbability: number;
+    /** ATO 自动对标的停车误差：在 ±maxM 内随机，overshootShare 为过标比例（缺省为不加误差） */
+    atoStopAccuracy?: { maxM: number; overshootShare: number };
     uto?: {
       crewLabel: string; doorWarningS: number; turnbackS: number;
       wakeLeadS: number; powerS: number; pantographS: number; selfTestS: number;
@@ -250,6 +252,17 @@ export interface CoreLineData {
     terminalClearS?: number;
     /** Change of ends on a platform turnback track (s), by station ID; absent = 40. */
     platformChangeEndsS?: Record<string, number>;
+    /** Platform change of ends on a depot move (a reverse portal) at these junction stations is not
+     * used in normal service; a move that needs one turns at the nearest turnback beyond instead.
+     * Early pull-outs (before `pullOutBefore`) and night pull-ins (from `pullInFrom`) may still
+     * reverse there when that turn does not fit. Stations not listed reverse as before. */
+    portalReversal?: { stations: string[]; pullOutBefore: string; pullInFrom: string };
+    /** Depot moves lying wholly between these two stations run without passengers at any hour
+     * (they only bring a car to its first service), overriding the carry-after-opening rule. */
+    emptyLegs?: [string, string][];
+    /** No car enters a depot before this clock (end of the morning peak): cars that pulled out keep
+     * working through the peak; balancing moves wait for the day or the night. */
+    noDepotReturnBefore?: string;
     depotReturns: {
         depot: string;
         dir: "UP" | "DN";

@@ -632,7 +632,7 @@ export function passAuthorised(sim: Sim, tr: Train, sigId: number, travelled: nu
   if (ar.state !== 'locked') return false;
   if (ar.entered && !ar.fleeting && ar.owner !== tr.id) return false;
   if (ar.cancelAt > 0 && ar.committed !== tr.id) return false;
-  return !rm || sg.aspect === 'G' || sg.aspect === 'Y' || sg.aspect === 'DARK';
+  return !rm || sg.aspect === 'G' || sg.aspect === 'Y' || sg.aspect === 'W' || sg.aspect === 'DARK';
 }
 
 function spad(sim: Sim, tr: Train, sigId: number) {
@@ -858,6 +858,21 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     &&scan.stopDist<100&&scan.stopDist>10&&tr.v>1&&tr.randomOverrunBerth!==approach.berth) {
     tr.randomOverrunBerth=approach.berth;
     if(sim.rng()<OPERATIONS.atoRandomOverrunProbability)tr.randomOverrunM=2+sim.rng()*6;
+  }
+  // 自动对标误差：每次进站抽一次，过标/欠标比例与上限取自线路数据（国标 ±0.3 m 内）
+  const accuracy=OPERATIONS.atoStopAccuracy;
+  if(accuracy&&!tr.manual&&(tr.mode==='DTO'||tr.mode==='AM')&&approach?.k==='stop'&&approach.doors
+    &&scan.stopDist<100&&scan.stopDist>10&&tr.atoStopBiasBerth!==approach.berth) {
+    tr.atoStopBiasBerth=approach.berth;
+    // 独立的确定性抽样（种子、车、停车位、时刻），不消耗 sim.rng，免得一次对标改动其他随机事件的序列
+    const u=(k:number)=>{let h=(sim.config.seed^Math.imul(tr.id+1,0x9e3779b1)^Math.imul(approach.berth+1,0x85ebca6b)^Math.imul(Math.floor(sim.t)+k,0xc2b2ae35))>>>0;
+      h=Math.imul(h^h>>>16,0x7feb352d);h=Math.imul(h^h>>>15,0x846ca68b);return ((h^h>>>16)>>>0)/4294967296;};
+    const over=u(0)<accuracy.overshootShare, size=accuracy.maxM*(.05+.85*u(7919));
+    tr.atoStopBias=over?size:-size;
+  }
+  if(tr.atoStopBias!==undefined&&!tr.randomOverrunM&&!tr.manual&&approach?.k==='stop'&&tr.atoStopBiasBerth===approach.berth) {
+    const remaining=stopError(sim,tr)+tr.atoStopBias;
+    if(Number.isFinite(remaining)&&Number.isFinite(scan.stopDist)&&scan.maDist>remaining+1)scan.stopDist=Math.max(0,remaining);
   }
   if(tr.randomOverrunM&&approach?.k==='stop'&&tr.randomOverrunBerth===approach.berth) {
     const remaining=stopError(sim,tr)+tr.randomOverrunM;

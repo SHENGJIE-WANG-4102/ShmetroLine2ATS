@@ -51,7 +51,8 @@ export function reverseToMark(s:Sim,t:Sim['trainList'][number]) {
   s.command({c:'reverser',train:t.id,position:-1});
   for(let n=0;n<1200&&t.phase==='run';n++) {
     const err=stopError(s,t);
-    s.drive(t.id,err> -1.5?-7:t.v>.8?-2:1);
+    // stopped short of the mark window: creep back again, as a driver would
+    s.drive(t.id,err> -1.5?(t.v<.01&&err< -1?1:-7):t.v>.8?-2:1);
     s.step();
   }
   return stopError(s,t);

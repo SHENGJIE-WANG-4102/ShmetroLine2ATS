@@ -913,7 +913,7 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
       return;
     }
     tr.retreat = undefined;
-    tr.randomOverrunM=undefined;tr.randomOverrunBerth=undefined;tr.utoDoorWarningAt=undefined;
+    tr.randomOverrunM=undefined;tr.randomOverrunBerth=undefined;tr.atoStopBias=undefined;tr.atoStopBiasBerth=undefined;tr.utoDoorWarningAt=undefined;
     tr.departureDisplay = undefined;
     const duty = sim.plan.blocks[tr.block];
     if (duty?.start.kind === 'stable' && duty.start.berth === task.berth && duty.trips[0] === task.trip

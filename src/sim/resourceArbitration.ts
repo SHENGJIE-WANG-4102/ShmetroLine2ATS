@@ -4,7 +4,7 @@
 import type { Sim } from './engine';
 import { STANDBY_CALL, type Task, type Train, type StopTask } from './model';
 import type { TrackPoint, RouteStep, WaitingStage } from './topology';
-import { berthFits, pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, topologyResourceLinks, sharedTransferLink, turnbackBerthsForConsist, occupiedTurnbackBerth, stablingBerth } from './topology';
+import { berthFits, pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, turnbackLeadBerth, topologyResourceLinks, sharedTransferLink, turnbackBerthsForConsist, occupiedTurnbackBerth, stablingBerth } from './topology';
 import { approachLocked, committedTrain } from './interlocking';
 import { canStopBeforeSignal } from './protection';
 import { SIGNAL_MARGIN } from './protection';
@@ -137,6 +137,13 @@ function sharedLink(sim: Sim, link: number): boolean {
   return sharedTransferLink(sim.topo, link);
 }
 
+/** 折返车停在本站兼出入段线的折返线上（折返中或折返后候发），按 D189 可就地候发。 */
+function turnbackLeadAt(sim: Sim, tr: Train): boolean {
+  const task = tr.tasks[0];
+  const berth = task?.k === 'reverse' ? task.chosen : task?.k === 'stop' ? task.turnbackWaitBerth : undefined;
+  return turnbackLeadBerth(sim.topo, berth) && tr.body.some(part => part.link === sim.topo.berths[berth!].link);
+}
+
 function unsafeBerth(sim: Sim, berth: number): boolean {
   const b = sim.topo.berths[berth];
   return sharedLink(sim, b.link) || b.reverse;
@@ -167,7 +174,8 @@ function refreshTransits(sim: Sim) {
     const goal = sim.topo.berths[option.phases.at(-1)!.goal];
     const point = { link: tr.link, off: tr.off, dir: tr.dir, incoming: tr.hist };
     const independent = safeWaitingPoint(sim.topo, point, tr.len);
-    const parked = (goal.kind === 'tail' || goal.kind === 'siding') && independent && tr.body.some(b => b.link === goal.link);
+    const parked = (goal.kind === 'tail' || goal.kind === 'siding') && tr.body.some(b => b.link === goal.link)
+      && (independent || safeWaitingPoint(sim.topo, point, tr.len, { turnbackLead: turnbackLeadAt(sim, tr) }));
     // A turn-platform boundary retains only its physical context until the
     // separate departure; its next allocation no longer owns the old exit.
     const platform = goal.kind === 'platform' && !resources.has(goal.link) && independent
@@ -418,7 +426,7 @@ function optionsFor(sim: Sim, tasks: Task[], start: TrackPoint, length: number, 
         const rear = reversed();
         return !!rear && safeWaitingPoint(sim.topo, { ...rear,
           incoming: path.slice().reverse().map(s => ({ link: s.link, dir: -s.dir as 1 | -1 })),
-        }, length, stageBeyondPlatform(sim, tasks, nextIndex, rear, berth.platform));
+        }, length, { ...stageBeyondPlatform(sim, tasks, nextIndex, rear, berth.platform), turnbackLead: turnbackLeadBerth(sim.topo, goal) });
       };
       // The common topology rule ends at an independent siding, or at a
       // whole-platform cab change whose next movement is ordinary main line.
@@ -512,7 +520,8 @@ export function sourceReadyAt(sim: Sim, task: Task, tr?: Train): number {
     if (!tr || !link || !berth || tr.lastStation !== berth.station || !tr.body.some(part => part.link === berth.link)
       || tr.phase !== 'reversing' && tr.phase !== 'run' || tr.phase === 'run' && (tr.v >= .05 || tr.lastDs > 1e-6)
       || kind !== 'tail' && kind !== 'siding'
-      || !safeWaitingPoint(sim.topo, { link: tr.link, off: tr.off, dir: tr.dir, incoming: tr.hist }, tr.len)) return -Infinity;
+      || !safeWaitingPoint(sim.topo, { link: tr.link, off: tr.off, dir: tr.dir, incoming: tr.hist }, tr.len,
+        { turnbackLead: turnbackLeadBerth(sim.topo, task.turnbackWaitBerth) })) return -Infinity;
   }
   const departure = sourceDepartureAt(sim, task, tr);
   return departure === null ? -Infinity : departure - STANDBY_CALL;
@@ -596,7 +605,8 @@ function makeRequest(sim: Sim, id: number, tasks: Task[], point: TrackPoint, len
   const turnPlatform = !!tr && sim.topo.links[tr.link].platform >= 0 && !!transit?.option.resourceLinks?.has(tr.link);
   const safeHere = !!tr && safeWaitingPoint(sim.topo,
     { link: tr.link, off: tr.off, dir: tr.dir, incoming: tr.hist }, length,
-    turnPlatform ? stageBeyondPlatform(sim, tasks, first, { link: tr.link, off: tr.off, dir: tr.dir }, sim.topo.links[tr.link].platform) : {});
+    turnPlatform ? stageBeyondPlatform(sim, tasks, first, { link: tr.link, off: tr.off, dir: tr.dir }, sim.topo.links[tr.link].platform)
+      : { turnbackLead: turnbackLeadAt(sim, tr) });
   const committed = !!tr && firstPhase.routes.some(rid => {
     const ar = sim.routes.get(rid);
     return ar && (committedTrain(sim, sim.topo.routes[rid].start) === tr.id

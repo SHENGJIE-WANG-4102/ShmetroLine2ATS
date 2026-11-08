@@ -460,15 +460,10 @@ function computeAspect(sim: Sim, i: number) {
   if (ar.entered && !ar.fleeting) return 'R';
   const r = topo.routes[rid];
   for (const { sw, pos } of r.switches) if (swPos(sim, sw) !== pos) return 'R';
-  let comm = false;
+  // 用户决定（2026-11-08，实拍折返红→白→红）：信号机一直点灯，CBTC 车压入进路也回红灯，不再灭灯
   for (const s of r.sections) {
     const st = sim.sec[s];
-    if (st.disturbed || st.preset) return 'R';
-    if (st.occ) {
-      if (st.commOnly && sim.zoneState[topo.sections[s].zone] === 'CBTC') comm = true;
-      else return 'R';
-    }
+    if (st.disturbed || st.preset || st.occ) return 'R';
   }
-  if (comm) return 'DARK';
-  return r.diverging ? 'Y' : 'G';
+  return r.shunt ? 'W' : r.diverging ? 'Y' : 'G';
 }

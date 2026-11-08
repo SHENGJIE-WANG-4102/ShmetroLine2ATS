@@ -136,7 +136,7 @@ function newApplicantRoute(keepPeer = false) {
   expect(tr.body.every(b => b.from >= 0 && b.to <= sim.topo.links[b.link].len && b.to >= b.from)).toBe(true);
   sim.t += 6; updateInterlocking(sim);
   expect(route.state).toBe('locked');
-  expect(['G','Y']).toContain(sim.sig[sim.topo.routes[rid].start].aspect);
+  expect(['G','Y','W']).toContain(sim.sig[sim.topo.routes[rid].start].aspect);
   expect(tr.off).toBeCloseTo(reverseBerth.offset);
   expect(reverseBerth.dir).toBe(tr.dir);
   expect(after.link).toBe(tr.link);

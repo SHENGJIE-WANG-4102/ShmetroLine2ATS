@@ -844,6 +844,7 @@ export class TrackView {
           break;
         case 'G': g.lamp.tint = detail || !cbtc ? C.sigGreen : 0x2f6b48; break;
         case 'Y': g.lamp.tint = detail || !cbtc ? C.sigYellow : 0x7a6a20; break;
+        case 'W': g.lamp.tint = detail || !cbtc ? C.sigWhite : 0x8a9099; break;
         case 'GUIDE':
           g.lamp.tint = C.sigStop;
           g.lamp2.visible = this.blink;
@@ -917,13 +918,14 @@ export class TrackView {
     const pos = (sw: number) => snap.switches[sw] & SW.MOVING ? null : snap.switches[sw] & SW.R ? 'R' as const : 'N' as const;
     const out: { link: number; dir: 1 | -1; lo: number; hi: number; guide: boolean }[] = [];
     for (const tr of snap.trains) {
-      // a train running in to stop shows its way only up to the stop, not the route it leaves by (用户, D188)
-      // and one standing at its stop shows the way out only once its doors are closed (用户, D188)
-      const atStop = tr.stopDist >= 0 && tr.stopDist <= 1 && tr.v < 0.1;
-      if (atStop && (tr.doors || tr.doorClosing || tr.doorsAwait)) continue;
+      // a train running in to stop shows its way only up to the stop, not the route it leaves by (用户, D188),
+      // right to the standstill: no 1 m threshold, else the way out flashes up in the last metre (用户 2026-11-08)
+      // and one standing at its stop shows the way out only once its doors are closed and locked again (用户, D188)
+      const atStop = tr.phase === 'dwell' || tr.stopDist >= 0 && tr.stopDist <= 1 && tr.v < 0.1;
+      if (tr.phase === 'dwell' && !tr.stopWorkDone) continue;
       // nor one that is turning back: its way on runs the other way once it has changed ends (用户, D188)
       if (tr.tbStage === 'reverse' || tr.tbStage === 'manual' || tr.tbStage === 'arrive' && (atStop || tr.stopDist < 0)) continue;
-      const end = tr.stopDist > 1 ? Math.min(tr.maDist, tr.stopDist) : tr.maDist;
+      const end = tr.phase === 'dwell' ? tr.maDist : Math.min(tr.maDist, tr.stopDist);
       if (!(end > 0)) continue;
       let link = tr.link, dir = tr.dir, from = tr.off, dist = 0, sections = 0;
       for (let i = 0; i < 100; i++) {

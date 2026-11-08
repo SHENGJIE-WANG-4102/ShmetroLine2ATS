@@ -401,6 +401,8 @@ const REAR_TURNBACK_MIN = Math.ceil((TERMINAL_CLEAR_S + 22.7 + 150) / 10) * 10;
 
 export const OPERATIONS = {
   atoRandomOverrunProbability: 0,
+  // 用户决定（2026-11-08）：DTO/ATO 对标不会每次都正好，国标 ±0.3 m 内随机浮动，过标八成、欠标两成
+  atoStopAccuracy: { maxM: .3, overshootShare: .8 },
   /** 【假设】均衡修简化：任何有列检能力的车场过夜即列检；正线过夜不算。
    * 交接资料：列检不超过15天、月检不超过3个月；月检计划60天、占库1天。
    * 交接来源：02A05首批23列（2025-02至2026-12）架修招标、解放日报2026-09-25均衡修报道；同时1列、30天为模拟假设。

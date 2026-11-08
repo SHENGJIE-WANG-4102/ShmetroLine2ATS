@@ -6,7 +6,7 @@ import { STATIONS, LINE_INFO } from '../data/current';
 import { SEC, SW, SIG_ASPECT } from '../sim/model';
 import { fmtDelay } from './theme';
 
-const ASPECT_CN: Record<string, string> = { R: '禁止（红）', G: '绿灯', Y: '黄灯', GUIDE: '引导（红+白）', DARK: '灭灯（CBTC）', FAIL: '故障' };
+const ASPECT_CN: Record<string, string> = { R: '禁止（红）', G: '绿灯', Y: '黄灯', GUIDE: '引导（红+白）', DARK: '灭灯（CBTC）', FAIL: '故障', W: '白灯（折返/侧线/出入段）' };
 
 export class Tooltip {
   el = h('div', { class: 'tooltip', style: 'display:none' });

@@ -5,7 +5,7 @@ import type { Plan, Task, Trip } from './model';
 import { walkRouteToBerth } from './routePath';
 import { buildRouteTable, type RouteTable } from './routeTable';
 import { departureBerthAfterReverse, dwellFactorAt, effectiveEnd, effectiveStops, minTurn, platformBerth } from './timetable';
-import { reversedBerthPoint, safeWaitingPoint, type Dir, type RouteStep, type Topology, type TrackPoint } from './topology';
+import { reversedBerthPoint, safeWaitingPoint, turnbackLeadBerth, type Dir, type RouteStep, type Topology, type TrackPoint } from './topology';
 
 type Path = { link: number; from: number; to: number }[];
 const tables = new WeakMap<Topology, RouteTable>();
@@ -83,6 +83,9 @@ export function plannedWaitBerth(topo: Topology, arrival: Trip, departure: Trip,
     ? [preferred, ...candidates.filter(b => b !== preferred)] : [...candidates];
   let cache = geometry.get(topo);
   if (!cache) geometry.set(topo, cache = new Map());
+  // 用户（2026-11-07）：淞虹路小交路必须在淞虹路折返，不许入一列出一列。折返线兼出入段线时，
+  // 折返车就在该线上候发（D189）；出入段对该线的占用由排图的折返预约与出入段时窗错开。
+  const turnbackLead = (berth: number) => turning && turnbackLeadBerth(topo, berth);
   const safe = (berth: number): boolean => {
     const b = topo.berths[berth];
     if (!b) return false;
@@ -102,12 +105,8 @@ export function plannedWaitBerth(topo: Topology, arrival: Trip, departure: Trip,
         incoming: routeHistory.slice().reverse().map(s => ({ link: s.link, dir: -s.dir as Dir })),
       }, LINE_INFO.trainLength, { afterTurn: true, destination: goal, path: project(topo, point, goal) });
     } else {
-      // 用户（2026-11-07）：淞虹路小交路必须在淞虹路折返，不许入一列出一列。折返线兼出入段线时，
-      // 折返车就在该线上候发（D189）；出入段对该线的占用由排图的折返预约与出入段时窗错开。
-      // 只限有两条以上折返线的站：一条候发时另一条仍通车场（单条出入段线不许占着候班）。
-      const turnbacks = arrivalEnd === undefined ? [] : topo.stations[arrivalEnd]?.turnbackBerths ?? [];
-      const turnbackLead = turning && (b.kind === 'tail' || b.kind === 'siding') && turnbacks.length > 1 && turnbacks.includes(berth);
-      result = safeWaitingPoint(topo, { link: b.link, off: b.offset, dir: b.dir, incoming: routeHistory }, LINE_INFO.trainLength, { turnbackLead });
+      result = safeWaitingPoint(topo, { link: b.link, off: b.offset, dir: b.dir, incoming: routeHistory }, LINE_INFO.trainLength,
+        { turnbackLead: turnbackLead(berth) });
     }
     cache!.set(key, result);
     return result;
@@ -116,6 +115,8 @@ export function plannedWaitBerth(topo: Topology, arrival: Trip, departure: Trip,
   const selectedBerth = safeBerths[0] ?? ordered[0];
   const policyRejected = selectedBerth !== undefined && turning && !platformAllowed
     && topo.berths[selectedBerth]?.kind === 'platform';
-  const actualSafe = !actual || safeWaitingPoint(topo, { ...actual.point, incoming: actual.incoming }, actual.length);
+  // 实际停妥位置与排图用同一判据（含折返线兼出入段线），否则排图允许、现场却报不能候班。
+  const actualSafe = !actual || safeWaitingPoint(topo, { ...actual.point, incoming: actual.incoming }, actual.length,
+    { turnbackLead: selectedBerth !== undefined && turnbackLead(selectedBerth) });
   return { selectedBerth, safeBerths, safe: selectedBerth !== undefined && safe(selectedBerth) && actualSafe, platformAllowed, policyRejected };
 }

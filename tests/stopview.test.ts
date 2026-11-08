@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stopViewScale, FREEZE_REM, departureSeconds, departureText, stopViewDoorState } from '../src/ui/stopview';
+import { stopViewScale, FREEZE_REM, departureSeconds, departureText, stopViewDoorState, STOPVIEW_W } from '../src/ui/stopview';
 import { recommendedSpeed } from '../src/ui/dmi';
 import type { TrainSnap } from '../src/sim/model';
 
@@ -18,7 +18,7 @@ describe('stopping close-up scale', () => {
     expect(stopViewDoorState({doors:false,doorSide:'R',doorClosing:true},false)).toBe('closing');
     expect(stopViewDoorState({doors:false,doorSide:'',doorClosing:false},true)).toBe('closed');
   });
-  it('counts down through zero, then counts overtime; hold is H; lit once stopped, off five seconds after starting', () => {
+  it('counts down through zero, then counts overtime; hold is H; lit once stopped, off ten seconds after starting', () => {
     expect(departureSeconds(100, 72)).toBe(28);
     expect(departureSeconds(100, 79)).toBe(21);
     expect(departureSeconds(100, 100)).toBe(0);
@@ -28,20 +28,20 @@ describe('stopping close-up scale', () => {
     expect(departureText({...board,stood:false},79)).toBeNull();
     expect(departureText({...board,held:true},79)).toBe('H');
     expect(departureText({...board,held:true},105)).toBe('H');
-    expect(departureText({...board,departedAt:102},106.9)).toBe('6');
-    expect(departureText({...board,departedAt:102},107)).toBeNull();
-    expect(departureText({...board,departedAt:102,headLeftAt:110},107)).toBeNull();
-    expect(departureText({...board,departedAt:102,held:true},107)).toBeNull();
+    expect(departureText({...board,departedAt:102},111.9)).toBe('11');
+    expect(departureText({...board,departedAt:102},112)).toBeNull();
+    expect(departureText({...board,departedAt:102,headLeftAt:110},112)).toBeNull();
+    expect(departureText({...board,departedAt:102,held:true},112)).toBeNull();
   });
   it('fits the departure signal beyond the stop without a zoom discontinuity', () => {
     for (const rem of [300, FREEZE_REM, 10, 0, -1]) {
       const {px, xe} = stopViewScale(rem, 20);
-      expect(xe + (rem + 15) * px).toBeLessThan(760);
+      expect(xe + (rem + 15) * px).toBeLessThan(STOPVIEW_W);
     }
     expect(stopViewScale(FREEZE_REM + 1e-6, 20).px).toBeCloseTo(stopViewScale(FREEZE_REM, 20).px, 5);
   });
-  it('zooms in with the distance, then stops zooming once the cab reaches PSD door 2-5', () => {
-    expect(FREEZE_REM).toBeCloseTo(23.25 + 3 + 4 * 4.6 - 1.8);
+  it('zooms in with the distance, then stops zooming once the cab reaches PSD door 5-1', () => {
+    expect(FREEZE_REM).toBeCloseTo(4 * 23.25 + 3 - 1.8);
     const far = stopViewScale(300), at = stopViewScale(FREEZE_REM), near = stopViewScale(10), stop = stopViewScale(0);
     expect(far.px).toBeLessThan(at.px);
     expect(near.px).toBe(at.px);
