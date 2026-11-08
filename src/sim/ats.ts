@@ -1284,7 +1284,13 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
     tr.doorsOpen = true; tr.doorLockedAt = 0;
     return { ok: true, msg: `${word(side)}车门开启（出库试验）` };
   }
-  if (st && tr.doorsAwait) startDoorCycle(sim, tr, st, p, rm);
+  if (st && tr.doorsAwait) {
+    // 用户（2026-11-09）：司机开门时站停倒计时不许跳变。停稳时显示的 DEP 照旧显示，
+    // 开门后按开门时刻重算的停站只改发车放行（setDepartureReadyAt 同一做法）。
+    const displayAt = dwellDepartureAt(tr);
+    startDoorCycle(sim, tr, st, p, rm);
+    if (tr.phase === 'dwell') tr.departureDisplay = { stop: st, at: displayAt, readyAt: tr.dwellUntil, side: plat || platformSide(sim, tr, p) };
+  }
   else if (p >= 0) openDoors(sim, tr, p, rm);
 
   return { ok: true, msg: `${word(side)}车门开启${rm ? '，站务人员操作PSL开启站台门' : ''}` };
@@ -1406,7 +1412,9 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
     const oneBrake = d.releases === 0 && !d.restop;
     const score = Math.max(0, Math.min(100, Math.round(stopScore(err) * 0.8 + Math.max(0, 20 - 10 * d.releases) - (d.restop ? 30 : 0))));
     rec(tr.retreat ? 0 : score, tr.retreat ? '过标退行' : [oneBrake ? '一把闸' : d.releases ? `缓解${d.releases}次` : '', d.restop ? '二次对标' : ''].filter(Boolean).join(' '));
-    sim.log('I', '列车', `列车 ${trainLabel(tr)} 人工驾驶 ${STATIONS[task.station].name} 停车，对标误差 ${err >= 0 ? '欠' : '过'}${Math.abs(err).toFixed(2)} m`);
+    // 用户决定（2026-11-09）：过标不超过 5 m 司机自行退行，退完报告行调（记事件，不来电）
+    const back = tr.retreat ? `过标 ${tr.retreat.distance.toFixed(2)} m，${tr.retreat.reported ? '经调度同意' : '司机自行'}退行对标，` : '';
+    sim.log('I', '列车', `列车 ${trainLabel(tr)} 人工驾驶 ${STATIONS[task.station].name} 停车，${back}对标误差 ${err >= 0 ? '欠' : '过'}${Math.abs(err).toFixed(2)} m`);
     arriveAtBerth(sim, tr, task);
     return;
   }

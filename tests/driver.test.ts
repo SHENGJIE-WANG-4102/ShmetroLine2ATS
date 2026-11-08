@@ -27,6 +27,8 @@ function fixture(){
   tbStage:'none',depotStage:'none',reverser:1,stopUntil:0,stopDist:0,maDist:1000,maFar:1000,lastMa:Infinity,lastDs:0});
  t.tasks=[{k:'stop',station:b.station,berth:b.id,trip:-1,arr:s.t,dep:s.t+60,doors:true,revenue:true},
   {k:'stop',station:13,berth:platformBerth(s.topo,13,'DN'),trip:-1,arr:s.t+200,dep:s.t+250,doors:true,revenue:true}];
+ // the stand target ATS gives a manual train at standstill (arriveAtBerth)
+ t.dwellUntil=t.depReadyAt=s.t+60;
  computeBody(s,t);indexBodies(s);return {s,t,b,side:doorEnable(s,t).L?'L' as const:'R' as const};
 }
 describe('driver controls and physical enable',()=>{
@@ -90,7 +92,7 @@ describe('driver controls and physical enable',()=>{
  });
  it('saves the closing countdown independently and shifts both clocks across the operating day',()=>{
   const {s,t,side}=fixture();s.t=99900;t.phaseSince=s.t;
-  t.tasks=t.tasks.map(task=>task.k==='stop'?{...task,arr:s.t,dep:s.t+60}:task);
+  t.tasks=t.tasks.map(task=>task.k==='stop'?{...task,arr:s.t,dep:s.t+60}:task);t.dwellUntil=t.depReadyAt=s.t+60;
   expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
   s.t+=.3;doorMotionTick(s);const target=computeDmi(s,t.id)!.dep;
   expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
@@ -106,6 +108,19 @@ describe('driver controls and physical enable',()=>{
   // Checkpoints predating the optional readiness marker retain their old fallback.
   delete carried.departureDisplay!.readyAt;
   expect(computeDmi(next,t.id)?.dep).toBe(carried.dwellUntil);
+ });
+ it('keeps a late train\'s countdown when the driver opens the doors after standing',()=>{
+  const {s,t,side}=fixture();
+  // arrived with less than the minimum dwell left: the stand target is the minimum dwell
+  t.tasks=t.tasks.map((task,i)=>i===0&&task.k==='stop'?{...task,arr:s.t-50,dep:s.t+10}:task);
+  t.dwellUntil=t.depReadyAt=s.t+22;
+  const target=computeDmi(s,t.id)!.dep;
+  expect(target).toBe(s.t+22);
+  s.t+=6;
+  expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
+  expect(computeDmi(s,t.id)?.dep).toBe(target);
+  // opening late still lengthens the real stand
+  expect(t.dwellUntil).toBeGreaterThan(target);
  });
  it('keeps the rear swept path across multiple one-metre links instead of retaining one link',()=>{
   const {s,t,b}=fixture();
