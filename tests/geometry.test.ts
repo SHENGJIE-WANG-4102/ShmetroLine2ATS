@@ -62,6 +62,14 @@ describe('fixed train symbols with independent occupancy',()=>{
       }
     }
   });
+  it('draws no head marker at the drawing edge when the head has left this view',()=>{
+    const g=geometry();
+    // link 2 lies outside this drawing (another zone/station view); the tail is still on link 1
+    g.pos[3]=undefined as never;
+    const tr={link:2,off:5,dir:1 as const,body:[2,0,5,1,0,20,0,839,1000]};
+    expect(g.trainHeadPoint(tr)).toBeNull();
+    expect(g.trainBody(tr)).toEqual([]);
+  });
   it('keeps one symbol length in differently compressed intervals, in both directions',()=>{
     const g=geometry();
     for(const meters of [1000,2000,10000]) for(const dir of [1,-1] as const) {

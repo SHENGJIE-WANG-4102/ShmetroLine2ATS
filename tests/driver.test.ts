@@ -2,7 +2,7 @@ import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {platformBerth} from '../src/sim/timetable';
 import {driverDoor,doorEnable,updateTrainTasks,answerOverrun,atoStartReady} from '../src/sim/ats';
-import {computeBody,indexBodies,updateTrainMotion,reversePermission,scanAhead} from '../src/sim/movement';
+import {computeBody,indexBodies,updateTrainMotion,reversePermission,scanAhead,refreshAuthority} from '../src/sim/movement';
 import {doorMotionTick} from '../src/sim/psd';
 import {capture,restore} from '../src/sim/state';
 import {carryWorld,nextOperatingConfig,DAY_S} from '../src/sim/operatingDay';
@@ -153,6 +153,9 @@ describe('driver controls and physical enable',()=>{
   }
   expect(reversePermission(s,t).ok).toBe(true);
   reverseToMark(s,t);expect(t.phase).toBe('dwell');expect(Math.abs(stopError(s,t))).toBeLessThanOrEqual(1);
+  // the reverser stays in reverse after the return: no reverse authority, so the permitted speed is 0
+  refreshAuthority(s);expect(t.reverser).toBe(-1);expect(t.vPermit).toBe(0);
+  expect(s.command({c:'reverser',train:t.id,position:1}).ok).toBe(true);refreshAuthority(s);expect(t.vPermit).toBeGreaterThan(0);
   const side=doorEnable(s,t).L?'L':'R';expect(s.command({c:'door',train:t.id,side}).ok).toBe(true);
   expect(t.doorsOpen).toBe(true);expect(t.eb,t.ebReason).toBe(false);
  });

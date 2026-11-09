@@ -374,6 +374,10 @@ export class Geometry {
    * never from the links this enlarged or shortened symbol happens to cover. */
   trainBody(tr: Pick<TrainSnap, 'link' | 'off' | 'dir' | 'body'>, swPos: (sw: number) => 'N' | 'R' = () => 'N') {
     const out: { x1: number; y1: number; x2: number; y2: number; section: number }[] = [];
+    // The symbol is the head marker: a head outside this drawing (zone/station
+    // view) draws nothing. Walking on along the body would put the arrow where
+    // the tail enters the drawing, at its edge, with no train window.
+    if (!this.trainHeadPoint(tr)) return out;
     let link = tr.link, off = tr.off, dir = tr.dir, remaining = this.platformTrainLength();
     const visited = new Set<number>();
     for (let i = 0; i < 100 && remaining > .001; i++) {

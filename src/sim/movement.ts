@@ -1041,7 +1041,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     : levelTarget(level, vT, scan.vBody - atoMargin, tr.v);
   if (recommend) tr.vRecommended = tr.eb ? 0 : Math.max(0, recommendation);
   tr.vTarget = Math.max(0, recommendation);
-  tr.vPermit = Math.max(0, vPerm);
+  tr.vPermit = selectedDirectionPermit(tr, Math.max(0, vPerm));
   tr.vEbi = rm ? PERF.vRM + PERF.atpTolerance : vEbi;
   tr.tgtV = tgtV;
   tr.tgtD = tgtD;
@@ -1149,6 +1149,12 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   computeBody(sim, tr);
 }
 
+/** 用户（2026-11-09）：换向器在后位而没有退行许可（退行已完成或未请求）时，所选方向——后退——
+ * 没有授权，允许速度是 0，不显示前进方向的限速。退行中的限速由 manualReverse 给。 */
+export function selectedDirectionPermit(tr: Train, forward: number): number {
+  return tr.manual && tr.reverser === -1 && !tr.retreat ? 0 : forward;
+}
+
 /** One predicate for traction inhibition and the driver's standstill reason. */
 export function manualTractionHold(sim: Sim, tr: Train): string {
   if (tr.pendingMode && tr.v < .05) return '等待驾驶模式转换';
@@ -1218,7 +1224,7 @@ function applyAuthority(sim: Sim, tr: Train, s: ScanResult) {
   // A mode change can arrive between motion ticks. Refresh the protection
   // speeds along with its new authority, rather than retaining the speed
   // limit of the previous position/mode until the next motion calculation.
-  tr.vPermit = tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist,0,PERF.bPermit)));
+  tr.vPermit = selectedDirectionPermit(tr, tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist,0,PERF.bPermit))));
   tr.vEbi = (tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist,0,PERF.bEbGuaranteed)))) + PERF.atpTolerance;
   superviseATP(sim, tr, s);
   protectAuthorityReduction(sim, tr, s, tr.lastMa - tr.lastDs, tr.v);
@@ -1261,7 +1267,7 @@ export function refreshAuthority(sim: Sim) {
     tr.nextSignalDist = s.nextSignalDist;
     tr.stopDist = s.stopDist;
     // standing: the permitted speed still follows the current movement authority
-    tr.vPermit = tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist, 0, PERF.bPermit)));
+    tr.vPermit = selectedDirectionPermit(tr, tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist, 0, PERF.bPermit))));
     tr.vEbi = (tr.mode === 'RM' ? s.vBody : Math.max(0, Math.min(s.vBody, brakingSpeed(s.maDist, 0, PERF.bEbGuaranteed)))) + PERF.atpTolerance;
   }
 }
