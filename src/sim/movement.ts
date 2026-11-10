@@ -540,6 +540,9 @@ function pathBody(sim: Sim, tr: Train, length: number) {
 export function computeBody(sim: Sim, tr: Train, remember = true) {
   const body = pathBody(sim, tr, tr.len);
   tr.body = body;
+  // Projected clones (retreatSweep) recompute their private body copy without
+  // owning a place in the live index. addTrain indexes a new live train itself.
+  if (sim.trains.get(tr.id) === tr) sim.bodyDirty = true;
   if (remember) {
     // Keep a measured distance behind the tail, rather than one arbitrarily
     // short link. An overrun retains its entire return as it grows, including
@@ -1286,6 +1289,7 @@ export function indexBodies(sim: Sim) {
       arr.push({ train: tr.id, from: b.from, to: b.to });
     }
   }
+  sim.bodyDirty = false;
 }
 
 /** Unhindered time (s) to stop `dist` metres ahead from speed `v`, cruising

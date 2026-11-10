@@ -92,6 +92,8 @@ export class Sim {
   trainList: Train[] = [];
   nextTrainId = 1;
   linkBodies = new Map<number, { train: number; from: number; to: number }[]>();
+  /** a live train's body changed since linkBodies was last rebuilt */
+  bodyDirty = false;
   berthRes = new Map<number, number>();
   resourceTransit = new Map<number, ResourceTransit>();
   depotStock: number[];
@@ -315,7 +317,8 @@ export class Sim {
     this.trainList = this.trainList.filter((x) => x.id !== tr.id);
     for (const [b, t] of this.berthRes) if (t === tr.id) this.berthRes.delete(b);
     this.resourceTransit.delete(tr.id);
-    // the occupancy map is rebuilt next step; until then nobody may see the removed train
+    // the removed train leaves the index now; a later step rebuilds linkBodies
+    // only if another live train's body changed
     for (const [l, segs] of this.linkBodies) if (segs.some((x) => x.train === tr.id)) this.linkBodies.set(l, segs.filter((x) => x.train !== tr.id));
     for (const k of ['eb', 'comm', 'tf', 'tfr', 'spad', 'late', 'turnback-departure-train', 'turnback-wait-unsafe']) this.clearAlarm(`${k}-${tr.id}`);
     for (const c of this.calls) if (c.state === 'ringing' && c.train === tr.id) c.state = 'withdrawn';
@@ -380,7 +383,9 @@ export class Sim {
     if (this.config.scenario && !this.scenario && this.t >= this.config.startTime - 1e-6) startScenario(this, this.config.scenario);
     this.t += dt;
     doorMotionTick(this);
-    indexBodies(this);
+    // Bodies changed after the rebuild at the end of the previous step (tasks,
+    // the 1 Hz tick, commands) must be indexed before this step's motion scan.
+    if (this.bodyDirty) indexBodies(this);
     for (const tr of this.trainList) {
       utoAttendantEffort(tr);
       utoRetreatEffort(this,tr);
