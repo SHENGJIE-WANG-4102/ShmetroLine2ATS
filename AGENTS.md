@@ -8,7 +8,7 @@
 
 - **你（DeepSeek）**：按任务改代码、写测试、跑验证，交一份汇报。
 - **Claude**：
-  - 派任务、审你的改动、提交推送；
+  - 派任务、审你的改动、合并进主线、提交推送；
   - 写 D 条目（`docs/design-decisions.md`）；
   - 做界面/DMI/动画这类要看效果的活（D 条目和界面你都不碰，除非任务点名）；
   - 大换代（用一套通用机制替换一批规则、重写核心引擎这类），这类改动进行中时别动它涉及的文件。
@@ -22,7 +22,8 @@
 
 ### 工作区和边界（硬规矩，不需要判断）
 
-- 只在 `D:\ShmetroLine2ATS` 工作区改文件，分支是 `claude/nifty-faraday-mdr3ug`。
+- 只在你自己的工作区 `D:\ShmetroLine2ATS-ds` 改文件（分支 `deepseek/work`）。主目录 `D:\ShmetroLine2ATS` 是 Claude 的，只读不改（用户决定，2026-11-10：你在自己的 worktree 改完，Claude 审过再合进主线）。
+- 每个任务开工时，Claude 已经把你的分支对齐到主线最新提交；你交的是未提交的改动，Claude 审完替你提交并合并。
 - 下面这些 git 操作都不许做（Claude 负责提交）：
   - commit、push、merge、rebase、切分支；
   - `git stash`、`git reset`、`git checkout -- <文件>`、`git clean`。
