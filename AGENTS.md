@@ -22,7 +22,7 @@
 
 ### 工作区和边界（硬规矩，不需要判断）
 
-- 只在你自己的工作区 `D:\ShmetroLine2ATS-ds` 改文件（分支 `deepseek/work`）。主目录 `D:\ShmetroLine2ATS` 是 Claude 的，只读不改（用户决定，2026-11-10：你在自己的 worktree 改完，Claude 审过再合进主线）。
+- 只在你自己的工作区 `D:\ShmetroLine2ATS\.claude\worktrees\deepseek` 改文件（分支 `deepseek/work`）。主目录 `D:\ShmetroLine2ATS` 是 Claude 的，只读不改（用户决定，2026-11-10：你在自己的 worktree 改完，Claude 审过再合进主线）。
 - 每个任务开工时，Claude 已经把你的分支对齐到主线最新提交；你交的是未提交的改动，Claude 审完替你提交并合并。
 - 下面这些 git 操作都不许做（Claude 负责提交）：
   - commit、push、merge、rebase、切分支；
@@ -30,6 +30,13 @@
 - 开工前先跑 `git status --short`。已经有的改动不是你的，别碰，汇报里也不要算成你的。
 - 不删除你这次没创建的文件。要删就写进汇报，由 Claude 问用户。
 - 一次性的探针、日志放 `work/`，不要往 `scripts/` 里堆。
+
+**命令行全权限下的规矩**（用户决定，2026-11-10）：Claude 派活时你跑在全权限模式（`danger-full-access`，不走沙箱），能碰到整台电脑，所以下面几条是硬规矩：
+- 只往自己的 worktree 里写。主目录和项目外的任何地方（`D:\` 根目录、`D:\DSH`、用户目录、系统目录）一律不新建、不改、不删文件或文件夹。临时文件、探针、日志放 worktree 里的 `work/`。
+- 不改权限和系统设置：不跑 ACL / 沙箱修复脚本（`diagnose-windows-sandbox-acl` 之类），不调 `icacls`、`Set-Acl`、注册表、环境变量、计划任务、服务、防火墙。
+- 碰到权限、沙箱、审批这类环境问题，不要自己想办法绕，写进「待定」交给 Claude。
+- 不装全局软件，不改 `node_modules` 以外的依赖；需要新依赖先写进「待定」。
+- 只结束自己起的进程；不碰用户开着的 exe、浏览器、别的 Claude / DeepSeek 会话。
 
 **不点名不许改**：
 - 首末班常量 `src/data/lines/line2/firstlast.ts`；
