@@ -10,18 +10,17 @@ import type { Block, Plan, PlanStop, TrackDir, Trip } from '../model';
 import type { PlanContext, Period, GenTrip } from '../timetable';
 import { plannedDwell } from '../calibration';
 import {
-  addTo, buildStops, officialEndInterval, carryingStops, passesOpenStation, connectionSafe, depotLeadLink, depotStartTime,
+  addTo, buildStops, carryingStops, passesOpenStation, connectionSafe, depotLeadLink, depotStartTime,
   dwellFactorAt, entryStation, exitStation, frontTurnClear, inboundWindow, inOuterAlternation,
   minTurn, outboundWindow, overnightPlaces, storageArrivalBerth, terminalCapacity, terminalOverflows,
   tailOrderClear, turnbackAt, DepIndex, MAX_LAYOVER, THROUGH_WAIT, MIN_HEADWAY, CARRY_MOVES, OPENING, CORE_W, CORE_E,
-  TEMPLATES, periodAt, openingAnchors, DEPOT_ENTRY_CLEAR, depotMoves, terminalOccupancy,
+  TEMPLATES, periodAt, openingAnchors, DEPOT_ENTRY_CLEAR, depotMoves, terminalOccupancy, portalReversal, INTERMEDIATE_WAIT,
+  noDepotReturnBefore, lineEndStand as lineEndStandAt,
 } from '../timetable';
 import { OPERATIONS, STATIONS } from '../../data/current';
-import { ahead, sharedTransferLink } from '../topology';
+import { ahead, between, sharedTransferLink } from '../topology';
 import type { PoolCar, PoolDemand } from './pool';
 
-/** longest an intermediate turnback holds a car beyond its turn (s; validatePlan LAYOVER_LONG) */
-const INTERMEDIATE_WAIT = 450;
 /** a car running on in its own direction at a station stands at least this long (s) */
 export const THROUGH_MIN = 20;
 /** search step and span of a fitted move (s) */
@@ -68,8 +67,9 @@ export function fmt(t: number) {
 
 export type Moves = ReturnType<typeof createMoves>;
 
-/** `notBefore`: no yard exit or move may start earlier (a plan changed while the day runs) */
-export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[], opts: { notBefore?: number } = {}) {
+/** `notBefore`: no yard exit or move may start earlier (a plan changed while the day runs); `added`: the
+ * duties of added services (加开, duty/overlay.ts) */
+export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[], opts: { notBefore?: number; added?: boolean } = {}) {
   const { topo } = ctx;
   const notBefore = opts.notBefore ?? -Infinity;
   const E = topo.stations.length - 1;
@@ -86,24 +86,28 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const leavingFrom = new Map<number, number[]>();
   for (const t of services) if (!t.cancelled) leavingFrom.set(t.from, [...(leavingFrom.get(t.from) ?? []), dep(t)]);
   for (const list of leavingFrom.values()) list.sort((x, y) => x - y);
-  // The published interval is an average: where the departures alternate
-  // (150/300 s at the airport in the peak) a car that just missed one waits
-  // the local gap, which is no queue either.
-  const lineEndStand = (st: number, from: number) => {
-    const list = leavingFrom.get(st) ?? [], i = list.findIndex(t => t >= from + minTurn(st));
-    const local = i > 0 ? list[i] - list[i - 1] : undefined;
-    const official = officialEndInterval(ctx.dayType, st, from);
-    return Math.min(MAX_LAYOVER, minTurn(st) + Math.max(official ?? 0, local ?? (official === undefined ? MAX_LAYOVER : 0)));
-  };
+  // (the stand itself: lineEndStand in timetable.ts)
+  const noReturnBefore = noDepotReturnBefore();
+  // 用户决定（2026-11-10）：一列车全天再没有活（早高峰东头多出来的车），10:00 前也可以就近顺向进库
+  let idleHome = false;
+  const homeFrom = () => idleHome ? -Infinity : noReturnBefore;
+  /** a car arriving at `arrival`: the shared rule (timetable.ts); an idle car going home stands no longer for 10:00 */
+  const lineEndStand = (st: number, arrival: number) => lineEndStandAt(ctx.dayType, st, arrival, leavingFrom.get(st) ?? [], homeFrom());
   /** shortest stop of a car running on at `st` from `at`: passengers alight and board (planned dwell) */
   const throughMin = (st: number, dir: TrackDir, at: number) => Math.max(THROUGH_MIN, plannedDwell(ctx.dayType, st, dir, at, dwellFactorAt(ctx.dayType, at)));
-  /** longest stand of a car at `st` leaving at `at` */
   // D189: an intermediate station with two or more turnback tracks (淞虹路) stands a turning
   // car on its own track like a line end: its turn and one interval of the departures there
   // (the evening small-route arrivals fall 3 min before a departure: too short to turn, so
   // they take the next one, 12 min on — not a reason to swap cars through the yard).
   const ownTracks = (st: number) => topo.stations[st].turnbackBerths.filter(b => topo.berths[b].kind !== 'platform').length > 1;
-  const waitLimit = (st: number, turn: boolean, at: number) => !turn ? THROUGH_WAIT : lineEnd(st) || ownTracks(st) ? lineEndStand(st, at) : minTurn(st) + INTERMEDIATE_WAIT;
+  /** trips of this planner's own: an added service's (opts.added), or a move fitted here */
+  const firstNew = trips.length;
+  const addedTrip = (t: GenTrip | undefined) => !!opts.added && (!t || t.overlay !== undefined || t.id >= firstNew);
+  /** longest stand of a car arriving at `st` at `at` (`car`: its trip; none: a move fitted here) before it
+   * runs on or turns. An added train turns at an intermediate station, own tracks or not, within D47's
+   * limit (applyOverlay turnWait, validatePlan LAYOVER_LONG). */
+  const waitLimit = (st: number, turn: boolean, at: number, car?: GenTrip) => !turn ? THROUGH_WAIT
+    : lineEnd(st) || ownTracks(st) && !addedTrip(car) ? lineEndStand(st, at) : minTurn(st) + INTERMEDIATE_WAIT;
   const openers = openingAnchors(services);
   const index = new DepIndex(services);
   /** last service departure per station and direction */
@@ -172,9 +176,19 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     const carrying = carryingStops(copy, dir, openers);
     return { stops: copy, carrying };
   };
+  /** a move wholly within one of OPERATIONS.emptyLegs never carries (D166 does not apply there) */
+  const emptyLegs = (OPERATIONS.emptyLegs ?? []).map(([a, b]) => [STATIONS.findIndex(s => s.id === a), STATIONS.findIndex(s => s.id === b)])
+    .filter(([a, b]) => a >= 0 && b >= 0);
+  const emptyLeg = (from: number, to: number) => emptyLegs.some(([a, b]) => between(from, a, b) && between(to, a, b));
   /** carrying when it can board anybody; empty only while every station on
    * it is still closed (D166). */
-  const moveStops = (dir: TrackDir, from: number, to: number, start: number) => {
+  const buildMove = (dir: TrackDir, from: number, to: number, start: number) => {
+    // it keeps a service train's times (the outer stream's slot) but calls nowhere
+    if (emptyLeg(from, to)) {
+      const stops = buildStops(ctx, dir, from, to, start, true, factor);
+      stops.forEach((p, i) => { if (i < stops.length - 1) p.stop = false; });
+      return { stops, revenue: false };
+    }
     if (!CARRY_MOVES) return { stops: buildStops(ctx, dir, from, to, start, false, 1), revenue: false };
     const carrying = opened(buildStops(ctx, dir, from, to, start, true, factor), dir);
     if (carrying.carrying) {
@@ -187,12 +201,22 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     empty[0].stop = false;
     return { stops: empty, revenue: false };
   };
+  // A move depends only on its arguments here (ctx, openers and lastService are fixed for this
+  // planner); the fitting loops build the same slot many times over (weekday: ~350k calls,
+  // ~28k distinct), so each is built once and every caller gets its own copy.
+  const builtMoves = new Map<string, ReturnType<typeof buildMove>>();
+  const moveStops = (dir: TrackDir, from: number, to: number, start: number) => {
+    const key = `${dir}${from},${to},${start}`;
+    let move = builtMoves.get(key);
+    if (move === undefined) { move = buildMove(dir, from, to, start); builtMoves.set(key, move); }
+    return move && { stops: move.stops.map(p => ({ ...p })), revenue: move.revenue };
+  };
   // No empty or non-boarding move on the outer leg inside a peak's big/small
   // alternation; a move carrying passengers there is one more service train
   // in that stream (D178: the official west interval needs the morning
   // ramp's extra trains, which the bare pattern does not give).
   const outer = (p: PlanStop) => ahead('DN', p.st, CORE_W);
-  const outerQuiet = (stops: PlanStop[]) => (!stops.some(p => outer(p) && inOuterAlternation(periods, p.dep))
+  const outerQuiet = (stops: PlanStop[]) => (emptyLeg(stops[0].st, stops.at(-1)!.st) || !stops.some(p => outer(p) && inOuterAlternation(periods, p.dep))
       || stops.slice(0, -1).every(p => !outer(p) || p.stop && !p.noBoard))
     && T('core', viaCore || !stops.some(p => ahead('DN', CORE_W, p.st) && ahead('DN', p.st, CORE_E)));
   /** a supply move may run through the core interior */
@@ -270,9 +294,16 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
    * move is built and tested only where this passes */
   const preClear = (dir: TrackDir, from: number, to: number, own: PlanStop[] | undefined) => {
     let base: { at: number; stops: PlanStop[] | undefined } | undefined;
-    return (at: number) => {
+    /** how many FIT_STEP slots on from `at` (stepping later, or earlier when `down`) the pre-test fails
+     * for certain (0: it passes at `at`): a slot it fails at is skipped as before, only without building
+     * and testing each one; never past this anchor, whose successor is built where the loop reaches it */
+    return (at: number, down = false) => {
       if (!base || Math.abs(at - base.at) > PRE_ANCHOR) base = { at, stops: moveStops(dir, from, to, at)?.stops };
-      return !base.stops || index.clear(base.stops, dir, MIN_HEADWAY - PRE_SLACK, own, at - base.at);
+      if (!base.stops) return 0;
+      const gap = index.clearGap(base.stops, dir, MIN_HEADWAY - PRE_SLACK, own, at - base.at, down);
+      if (gap <= 0) return 0;
+      const room = Math.floor((PRE_ANCHOR - (down ? base.at - at : at - base.at)) / FIT_STEP + 1e-9);
+      return Math.max(1, Math.min(Math.ceil(gap / FIT_STEP - 1e-6), room));
     };
   };
   /** latest move from→to arriving by `latest` (and not before `earliest`) that fits the stream */
@@ -288,7 +319,8 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     }
     const pre = preClear(dir, from, to, own);
     for (let at = Math.floor(start); at >= earliest - 1e-6 && at >= start - FIT_SPAN; at -= FIT_STEP) {
-      if (!T('headway', pre(at))) continue;
+      const skip = pre(at, true);
+      if (!T('headway', !skip)) { at -= (skip - 1) * FIT_STEP; continue; }
       const move = moveStops(dir, from, to, at);
       if (!T('none', !!move) || !T('time', move!.stops.at(-1)!.arr <= latest + 1e-6 && move!.stops[0].dep >= earliest - 1e-6)) continue;
       if (!T('headway', index.clear(move!.stops, dir, MIN_HEADWAY, own)) || !accept(move!.stops)) continue;
@@ -301,7 +333,8 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     accept: (stops: PlanStop[]) => boolean) => {
     const pre = preClear(dir, from, to, own);
     for (let at = Math.ceil(earliest); at <= latest; at += FIT_STEP) {
-      if (!T('headway', pre(at))) continue;
+      const skip = pre(at);
+      if (!T('headway', !skip)) { at += (skip - 1) * FIT_STEP; continue; }
       const move = moveStops(dir, from, to, at);
       if (!T('none', !!move)) continue;
       if (!T('headway', index.clear(move!.stops, dir, MIN_HEADWAY, own)) || !accept(move!.stops)) continue;
@@ -327,7 +360,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     // a run on (no turn) is the same train as `a` at X, and as `d` at P
     const own = [...(turnX ? [] : [a.stops.at(-1)!]), ...(turnP ? [] : d.stops)];
     const move = fitBefore(dir, X, P, earliest, latest, own.length ? own : undefined, stops => T('outer', outerQuiet(stops))
-      && T('waitX', stops[0].dep - arr(a) <= waitLimit(X, turnX, stops[0].dep)) && T('waitP', dep(d) - stops.at(-1)!.arr <= waitLimit(P, turnP, dep(d)))
+      && T('waitX', stops[0].dep - arr(a) <= waitLimit(X, turnX, arr(a), a)) && T('waitP', dep(d) - stops.at(-1)!.arr <= waitLimit(P, turnP, stops.at(-1)!.arr))
       && T('safeX', safe(a, asTrip(dir, X, P, stops))) && T('safeP', safe(asTrip(dir, X, P, stops), d))
       && (!turnX || T('placeX', reserve(X, arr(a), stops[0].dep, false))
         && T('frontX', frontTurnClear(ctx, live(), a, stops[0].dep, new Set([a.id]))))
@@ -369,6 +402,80 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     }
     return added || stock + 1 <= places;
   };
+  const opposite = (dir: TrackDir): TrackDir => dir === 'UP' ? 'DN' : 'UP';
+  // ---- the pieces every yard run shares: a depot exit or entry, a leg into a departure, a leg out of an arrival
+  /** the depot side of a move leaving `yard` running `dir`: its exit path, a car in stock, not before notBefore */
+  const exitFits = (yard: Yard, dir: TrackDir, stops: PlanStop[]) => T('exit', exitClear(yard.depot, dir, stops))
+    && T('stock', canDraw(yard, depotStartTime(ctx, yard.depot, { dir, stops }))) && depotStartTime(ctx, yard.depot, { dir, stops }) >= notBefore;
+  /** the depot side of a move entering `depot` running `dir`: its entry path and a free road */
+  const entryFits = (depot: number, dir: TrackDir, en: number, stops: PlanStop[]) => T('entry', entryClear(depot, dir, en, stops))
+    && T('full', canTake(depot, stops.at(-1)!.arr + DEPOT_ENTRY_CLEAR));
+  /** a car leaves `yard`'s depot on `trip`, its first move */
+  const leaveYard = (yard: Yard, trip: GenTrip) => {
+    const depot = yard.depot;
+    startOf.set(trip.id, { kind: 'depot', depot, time: 0 });
+    const [from, to] = outboundWindow(ctx, depot, trip);
+    outbound.push({ depot, dir: trip.dir, from, to });
+    addExit({ yard: yard.id, at: depotStartTime(ctx, depot, trip) });
+  };
+  /** a car enters `depot` at the end of `trip` */
+  const enterYard = (depot: number, trip: GenTrip) => {
+    endOf.set(trip.id, { kind: 'depot', depot });
+    const [from, to] = inboundWindow(topo, depot, trip);
+    addInbound({ depot, dir: trip.dir, from, to, at: arr(trip) + DEPOT_ENTRY_CLEAR });
+  };
+  /** the latest move from→P running `dir` that brings a car for departure `d` there (turning at P when
+   * `dir` is not d's): its wait, the car's berth and, turning, P's turnback and front route; `fits`: the rest */
+  const fitInto = (dir: TrackDir, from: number, P: number, d: GenTrip, fits: (stops: PlanStop[]) => boolean) => {
+    const turnP = dir !== d.dir;
+    if (turnP && !turnbackAt(topo, P, dir)) return null;
+    const latest = dep(d) - (turnP ? minTurn(P) : throughMin(P, d.dir, dep(d)));
+    return fitBefore(dir, from, P, Math.max(OPENING.dayStart, notBefore), latest, turnP ? undefined : d.stops, stops => T('outer', outerQuiet(stops))
+      && T('waitP', dep(d) - stops.at(-1)!.arr <= waitLimit(P, turnP, stops.at(-1)!.arr)) && T('safeP', safe(asTrip(dir, from, P, stops), d)) && fits(stops)
+      && (!turnP || T('placeP', reserve(P, stops.at(-1)!.arr, dep(d), false))
+        && T('frontP', frontTurnClear(ctx, live(), { dir, to: P, stops }, dep(d), new Set([d.id])))));
+  };
+  /** the earliest move X→to running `dir` that takes car `a` on from X (turning there when `dir` is not
+   * a's), from its turn (or `earliest`) to `latest`: the car's berth and, turning, X's turnback and front route */
+  const fitOutOf = (a: GenTrip, X: number, dir: TrackDir, to: number, earliest: number, latest: (turnX: boolean) => number,
+    fits: (stops: PlanStop[]) => boolean) => {
+    const turnX = a.dir !== dir;
+    if (turnX && !turnbackAt(topo, X, a.dir)) return null;
+    return fitAfter(dir, X, to, Math.max(arr(a) + (turnX ? minTurn(X) : throughMin(X, a.dir, arr(a))), earliest), latest(turnX), turnX ? undefined : a.stops,
+      stops => fits(stops) && T('outer', outerQuiet(stops)) && T('safeX', safe(a, asTrip(dir, X, to, stops)))
+        && (!turnX || T('placeX', reserve(X, arr(a), stops[0].dep, false)) && T('frontX', frontTurnClear(ctx, live(), a, stops[0].dep, new Set([a.id])))));
+  };
+  /** the nearest station beyond `st` running `dir` where a train arriving `dir` can turn back */
+  const turnBeyond = (st: number, dir: TrackDir): number | undefined => STATIONS.map((_, k) => k)
+    .filter(k => ahead(dir, st, k) && !!turnbackAt(topo, k, dir))
+    .sort((a, b) => Math.abs(topo.stations[a].chain - topo.stations[st].chain) - Math.abs(topo.stations[b].chain - topo.stations[st].chain))[0];
+  /** 用户决定（2026-11-08）：出库方向就是运行方向。A car for `want` leaves its yard the way the portal
+   * faces without changing ends, runs on to the next turnback (川沙 → 广兰路), turns there and runs
+   * back to P (OPERATIONS.portalReversal). */
+  const feedViaTurn = (yard: Yard, want: Want): boolean => {
+    const depot = yard.depot, P = want.station, d = want.trip;
+    for (const dir1 of ['UP', 'DN'] as TrackDir[]) {
+      if (topo.depots[depot].portals.exit[dir1].reverse) continue;
+      const from = exitStation(topo, depot, dir1), dir2 = opposite(dir1), K = turnBeyond(from, dir1);
+      if (K === undefined || K === P || !ahead(dir2, K, P)) continue;
+      const back = fitInto(dir2, K, P, d, () => true);
+      if (!back) { if (DEBUG) dutyDebug.push(`via-turn ${STATIONS[P].id} ${d.dir} ${fmt(dep(d))} back ${STATIONS[K].id}→${STATIONS[P].id} failed`); continue; }
+      const second = asTrip(dir2, K, P, back.stops), leave = back.stops[0].dep;
+      const out = fitBefore(dir1, from, K, Math.max(OPENING.dayStart, notBefore), leave - minTurn(K), undefined, stops => T('outer', outerQuiet(stops))
+        && T('waitK', leave - stops.at(-1)!.arr <= waitLimit(K, true, stops.at(-1)!.arr)) && T('safeK', safe(asTrip(dir1, from, K, stops), second))
+        && exitFits(yard, dir1, stops)
+        && T('placeK', reserve(K, stops.at(-1)!.arr, leave, false))
+        && T('frontK', frontTurnClear(ctx, live(), { dir: dir1, to: K, stops }, leave, new Set())));
+      if (!out) { if (DEBUG) dutyDebug.push(`via-turn ${STATIONS[P].id} ${d.dir} ${fmt(dep(d))} out →${STATIONS[K].id} by ${fmt(leave - minTurn(K))} failed`); continue; }
+      reserve(K, out.stops.at(-1)!.arr, leave);
+      if (dir2 !== d.dir) reserve(P, back.stops.at(-1)!.arr, dep(d));
+      const first = addMove(dir1, from, K, out.stops, out.revenue), then = addMove(dir2, K, P, back.stops, back.revenue);
+      link(first, then); link(then, d);
+      leaveYard(yard, first);
+      return true;
+    }
+    return false;
+  };
   /** a yard exit for `want`: straight from the portal, or a fitted move */
   const feed = (yard: Yard, want: Want): boolean => {
     const P = want.station, d = want.trip;
@@ -386,7 +493,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       if (turnP && !turnbackAt(topo, P, yard.dir)) return false;
       const latest = dep(d) - (turnP ? minTurn(P) : throughMin(P, d.dir, dep(d)));
       const move = fitBefore(yard.dir, yard.station, P, Math.max(OPENING.dayStart, notBefore), latest, turnP ? undefined : d.stops,
-        stops => dep(d) - stops.at(-1)!.arr <= waitLimit(P, turnP, dep(d)) && safe(asTrip(yard.dir!, yard.station, P, stops), d)
+        stops => dep(d) - stops.at(-1)!.arr <= waitLimit(P, turnP, stops.at(-1)!.arr) && safe(asTrip(yard.dir!, yard.station, P, stops), d)
           && (!turnP || reserve(P, stops.at(-1)!.arr, dep(d), false)));
       if (!move) return false;
       if (turnP) reserve(P, move.stops.at(-1)!.arr, dep(d));
@@ -398,6 +505,10 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     }
     const depot = yard.depot;
     if (exitStation(topo, depot, d.dir) === P) {
+      // a platform change of ends here is not used in service (OPERATIONS.portalReversal)
+      const rule = portalReversal(topo, depot, 'exit', d.dir, depotStartTime(ctx, depot, d));
+      if (rule !== 'yes' && feedViaTurn(yard, want)) return true;
+      if (rule === 'no') return false;
       const stops = d.stops;
       if (!exitClear(depot, d.dir, stops)) {
         if (DEBUG) { const [st, cl] = outboundWindow(ctx, depot, { dir: d.dir, stops });
@@ -407,37 +518,36 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       const at = depotStartTime(ctx, depot, d);
       if (at < notBefore) return false;
       if (!canDraw(yard, at)) return false;
-      startOf.set(d.id, { kind: 'depot', depot, time: 0 });
-      const [from, to] = outboundWindow(ctx, depot, d);
-      outbound.push({ depot, dir: d.dir, from, to });
-      addExit({ yard: yard.id, at });
+      leaveYard(yard, d);
       return true;
     }
     const dir = depotDir(P, depot) === 'DN' ? 'UP' : 'DN';
     // (the car leaves the yard toward P: away from the junction)
     const from = exitStation(topo, depot, dir);
     if (from === P || ahead(dir, P, from)) return false;
-    const turnP = dir !== d.dir;
-    if (turnP && !turnbackAt(topo, P, dir)) return false;
-    const latest = dep(d) - (turnP ? minTurn(P) : throughMin(P, d.dir, dep(d)));
-    const move = fitBefore(dir, from, P, Math.max(OPENING.dayStart, notBefore), latest, turnP ? undefined : d.stops, stops => T('outer', outerQuiet(stops))
-      && T('waitP', dep(d) - stops.at(-1)!.arr <= waitLimit(P, turnP, dep(d)))
-      && T('safeP', safe(asTrip(dir, from, P, stops), d)) && T('exit', exitClear(depot, dir, stops)) && T('stock', canDraw(yard, depotStartTime(ctx, depot, { dir, stops }))) && depotStartTime(ctx, depot, { dir, stops }) >= notBefore
-      && (!turnP || T('placeP', reserve(P, stops.at(-1)!.arr, dep(d), false))
-        && T('frontP', frontTurnClear(ctx, live(), { dir, to: P, stops }, dep(d), new Set([d.id])))));
+    // its exit changes ends on the junction platform: turn beyond instead (OPERATIONS.portalReversal)
+    if (topo.depots[depot].portals.exit[dir].reverse && portalReversal(topo, depot, 'exit', dir, dep(d)) !== 'yes' && feedViaTurn(yard, want)) return true;
+    const move = fitInto(dir, from, P, d, stops => exitFits(yard, dir, stops)
+      && T('reverse', portalReversal(topo, depot, 'exit', dir, depotStartTime(ctx, depot, { dir, stops })) !== 'no'));
     if (!move) return false;
-    if (turnP) reserve(P, move.stops.at(-1)!.arr, dep(d));
+    if (dir !== d.dir) reserve(P, move.stops.at(-1)!.arr, dep(d));
     const trip = addMove(dir, from, P, move.stops, move.revenue);
     link(trip, d);
-    startOf.set(trip.id, { kind: 'depot', depot, time: 0 });
-    const [start, clear] = outboundWindow(ctx, depot, trip);
-    outbound.push({ depot, dir, from: start, to: clear });
-    addExit({ yard: yard.id, at: depotStartTime(ctx, depot, trip) });
+    leaveYard(yard, trip);
     return true;
   };
   const distanceTo = (yard: Yard, st: number) => yard.depot >= 0
     ? Math.abs(topo.depots[yard.depot].junctionChain - topo.stations[st].chain)
     : Math.abs(topo.stations[yard.station].chain - topo.stations[st].chain);
+  /** 用户决定（2026-11-10）：a car with no more work that reaches its nearest yard's entry, or its own end,
+   * before the end of the morning peak (OPERATIONS.noDepotReturnBefore) goes home to that yard only, then
+   * (idleHome); undefined: it goes home by the ordinary rules */
+  const idleYard = (car: Car): Yard | undefined => {
+    const yard = yards.filter(y => y.depot >= 0).sort((a, b) => distanceTo(a, car.station) - distanceTo(b, car.station))[0];
+    if (!yard) return undefined;
+    const entry = entryStation(topo, yard.depot, car.trip.dir);
+    return car.trip.stops.some(p => (p.st === entry || p === car.trip.stops.at(-1)) && p.arr < noReturnBefore) ? yard : undefined;
+  };
   const dropHeld = (id: number) => { const i = inbound.findIndex(m => m.car === id); if (i >= 0) dropInbound(i); };
   /** a car held for its yard's entry may go elsewhere only if the exits
    * fitted on the strength of its return still find their cars */
@@ -458,7 +568,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       if (turnX && !turnbackAt(topo, X, a.dir)) return false;
       const berth = storageArrivalBerth(topo, yard.berth, dir);
       if (berth === undefined) return false;
-      const move = fitAfter(dir, X, yard.station, earliest, Math.max(earliest, arr(a) + waitLimit(X, turnX, arr(a))), turnX ? undefined : a.stops,
+      const move = fitAfter(dir, X, yard.station, earliest, Math.max(earliest, arr(a) + waitLimit(X, turnX, arr(a), a)), turnX ? undefined : a.stops,
         stops => safe(a, asTrip(dir, X, yard.station, stops))
           && (!turnX || reserve(X, arr(a), stops[0].dep, false) && frontTurnClear(ctx, live(), a, stops[0].dep, new Set([a.id]))));
       if (!move) return false;
@@ -472,35 +582,68 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     }
     const depot = yard.depot;
     if (entryStation(topo, depot, a.dir) === X) {
+      if (!T('peakHome', arr(a) >= homeFrom())) return false;
+      // entering here would change ends on the platform: turn beyond instead (OPERATIONS.portalReversal)
+      const rule = portalReversal(topo, depot, 'entry', a.dir, arr(a));
+      if (rule !== 'yes' && homeViaTurn(car, yard)) return true;
+      if (rule === 'no') return false;
       if (DEBUG && trace && !entryClear(depot, a.dir, X, a.stops)) { const [f, u] = inboundWindow(topo, depot, a);
         dutyDebug.push(`  d-entry ${STATIONS[X].id} ${fmt(f)}-${fmt(u)} vs ${outbound.filter(m => m.depot === depot && !(m.to <= f || m.from >= u)).map(m => fmt(m.from) + '-' + fmt(m.to) + m.dir).join(' ')}`); }
       if (!T('d-entry', entryClear(depot, a.dir, X, a.stops)) || !T('d-full', canTake(depot, arr(a) + DEPOT_ENTRY_CLEAR))) return false;
       if (dry) return true;
-      endOf.set(a.id, { kind: 'depot', depot });
-      const [from, to] = inboundWindow(topo, depot, a);
-      addInbound({ depot, dir: a.dir, from, to, at: arr(a) + DEPOT_ENTRY_CLEAR });
+      enterYard(depot, a);
       return true;
     }
     const dir = depotDir(X, depot);
     const en = entryStation(topo, depot, dir);
     if (en === X || ahead(dir, en, X)) return false;
-    const turnX = a.dir !== dir;
-    if (turnX && !turnbackAt(topo, X, a.dir)) return false;
-    const earliest = arr(a) + (turnX ? minTurn(X) : throughMin(X, a.dir, arr(a)));
-    const move = fitAfter(dir, X, en, earliest, arr(a) + waitLimit(X, turnX, arr(a)), turnX ? undefined : a.stops,
-      stops => T('outer', outerQuiet(stops)) && T('safeX', safe(a, asTrip(dir, X, en, stops))) && T('entry', entryClear(depot, dir, en, stops))
-        && T('full', canTake(depot, stops.at(-1)!.arr + DEPOT_ENTRY_CLEAR))
-        && (!turnX || T('placeX', reserve(X, arr(a), stops[0].dep, false)) && T('frontX', frontTurnClear(ctx, live(), a, stops[0].dep, new Set([a.id])))));
+    if (topo.depots[depot].portals.entry[dir].reverse && portalReversal(topo, depot, 'entry', dir, arr(a)) !== 'yes' && homeViaTurn(car, yard)) return true;
+    // (no entry before the end of the morning peak: a turning car stands on until then)
+    const probe = moveStops(dir, X, en, 0), run = probe ? probe.stops.at(-1)!.arr - probe.stops[0].dep : 0;
+    const move = fitOutOf(a, X, dir, en, homeFrom() - run, turnX => arr(a) + waitLimit(X, turnX, arr(a), a),
+      stops => T('peakHome', stops.at(-1)!.arr >= homeFrom()) && entryFits(depot, dir, en, stops)
+        && T('reverse', portalReversal(topo, depot, 'entry', dir, stops.at(-1)!.arr) !== 'no'));
     if (!move) return false;
     if (dry) return true;
-    if (turnX) reserve(X, arr(a), move.stops[0].dep);
+    if (a.dir !== dir) reserve(X, arr(a), move.stops[0].dep);
     const trip = addMove(dir, X, en, move.stops, move.revenue);
     trip.kind = move.revenue ? 'wd' : 'empty';
     link(a, trip);
-    endOf.set(trip.id, { kind: 'depot', depot });
-    const [from, to] = inboundWindow(topo, depot, trip);
-    addInbound({ depot, dir, from, to, at: arr(trip) + DEPOT_ENTRY_CLEAR });
+    enterYard(depot, trip);
     return true;
+  };
+
+  /** 用户决定（2026-11-08）：a car for a yard whose entry from its side changes ends on the junction
+   * platform runs past it to the next turnback (远东大道 → 广兰路), turns and enters running the way the
+   * portal faces (OPERATIONS.portalReversal). */
+  const homeViaTurn = (car: Car, yard: Yard): boolean => {
+    const depot = yard.depot, X = car.station, a = car.trip;
+    for (const dirE of ['UP', 'DN'] as TrackDir[]) {
+      if (topo.depots[depot].portals.entry[dirE].reverse) continue;
+      const en = entryStation(topo, depot, dirE), dirO = opposite(dirE);
+      if (X !== en && !ahead(dirO, X, en)) continue;
+      const K = turnBeyond(en, dirO);
+      if (K === undefined) continue;
+      // a car with no more work may stand on at a line end until a path home opens (its track reserved)
+      const out = fitOutOf(a, X, dirO, K, -Infinity, turnX => arr(a) + Math.max(waitLimit(X, turnX, arr(a), a), turnX && lineEnd(X) ? MAX_LAYOVER : 0), () => true);
+      if (!out) { if (DEBUG) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} out →${STATIONS[K].id} failed`); continue; }
+      const first = asTrip(dirO, X, K, out.stops), reach = out.stops.at(-1)!.arr;
+      const before = DEBUG && trace ? new Map(trace) : undefined;
+      const back = fitAfter(dirE, K, en, reach + minTurn(K), reach + waitLimit(K, true, reach), undefined,
+        stops => T('peakHome', stops.at(-1)!.arr >= homeFrom()) && T('outer', outerQuiet(stops)) && T('safeK', safe(first, asTrip(dirE, K, en, stops)))
+          && T('placeK', reserve(K, reach, stops[0].dep, false)) && T('frontK', frontTurnClear(ctx, live(), first, stops[0].dep, new Set()))
+          && entryFits(depot, dirE, en, stops));
+      if (!back) { if (DEBUG) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} back ${STATIONS[K].id}@${fmt(reach)}→${STATIONS[en].id} failed ${before ? [...trace!].filter(([k, n]) => n !== (before.get(k) ?? 0)).map(([k, n]) => k + '=' + (n - (before.get(k) ?? 0))).join(' ') : ''}`); continue; }
+      if (dry) return true;
+      if (a.dir !== dirO) reserve(X, arr(a), out.stops[0].dep);
+      reserve(K, reach, back.stops[0].dep);
+      const t1 = addMove(dirO, X, K, out.stops, out.revenue), t2 = addMove(dirE, K, en, back.stops, back.revenue);
+      t1.kind = out.revenue ? 'wd' : 'empty'; t2.kind = back.revenue ? 'wd' : 'empty';
+      link(a, t1); link(t1, t2);
+      enterYard(depot, t2);
+      return true;
+    }
+    return false;
   };
 
   /** car `car` takes departure `want`: turning or running on at its own
@@ -508,7 +651,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const join = (car: Car, want: Want): boolean => {
     if (car.station !== want.station) return !!position(car, want);
     const a = car.trip, d = want.trip, X = car.station, turn = a.dir !== d.dir, wait = dep(d) - arr(a);
-    if (wait < (turn ? minTurn(X) : throughMin(X, a.dir, arr(a))) - 1e-6 || wait > waitLimit(X, turn, dep(d)) || !safe(a, d)) return false;
+    if (wait < (turn ? minTurn(X) : throughMin(X, a.dir, arr(a))) - 1e-6 || wait > waitLimit(X, turn, arr(a), a) || !safe(a, d)) return false;
     if (turn && (!turnbackAt(topo, X, a.dir) || !frontTurnClear(ctx, live(), a, dep(d), new Set([a.id, d.id])) || !reserve(X, arr(a), dep(d)))) return false;
     link(a, d);
     return true;
@@ -550,9 +693,10 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     E, lineEnd, factor, arr, dep, live, services, leavingFrom, lineEndStand, throughMin, waitLimit, openers, index, slot, lastService, POSITIONING,
     addMove, startOf, endOf, link, places, standbyPlaces, reserve, yards, asTrip, safe, moveStops, outerQuiet, exitClear, entryClear,
     exits, inbound, outbound, addExit, addInbound, dropInbound, fitBefore, fitAfter, toward, depotDir, position, lowest, canDraw, canTake,
-    feed, distanceTo, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter,
+    feed, distanceTo, idleYard, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter,
     get viaCore() { return viaCore; }, set viaCore(v: boolean) { viaCore = v; },
     get early() { return early; }, set early(v: boolean) { early = v; },
+    get idleHome() { return idleHome; }, set idleHome(v: boolean) { idleHome = v; },
     get dry() { return dry; }, set dry(v: boolean) { dry = v; },
   };
 }

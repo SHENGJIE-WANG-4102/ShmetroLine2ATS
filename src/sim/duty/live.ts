@@ -728,14 +728,21 @@ function expiredStablingExchange(sim: Sim, incoming: Train): Result | null {
 
 // ---------------------------------------------------------------- cars leaving the pool
 
-/** A relieved train that has finished its last kept trip returns to the yard. */
+/** A relieved train that has finished its last kept trip returns to the yard.
+ * So does one whose duty ends there with no home at all (a plan defect, never
+ * planned on purpose): degraded to a system withdrawal with an alarm, rather
+ * than a train standing on the line with no task. */
 export function standbyTick(sim: Sim) {
   for (const tr of sim.trainList) {
     const stop = tr.tasks[0];
-    if (!tr.relievedBy || tr.withdrawn || tr.phase !== 'dwell' || tr.tasks.length !== 1 || stop?.k !== 'stop' || stop.dep !== null) continue;
+    if (tr.withdrawn || tr.phase !== 'dwell' || tr.tasks.length !== 1 || stop?.k !== 'stop' || stop.dep !== null) continue;
+    const homeless = !tr.relievedBy && tr.block >= 0 && sim.plan.blocks[tr.block]?.end.kind === 'none';
+    if (!tr.relievedBy && !homeless) continue;
     // 5 s after arrival, then once a minute while the withdrawal is refused
     if (Math.floor(sim.t - tr.phaseSince) % 60 !== 5) continue;
-    sim.command({ c: 'withdraw', train: tr.id, reason: `后续车次已由备车表号${tr.relievedBy}接替` }, '系统');
+    if (homeless) sim.log('C', '运营', `列车 ${tr.svc}（${tr.vehicle}）车底运用无回段或存车安排，系统安排回段`,
+      { key: `duty-no-home-${tr.id}`, train: tr.id });
+    sim.command({ c: 'withdraw', train: tr.id, reason: homeless ? '车底运用无回段安排' : `后续车次已由备车表号${tr.relievedBy}接替` }, '系统');
   }
   returnIdleStock(sim);
 }

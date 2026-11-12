@@ -1322,7 +1322,23 @@ describe('standby trains (D45)', () => {
 });
 
 describe('shared depot admission',()=>{
-  it.each(['BZL','CSD'])('starts from %s only at source time and waits on its safe platform for the ordinary exit window',key=>{
+  // 用户决定（2026-11-08, OPERATIONS.portalReversal）：CSD's shared lead changes
+  // ends on the 远东大道 platform, so it starts no revenue run in service: only
+  // the pre-06:00 pull-outs, which run empty to the airport (D166). The
+  // admission contract below is that of a scheduled revenue origin (BZL's).
+  it('uses the CSD shared lead for no revenue pull-out, only the early empty ones',()=>{
+    const sim=make();const depot=sim.topo.depots.find(d=>d.key==='CSD')!;
+    const shared=sim.plan.blocks.filter(b=>b.start.kind==='depot'&&b.start.depot===depot.id)
+      .map(b=>({b,trip:sim.plan.trips[b.trips[0]]}))
+      .filter(({trip})=>depot.transferPaths[depot.portals.exit[trip.dir].path].flow==='shared');
+    expect(depot.portals.exit.DN.reverse&&OPERATIONS.portalReversal?.stations.includes('YDD')).toBe(true);
+    expect(shared.length).toBeGreaterThan(0);
+    for(const {b,trip} of shared){
+      expect(trip.revenue).toBe(false);
+      if(b.start.kind==='depot')expect(b.start.time).toBeLessThan(parseTime(OPERATIONS.portalReversal!.pullOutBefore));
+    }
+  });
+  it.each(['BZL'])('starts from %s only at source time and waits on its safe platform for the ordinary exit window',key=>{
     const sim=make();const depot=sim.topo.depots.find(d=>d.key===key)!;
     // D72's first CSD movement may use its dedicated UP exit or be an
     // empty positioning trip. Select the shared lead's scheduled origin,
@@ -1621,7 +1637,15 @@ describe('ATO with a driver under CBTC (D52)', () => {
     expect(cbtc.every(t => t.mode === 'AM')).toBe(true);
     expect(sim.command({ c: 'lineAto', on: false }).ok).toBe(true);
     advance(sim, 600);
-    expect(sim.trainList.filter(t => t.inService && t.level === 'CBTC' && !t.manual).every(t => t.mode === 'DTO')).toBe(true);
+    // Each train changes back at its next stop. One still in AM stands in a
+    // turnback track for a later departure (用户决定 2026-11-08: no return
+    // before 10:00, the morning's surplus cars stand at the line end) and
+    // changes when it draws into the platform.
+    const cbtcNow = () => sim.trainList.filter(t => t.inService && t.level === 'CBTC' && !t.manual);
+    for (const t of cbtcNow().filter(t => t.mode !== 'DTO'))
+      expect([t.phase, Math.abs(t.v) < 0.01, sim.topo.links[t.link].platform < 0, t.tasks[0]?.k === 'stop' && t.tasks[0].turnbackWaitBerth !== undefined]).toEqual(['run', true, true, true]);
+    for (const end = sim.t + 3600; sim.t < end && !cbtcNow().every(t => t.mode === 'DTO');) sim.step();
+    expect(cbtcNow().every(t => t.mode === 'DTO')).toBe(true);
     expect(sim.integrity.violations).toHaveLength(0);
   }, 240_000);
   it('starts an operating day in ATO operation on the same plan', () => {

@@ -9,6 +9,7 @@
  * withdrawals (回库) — revenue partial trips placed into gaps of the stream,
  * or non-revenue moves before/after service.
  */
+import { parseTime } from './calendar';
 import type { Topology } from './topology';
 import { ahead, directionToward, stablingBerth } from './topology';
 import type { RunTimes } from './dynamics';
@@ -151,6 +152,13 @@ export function storageArrivalBerth(topo: Topology, berth: number, dir: TrackDir
  *  intermediate station's through platform before its next trip (s): any
  *  longer and the following train queues behind it */
 export const THROUGH_WAIT = 60;
+/** longest an intermediate turnback holds a car beyond its minimum turn (s): D42, the
+ *  intermediate-terminal layover limit (validatePlan LAYOVER_LONG); also the 广兰路
+ *  middle-track turn window of D48 (「一两个时隙内折返」) */
+export const INTERMEDIATE_WAIT = 450;
+/** 广兰路 single middle track (D48): the departing train has cleared the west throat and
+ *  the next arrival's route into the middle track is set within this time (s) */
+const CORE_CLEAR = 60;
 export function depotIndex(topo: Topology, key: string): number {
   return topo.depots.findIndex((d) => d.key === key);
 }
@@ -164,12 +172,63 @@ export function exitStation(topo: Topology, depot: number, dir: TrackDir): numbe
 export function entryStation(topo: Topology, depot: number, dir: TrackDir): number {
   return topo.depots[depot].portals.entry[dir].station;
 }
+/** May a depot move change ends on the junction station's platform (OPERATIONS.portalReversal)?
+ * 'yes': no reversal needed or the station allows it; 'fallback': only when a turn beyond does
+ * not fit (early pull-out / night pull-in); 'no': turn at the next turnback beyond instead. */
+export function portalReversal(topo: Topology, depot: number, kind: 'exit' | 'entry', dir: TrackDir, at: number): 'yes' | 'fallback' | 'no' {
+  const portal = topo.depots[depot].portals[kind][dir], rule = OPERATIONS.portalReversal;
+  if (!portal.reverse || !rule?.stations.includes(STATIONS[portal.station].id)) return 'yes';
+  const clock = parseTime(kind === 'exit' ? rule.pullOutBefore : rule.pullInFrom);
+  return (kind === 'exit' ? at < clock : at >= clock) ? 'fallback' : 'no';
+}
 /** extra time a depot move spends changing ends at its junction station (s) */
 const PORTAL_REVERSE = 90;
 
 export function minTurn(st: number): number {
   const id = STATIONS[st].id;
   return OPERATIONS.minTurnback[id] ?? 330;
+}
+
+/** 用户决定（2026-11-08）：出库的车早高峰结束（OPERATIONS.noDepotReturnBefore）前不回库 (s; none: -Infinity) */
+export function noDepotReturnBefore(): number {
+  return OPERATIONS.noDepotReturnBefore ? parseTime(OPERATIONS.noDepotReturnBefore) : -Infinity;
+}
+/** 【假设】a car counts as turned at a line end this long after its minimum turn (s): the duty
+ * planner's berth and front-route checks reject a turn with no slack at all */
+export const LINE_END_TURN_SLACK = 60;
+/**
+ * Longest a car arriving at `arrival` stands at line end (or own-track turnback) `st` before it
+ * takes one of the departures `leaving` (sorted) there: its turn and one departure interval, the
+ * published one or the gap the first departure after its turn leaves behind (where they alternate,
+ * 150/300 s at the airport in the peak, a car that just missed one waits the local gap: no queue
+ * either), at most MAX_LAYOVER. A car arriving before `standUntil` may stand on until then
+ * (OPERATIONS.noDepotReturnBefore: the morning's surplus cars wait on their tracks for later
+ * departures; the berth occupancy is the duty planner's reserve). One rule for the diagram's
+ * balance (layoutService) and the duty planner (duty/moves.ts).
+ */
+export function lineEndStand(dayType: DayType, st: number, arrival: number, leaving: readonly number[], standUntil = -Infinity): number {
+  const i = leaving.findIndex(t => t >= arrival + minTurn(st));
+  const local = i > 0 ? leaving[i] - leaving[i - 1] : undefined;
+  const official = officialEndInterval(dayType, st, arrival);
+  const stand = Math.min(MAX_LAYOVER, minTurn(st) + Math.max(official ?? 0, local ?? (official === undefined ? MAX_LAYOVER : 0)));
+  return arrival < standUntil ? Math.max(stand, standUntil - arrival) : stand;
+}
+/** FIFO turns at line end `st`: each arrival (sorted times) is ready LINE_END_TURN_SLACK after its minimum
+ * turn and stands at most lineEndStand, no more cars standing than the end's `capacity` (the latest
+ * arrival is the one left out); returns the departures (sorted times) no car reaches and the arrivals
+ * (indices) left over */
+export function lineEndTurns(dayType: DayType, st: number, arrivals: readonly number[], departures: readonly number[], capacity: number, standUntil = -Infinity) {
+  const turn = minTurn(st) + LINE_END_TURN_SLACK;
+  const ready: number[] = [], short: number[] = [], spare: number[] = [];
+  let next = 0;
+  for (const at of departures) {
+    while (next < arrivals.length && arrivals[next] + turn <= at + 1e-6) ready.push(next++);
+    while (ready.length && at - arrivals[ready[0]] > lineEndStand(dayType, st, arrivals[ready[0]], departures, standUntil) + 1e-6) spare.push(ready.shift()!);
+    while (ready.length > capacity) spare.push(ready.pop()!);
+    if (ready.length) ready.shift(); else short.push(at);
+  }
+  for (; next < arrivals.length; next++) ready.push(next);
+  return { short, spare: [...spare, ...ready] };
 }
 
 export function overnightPlaces(topo: Topology) {
@@ -908,19 +967,22 @@ export function layoutService(ctx: PlanContext) {
   // arrival that would turn into an UP departure a slot or two later, but
   // whose platform the following arrival needs first, runs on to the eastern
   // terminal instead (延伸运行), where the tails have room.
-  if (SIMULATION.timetable.terminals.overflowWithdrawal) {
+  const arrAt = (t: ServiceRequest) => t.stops[t.stops.length - 1].arr;
+  /** The CORE_E middle-track turn (D48): the first departure in `deps` (sorted, none of `taken`)
+   * at least a minimum turn after arrival `a` and within INTERMEDIATE_WAIT of it, that has cleared
+   * the throat before the track's next arrival `next` needs it. */
+  const coreTurn = (a: number, deps: readonly number[], next: number, taken?: ReadonlySet<number>): number | undefined => {
     const mt = minTurn(CORE_E);
-    // the departing train is out of the west throat and the next arrival's
-    // route into the middle track set within this time
-    const CORE_CLEAR = 60;
-    const arrAt = (t: ServiceRequest) => t.stops[t.stops.length - 1].arr;
+    const d = deps.find(x => x >= a + mt - 1e-6 && !taken?.has(x));
+    return d !== undefined && d - a <= mt + INTERMEDIATE_WAIT && d + CORE_CLEAR <= next ? d : undefined;
+  };
+  if (SIMULATION.timetable.terminals.overflowWithdrawal) {
     const arrivals = trips.filter((t) => t.dir === 'DN' && t.to === CORE_E && t.kind === 'small').sort((a, b) => arrAt(a) - arrAt(b));
     const deps = trips.filter((t) => t.dir === 'UP' && t.from === CORE_E).map((t) => t.stops[0].dep).sort((a, b) => a - b);
     for (let i = 0; i + 1 < arrivals.length; i++) {
       const A = arrivals[i];
-      const d = deps.find((x) => x >= arrAt(A) + mt - 1e-6);
       // (no departure within a slot or two: the train is withdrawn to the depot as before)
-      if (d !== undefined && d - arrAt(A) <= mt + 450 && d + CORE_CLEAR <= arrAt(arrivals[i + 1])) continue;
+      if (coreTurn(arrAt(A), deps, arrAt(arrivals[i + 1])) !== undefined) continue;
       // During morning opening, a short-route train with no middle-track
       // turn runs to CSD's entry at YDD rather than filling the airport tails.
       // This is a passenger-carrying withdrawal, not an extra airport origin.
@@ -928,6 +990,70 @@ export function layoutService(ctx: PlanContext) {
       // rather than add an unplanned arrival to the airport turning cycle.
       A.to = stationIndex(SIMULATION.timetable.terminals.overflowWithdrawal); A.kind = 'wd';
       A.stops = buildStops(ctx, 'DN', A.from, A.to, A.stops[0].dep, true, factorAt);
+    }
+  }
+
+  // 用户决定（2026-11-08/11-10）：东端靠截短、延伸交路自己配平车，不在远东大道站台换端出入段，
+  // 也不在两个车场之间对调车。现实有这些交路：淞虹路→浦东机场（D173 PIS）、蟠祥路→广兰路
+  // （10-16 蟠祥路 PIS「开往广兰路」页、录音末G）。
+  // - the eastern line end lacks a car for a westbound departure: the latest
+  //   short-route train that reaches it in time runs on (延伸运行), one that
+  //   could not turn at CORE_E first;
+  // - it has a car left over while CORE_E lacks one: the whole-route train
+  //   bringing it ends at CORE_E instead (截短).
+  // 【假设】how many such trains run follows from the two ends' balance; the
+  // field material shows the routes, not their count.
+  if (SIMULATION.timetable.terminals.balanceRoutes) {
+    const turnE = minTurn(E) + LINE_END_TURN_SLACK;
+    /** the line end's turns, as the duty planner stands its cars (lineEndTurns) */
+    const balanceE = () => {
+      const departures = trips.filter(t => t.dir === 'UP' && t.from === E).map(t => t.stops[0].dep).sort((a, b) => a - b);
+      const arrivals = trips.filter(t => t.dir === 'DN' && t.to === E).sort((a, b) => arrAt(a) - arrAt(b));
+      const turns = lineEndTurns(ctx.dayType, E, arrivals.map(arrAt), departures, terminalCapacity(ctx.topo, E), noDepotReturnBefore());
+      return { short: turns.short, spare: turns.spare.map(i => arrivals[i]) };
+    };
+    const extend = (at: number) => {
+      let best: { trip: ServiceRequest; stops: PlanStop[]; rank: number } | undefined;
+      const index = new DepIndex(trips);
+      for (const t of trips) {
+        if (t.dir !== 'DN' || t.from !== CORE_W || t.locked || !(t.kind === 'small' || t.kind === 'wd' && t.to !== E)) continue;
+        const stops = buildStops(ctx, 'DN', t.from, E, t.stops[0].dep, true, factorAt);
+        const reach = stops[stops.length - 1].arr, rank = t.kind === 'wd' ? 1 : 0;
+        if (reach + turnE > at + 1e-6 || reach < at - turnE - MAX_LAYOVER) continue;
+        if (best && (best.rank > rank || best.rank === rank && best.stops[best.stops.length - 1].arr >= reach)) continue;
+        // (its own current departures do not count against it)
+        if (!index.clear(stops, 'DN', MIN_HEADWAY, t.stops)) continue;
+        best = { trip: t, stops, rank };
+      }
+      if (best) { best.trip.to = E; best.trip.kind = 'big'; best.trip.stops = best.stops; }
+      return !!best;
+    };
+    // one at a time: each extension may also cover a later departure
+    for (let tried = new Set<number>(); ;) {
+      const at = balanceE().short.find(x => !tried.has(x));
+      if (at === undefined) break;
+      tried.add(at);
+      extend(at);
+    }
+    // CORE_E departures no short-route arrival turns into (the CORE_E rule above)
+    const coreShort = () => {
+      const arrivals = trips.filter(t => t.dir === 'DN' && t.to === CORE_E).map(arrAt).sort((a, b) => a - b);
+      const deps = trips.filter(t => t.dir === 'UP' && t.from === CORE_E).map(t => t.stops[0].dep).sort((a, b) => a - b);
+      const fed = new Set<number>();
+      arrivals.forEach((a, i) => {
+        const d = coreTurn(a, deps, arrivals[i + 1] ?? Infinity, fed);
+        if (d !== undefined) fed.add(d);
+      });
+      return { deps: deps.filter(d => !fed.has(d)), arrivals };
+    };
+    for (const car of balanceE().spare) {
+      if (car.from !== W && car.from !== CORE_W || car.locked) continue;
+      const stops = buildStops(ctx, 'DN', car.from, CORE_E, car.stops[0].dep, true, factorAt);
+      const a = stops[stops.length - 1].arr, core = coreShort();
+      // the middle track must be free from this arrival until the departure has cleared
+      const d = coreTurn(a, core.deps, core.arrivals.find(x => x > a - CORE_CLEAR) ?? Infinity);
+      if (d === undefined) continue;
+      car.to = CORE_E; car.kind = car.from === W ? 'big' : 'small'; car.stops = stops;
     }
   }
 
@@ -1683,7 +1809,7 @@ export function applyOverlay(ctx: PlanContext, plan: Plan, preset: { id: string;
   const waitAt = (X: number) => { if (!waiting.has(X)) waiting.set(X, []); return waiting.get(X)!; };
   const occ0 = turnbackOccupancy(ctx.topo, plan);
   const paired: { st: number; from: number; to: number }[] = [];
-  const turnWait = (X: number) => X > 0 && X < ctx.topo.stations.length - 1 ? 450 : MAX_LAYOVER;
+  const turnWait = (X: number) => X > 0 && X < ctx.topo.stations.length - 1 ? INTERMEDIATE_WAIT : MAX_LAYOVER;
   const turnFree = (station: number, from: number, to: number, own?: number) => {
     const clear = OPERATIONS.platformTurnClear[STATIONS[station].id] ?? 0;
     const pending = waitAt(station).filter(t => t.id !== own).map(t => ({from:t.stops.at(-1)!.arr,to:t.stops.at(-1)!.arr+minTurn(station)}));
@@ -1863,8 +1989,17 @@ export function applyOverlay(ctx: PlanContext, plan: Plan, preset: { id: string;
   };
   const added = (id: number) => blocks.some(b => b.id === id && b.trips.some(t => !trips[t].cancelled))
     || extended.some(x => x.block === id);
+  // An added chain run by a base car that found no home (overlayDuties leaves
+  // it to this check) ends its duty mid-line: give the base car its own
+  // withdrawal back like any other infeasible extension.
+  const homeless = (): PlanIssue | undefined => {
+    const b = plan.blocks.find(x => added(x.id) && x.end.kind === 'none' && x.trips.some(id => !trips[id].cancelled));
+    const last = b && trips[b.trips.filter(id => !trips[id].cancelled).at(-1)!];
+    return b && last && { severity: 'error', code: 'BLOCK_BREAK', t: last.stops.at(-1)!.arr, blocks: [b.id],
+      text: `车底 ${b.svc} 加开车次 ${last.no} 终到 ${STATIONS[last.to].name} 后无回段或存车安排` };
+  };
   for (let attempt = 0; attempt < blocks.length + extended.length; attempt++) {
-    const issue = validatePlan(ctx, plan).find(i => i.blocks?.some(added));
+    const issue = homeless() ?? validatePlan(ctx, plan).find(i => i.blocks?.some(added));
     if (!issue) break;
     const reason = `加开能力不足：${issue.text}`;
     const x = extended.filter(e => issue.blocks!.includes(e.block)).at(-1);
@@ -2235,8 +2370,17 @@ export type Turnback = { kind: 'rear'; berths: number[] } | { kind: 'front'; arr
 /** how a train arriving at `station` travelling `arrDir` can reverse there */
 export function turnbackAt(topo: Topology, station: number, arrDir: TrackDir): Turnback | null {
   const s = topo.stations[station];
+  // A middle-track platform (广兰路) has a throat to both mains at each end: a
+  // train arriving the other way stops on it heading its own way and changes
+  // ends there too (用户决定 2026-11-08：川沙出段车经广兰路换端).
+  const twins = s.turnbackBerths.flatMap(bid => {
+    const b = topo.berths[bid];
+    if (b.kind !== 'platform') return [];
+    const twin = topo.berths.find(o => o.link === b.link && o.kind === 'platform' && o.dir === -b.dir);
+    return twin ? [twin.id] : [];
+  });
   // a berth serves arrivals that keep their heading into it (eastbound berths for DN)
-  const rear = s.turnbackBerths.filter((bid) => {
+  const rear = [...s.turnbackBerths, ...twins].filter((bid) => {
     const b = topo.berths[bid];
     const l = topo.links[b.link];
     const east = (l.chainB - l.chainA) * b.dir > 0;
@@ -2569,13 +2713,37 @@ export function depotTasks(topo: Topology, depot: number, dir: TrackDir, tasks: 
   if (work?.entryPosition === 'lead') {
     const candidates = yard.transferPaths.flatMap((path,index) => {
       if (yard.entryBerths[index] < 0) return [];
-      const berth = topo.berths.find(b => b.link === path.stub && b.dir === 1 && b.kind === 'siding');
+      const berth = leadWorkBerth(topo, path.stub);
       return berth ? [{ index, berth:berth.id }] : [];
     });
     candidates.sort((a,b) => Number(b.index === p.path) - Number(a.index === p.path));
     addWork(candidates.map(c => c.berth));
   }
   tasks.push({ k: 'depot', depot, berth: yard.entryBerths[p.path] });
+}
+
+/** The fixed entry work place on a depot lead (its inward siding berth). */
+function leadWorkBerth(topo: Topology, stub: number) {
+  return topo.berths.find(b => b.link === stub && b.dir === 1 && b.kind === 'siding');
+}
+
+/** Entering `depot` straight off the lead track `stub` a train already stands
+ * on: that lead's fixed entry work, then the yard. Undefined where the line
+ * does not lead into the yard from there, or the entry work is done on a
+ * platform (the ordinary portal path, depotTasks, applies). */
+export function depotLeadTasks(topo: Topology, depot: number, stub: number): Task[] | undefined {
+  const yard = topo.depots[depot], work = OPERATIONS.depotLeadWork?.[yard.key];
+  const index = yard.transferPaths.findIndex(path => path.stub === stub);
+  if (index < 0 || yard.entryBerths[index] < 0 || work && work.entryPosition !== 'lead') return undefined;
+  const tasks: Task[] = [];
+  if (work) {
+    const berth = leadWorkBerth(topo, stub);
+    if (!berth) return undefined;
+    tasks.push({ k:'stop', berth:berth.id, station:yard.station, trip:-1, arr:null, dep:null,
+      doors:false, revenue:false, minDwell:work.entryS, note:'入段固定作业', depotWork:{kind:'in',depot,berths:[berth.id]} });
+  }
+  tasks.push({ k: 'depot', depot, berth: yard.entryBerths[index] });
+  return tasks;
 }
 
 export function tripTasks(topo: Topology, trip: Trip, tasks: Task[], fromDepot: boolean) {
@@ -2846,6 +3014,26 @@ export class DepIndex {
     }
     return true;
   }
+  /** 0 when clear(stops, dir, h, except, shift) holds; else how far (s) the shift must still move later
+   * (`down`: earlier) before it can: every departure now within the headway of a stop stays within it
+   * until then */
+  clearGap(stops: PlanStop[], dir: TrackDir, h: number, except: PlanStop[] | undefined, shift: number, down = false): number {
+    let gap = 0;
+    for (const p of stops) {
+      const a = this.m.get(`${p.st}${dir}`);
+      if (!a) continue;
+      const t = p.dep + shift;
+      let lo = 0, hi = a.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (a[mid] <= t - h) lo = mid + 1; else hi = mid; }
+      let ignored = false;
+      const own = except?.find(s => s.st === p.st)?.dep;
+      for (; lo < a.length && a[lo] < t + h; lo++) {
+        if (!ignored && own !== undefined && a[lo] === own) { ignored = true; continue; }
+        gap = Math.max(gap, down ? t - (a[lo] - h) : a[lo] + h - t);
+      }
+    }
+    return gap;
+  }
 }
 
 /**
@@ -2997,7 +3185,7 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
       if (a.dir !== d.dir && dep - arr < minTurn(a.to) - 1e-6) out.push({ severity: 'error', code: 'TURN_SHORT', t: arr, text: `车底 ${b.svc} 在 ${name(a.to)} 折返仅 ${(dep - arr).toFixed(1)} s（${a.no}→${d.no}，最小 ${minTurn(a.to)} s）` });
       if (a.dir !== d.dir && !storedTurn && !frontTurnClear(ctx, live, a, dep, new Set(ts.map(trip => trip.id))))
         out.push({severity:'error',code:'FRONT_CONFLICT',t:arr,blocks:[b.id],text:`${name(a.to)} 站前折返占用时段与正常方向列车冲突`});
-      if (a.overlay && a.dir !== d.dir && a.to > 0 && a.to < topo.stations.length - 1 && dep-arr > minTurn(a.to)+450+.01)
+      if (a.overlay && a.dir !== d.dir && a.to > 0 && a.to < topo.stations.length - 1 && dep-arr > minTurn(a.to)+INTERMEDIATE_WAIT+.01)
         out.push({severity:'error',code:'LAYOVER_LONG',t:arr,blocks:[b.id],text:`${name(a.to)} 加开接续等待超过中间折返站能力`});
     }
   }

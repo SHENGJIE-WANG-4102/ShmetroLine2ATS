@@ -17,7 +17,7 @@ import { takeVehicle, putVehicle, peekVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, autoMode, cbtcAvailable, distToNextSignal, turnbackDwell, simulatedAmDriver, driverTurnbackKind, calibratedRearTurnback } from './onboard';
 import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
-import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, TEMPLATES, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
+import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, depotLeadTasks, TEMPLATES, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/current';
 import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
 import { DOOR_CLOSE_S, PLANNED_CLOSE_BUDGET, MIN_DWELL, regulatedDwell, meanRange } from './calibration';
@@ -2336,6 +2336,35 @@ function storedReturnTasks(sim: Sim, tr: Train): Task[] | undefined {
   return turned && [{ k: 'reverse', berths: [here.id], chosen: here.id, station, minTime: 40 }, ...turned];
 }
 
+/** 用户决定（2026-11-11）：停在与车场直接相连的折返线/出入段线上、车上无客的列车
+ * 退出服务时，从这条线直接回段：车头已朝车场就直接走，否则就地换端（D177 存车回段
+ * 的走法），不出站台清客、不再绕另一条出入段线。判据只看这条线是否为某车场的入段
+ * 支路（transferPaths.stub）和车场入段作业位置，不看站名。 */
+function leadReturnTasks(sim: Sim, tr: Train): Task[] | undefined {
+  const { topo } = sim;
+  if (tr.load > 0 || tr.coupledLen > 0 || tr.failed || Math.abs(tr.v) > 0.01 || (tr.phase !== 'run' && tr.phase !== 'dwell')
+    || topo.links[tr.link].platform >= 0) return undefined;
+  // (the whole consist on this one track: a change of ends stays on it)
+  const rear = tr.off - tr.dir * tr.len;
+  if (rear < 0 || rear > topo.links[tr.link].len) return undefined;
+  for (let depot = 0; depot < topo.depots.length; depot++) {
+    const lead = depotLeadTasks(topo, depot, tr.link);
+    if (!lead) continue;
+    const goal = lead[0].k === 'stop' || lead[0].k === 'depot' ? lead[0].berth : -1;
+    if (goal === undefined || goal < 0) continue;
+    if (Number.isFinite(distanceToBerthFrom(sim, tr.link, tr.off, tr.dir, goal))) return lead;
+    const turned = { link: tr.link, off: rear, dir: -tr.dir as Dir };
+    if (!Number.isFinite(distanceToBerthFrom(sim, turned.link, turned.off, turned.dir, goal))) continue;
+    // the track's berth the change of ends is booked on (nearest the turned head)
+    const at = topo.berths.filter(b => b.link === tr.link && b.kind !== 'platform')
+      .sort((a, b) => Number(b.dir === turned.dir) - Number(a.dir === turned.dir)
+        || Math.abs(a.offset - turned.off) - Math.abs(b.offset - turned.off))[0];
+    if (!at) continue;
+    return [{ k: 'reverse', berths: [at.id], chosen: at.id, station: topo.depots[depot].station, minTime: 40 }, ...lead];
+  }
+  return undefined;
+}
+
 /** 用户决定（2026-11-05，D177）：无任务存车回段。Only a train standing idle in
  * storage with no further duty; it keeps its block's completed trips. */
 function withdrawStored(sim: Sim, tr: Train, reason: string) {
@@ -2372,6 +2401,7 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   // Entering a turnback siding: the only way out is the end change already
   // routed; a new forward path from here would run into the buffer stop.
   if (tr.tasks[0]?.k === 'reverse') return { ok: false, msg: '列车正在进入折返线，换端完成后再办理退出服务' };
+  const lead = leadReturnTasks(sim, tr);
   const d = dirOf(tr, topo);
   // The next station is the train's own next stop while it still lies ahead
   // on its path: a train drawing into a platform is past the station's centre
@@ -2430,7 +2460,10 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   let depot = forward[0]?.index ?? nearestDepot(sim, tr.lastStation >= 0 ? tr.lastStation : (next ?? 0), d);
   const reachable = forward.length > 0;
   const tasks: Task[] = [];
-  if (tr.phase === 'dwell') {
+  if (lead) {
+    tasks.push(...lead);
+    depot = (lead.at(-1) as Extract<Task, { k: 'depot' }>).depot;
+  } else if (tr.phase === 'dwell') {
     const cur = { ...curStop(tr)! };
     cur.revenue = false;
     cur.doors = true;
@@ -2441,7 +2474,8 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
   } else if (next !== undefined && tr.inService) {
     tasks.push({ k: 'stop', berth: clearBerth ?? stopBerthOnPath(sim, tr, next, d), station: next, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: OPERATIONS.terminalClearS ?? 60, note: '清客' });
   }
-  if (reachable) { depotTasks(topo, depot, d, tasks); turnAtClearPlatform(sim, tasks); }
+  if (lead) { /* straight off this lead */ }
+  else if (reachable) { depotTasks(topo, depot, d, tasks); turnAtClearPlatform(sim, tasks); }
   else {
     const { st: tbSt, current } = turn!;
     if (tbSt === undefined) return { ok: false, msg: '前方无折返/回段条件' };
@@ -2474,6 +2508,12 @@ export function cmdWithdraw(sim: Sim, tr: Train, reason = '调度命令') {
     if (tr.rescueFailedLoad !== undefined) tr.rescueFailedLoad = 0;
   }
   tr.tasks = tasks;
+  if (lead) {
+    // (no clear-out stop: the dwell, if any, ends here; a change of ends
+    // starts where it stands, the berth it turns onto being behind it)
+    tr.phase = 'run'; tr.phaseSince = sim.t;
+    if (tasks[0].k === 'reverse') arriveAtBerth(sim, tr, tasks[0]);
+  }
   tr.inService = false;
   tr.tripNo = '回段';
   tr.destText = topo.depots[tasks[tasks.length - 1].k === 'depot' ? (tasks[tasks.length - 1] as { depot: number }).depot : depot].short;

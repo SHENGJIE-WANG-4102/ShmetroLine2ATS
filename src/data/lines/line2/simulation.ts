@@ -204,6 +204,8 @@ export const SIMULATION: SimulationData = {
     opening: OPENING, outerBandMargin: 1200, overlays: OVERLAY_PRESETS,
     terminals: {
       core: ['SHR', 'GLL'], insertOrigin: 'LYL', overflowWithdrawal: 'YDD',
+      // 用户决定（2026-11-08/11-10）：东端靠截短、延伸交路配平车，不在远东大道站台换端出入段
+      balanceRoutes: true,
       circulate: ['SHR', 'GLL', 'GJH', 'LYL', 'YDD'],
       depot: { PXL: 'BZL', PDA: 'CSD', SHR: 'BZL', GLL: 'LYD', GJH: 'BZL', HQZ: 'BZL', LYL: 'LYD', YDD: 'CSD' },
       capacity: { PXL: 3, PDA: 3, SHR: 3, GJH: 3, HQZ: 2 },

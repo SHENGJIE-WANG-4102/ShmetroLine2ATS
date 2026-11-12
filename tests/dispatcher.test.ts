@@ -107,29 +107,32 @@ describe('dispatcher commands', () => {
   it('runs the CIIE opening-window services', () => {
     const sim = makeSim('weekday', 9 * 3600);
     // D178: on the pool-planned base the 9:30 slots keep no headway room;
-    // the window starts a quarter later
-    const preset = { from: 9.75 * 3600, to: 10.25 * 3600, headway: 900 };
+    // the window starts a quarter later. 用户决定 2026-11-08 (no return
+    // before 10:00): the morning's surplus cars return from 10:00 on, the
+    // 北翟路 lead is busy until about 10:30 and 国家会展中心 has no car for
+    // an added departure then; the window starts after that wave.
+    const preset = { from: 10.5 * 3600, to: 11 * 3600, headway: 900 };
     const before = sim.plan.trips.length;
     const ov = sim.command({ c: 'overlay', id: 'ciie', ...preset });
     expect(ov.ok, ov.msg).toBe(true);
     const added = sim.plan.trips.slice(before).filter(t => t.revenue && t.overlay?.startsWith('ciie'));
-    // D79 keeps the base peak until 10:00. The opening request yields two
-    // eastbound sections and one westbound return. D184: the eastbound
-    // sections no longer need a 北翟路 exit between the small-route returns;
-    // base cars running home take them (pool overlay), so all three run.
+    // D79 keeps the base peak until 10:00. Off the peak each of the three
+    // slots yields an eastbound section and a westbound return. D184: the
+    // eastbound sections no longer need a 北翟路 exit between the small-route
+    // returns; base cars running home take them (pool overlay), so all run.
     // An unavailable origin tail may move out to the next rear turnback;
     // compare the requested section, which keeps its published calls.
     const service = added.filter(t => t.dir==='DN'
       ? t.stops.some(s=>s.st===1)&&t.to===22
       : t.from>=22&&t.stops.some(s=>s.st===22)&&t.to===1);
-    expect(service.length).toBe(3);
+    expect(service.length).toBe(6);
     expect(service.filter(t => t.cancelled)).toHaveLength(0);
     const running = added.filter(t => !t.cancelled);
     expect(running.length).toBeGreaterThan(0);
     const last = Math.max(...running.map(t => t.stops.at(-1)!.arr));
     runFor(sim, last + 600 - sim.t, stepCheck);
     expect(running.filter(t => t.completed).length).toBeGreaterThanOrEqual(Math.ceil(.9 * running.length));
-  }, 240_000); // the added services run until about 11:15: some 8600 simulated seconds
+  }, 300_000); // the added services run until about 12:30: some 13000 simulated seconds
 
   it('R4 exchanges the duty of a late train with the on-time same-route trip behind it', () => {
     const sim = makeSim('weekday', H);

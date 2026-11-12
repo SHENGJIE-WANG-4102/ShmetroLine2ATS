@@ -57,6 +57,9 @@ export interface TimetableData {
   overlays: OverlayPreset[];
   terminals: {
     core: [string, string]; insertOrigin?: string; overflowWithdrawal?: string; circulate: string[];
+    /** the eastern line end balances its cars with the core by short and extended
+     * service routes (截短/延伸交路, timetable.ts layoutService); unset: off */
+    balanceRoutes?: boolean;
     depot: Record<string, string>; capacity: Record<string, number>; maxPresent: Record<string, number>;
   };
   firstOrigins: { dir: TrackDir; from: string; to: string; dep: number }[];

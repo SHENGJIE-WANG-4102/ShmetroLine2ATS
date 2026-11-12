@@ -469,6 +469,17 @@ export const OPERATIONS = {
   platformTurnClear: { GLL: 60 } as Record<string, number>,
   /** Direct passenger retirement boundaries, from the depot portal topology.
    * A daily circulation chooses homes within the yards' balanced quotas. */
+  // 用户决定（2026-11-08）：出库方向就是运行方向，远东大道、龙阳路正常运营时段不在站台换端出入库
+  // （川沙去机场方向的车先到广兰路折返，龙阳路的先到科技馆折返；回库同理先折返再顺向进库）。
+  // 凌晨出车、夜间收车可以换端但尽量少用。淞虹路（北翟路）西行出库、东行回库只能在站台换端，照旧。
+  // 【假设】凌晨出车 = 06:00 前出段，夜间收车 = 21:30 后进段。
+  portalReversal: { stations: ['YDD', 'LYL'], pullOutBefore: '06:00', pullInFrom: '21:30' },
+  // 用户决定（2026-11-08）：川沙车往返广兰路就位（广兰路始发、经广兰路换端）这段一律不载客，
+  // 不是一条载客交路；D166「营业后不空放」在这一段不适用。界面不显示「回送」。
+  emptyLegs: [['YDD', 'GLL']] as [string, string][],
+  // 用户决定（2026-11-08）：出库的车早高峰结束（官方 10:00）前不回库，车场间调车放到早高峰后或夜间，
+  // 不在同一车场一进一出。
+  noDepotReturnBefore: '10:00',
   depotReturns: [
     // 【假设】D178：高德淞虹路上行（往蟠祥路）全天、夜间 22:30 后 18 列，往蟠祥路的车基本不在淞虹路截下入段；
     // 截短后蟠祥路到达间隔不超过所跨原图最大间隔。

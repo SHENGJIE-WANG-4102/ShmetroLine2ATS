@@ -753,8 +753,21 @@ function physicalBlocker(sim: Sim, option: ResourceOption, self: number): Resour
 
 type PhysicalOrder = Map<number, Set<number>>;
 
-/** A physical predecessor is binding only if every reachable first route is occupied. */
-export function routePhysicalPredecessors(sim: Sim, tr: Train, goal: number): number[] {
+/** An actual occupant denied its next stage still holds its whole exit
+ * (arbitrateResources keeps its claims); ARS withholds every ordinary route
+ * into that exit (routeResourceBlocker). */
+type RetainedExit = { id: number; option: ResourceOption };
+
+function retainedExitOwner(sim: Sim, tr: Train, rid: number, retained: RetainedExit[]): number | undefined {
+  const route = sim.topo.routes[rid];
+  return retained.find(r => r.id !== tr.id && !occupiesMovement(tr, r.option)
+    && (route.sections.some(sec => r.option.sections.has(sec)) && routeNeedsResourceProtection(sim, rid, r.option)
+      || route.switches.some(sw => r.option.phases.some(phase => phaseSwitches(sim, phase).some(x => x.sw === sw.sw && x.pos !== sw.pos)))))?.id;
+}
+
+/** A physical predecessor is binding only if every reachable first route is
+ * occupied, by a body or by an occupant's retained exit. */
+export function routePhysicalPredecessors(sim: Sim, tr: Train, goal: number, retained: RetainedExit[] = []): number[] {
   const signal=sim.topo.signals[tr.nextSignal];
   if (tr.phase !== 'run' || !sim.topo.berths[goal] || signal?.dir !== tr.dir) return [];
   let cache=firstRouteChoices.get(sim.routeTable);
@@ -765,15 +778,21 @@ export function routePhysicalPredecessors(sim: Sim, tr: Train, goal: number): nu
     routes=signal.routes.filter(id=>Number.isFinite(walkRouteToBerth(sim.topo,sim.routeTable,{route:id,index:0},goal)));
     cache.set(key,routes);
   }
-  const blockers=routes.map(id=>routeOccupant(sim,id,tr.id));
-  return blockers.length && blockers.every(Boolean) ? [...new Set(blockers.map(b=>b!.train))] : [];
+  const blockers=routes.map(id=>routeOccupant(sim,id,tr.id)?.train ?? retainedExitOwner(sim,tr,id,retained));
+  return blockers.length && blockers.every(b=>b!==undefined) ? [...new Set(blockers as number[])] : [];
 }
 
-/** Rule 3: only actual occupancy/following creates these dependencies. No
- * reservation, scheduling wait, driving grade or wait-message text is read. */
+/** Rule 3: only actual occupancy/following creates these dependencies,
+ * including an actual occupant's retained exit (which no timetable order can
+ * revoke). No other reservation, scheduling wait, driving grade or
+ * wait-message text is read. */
 function physicalOrder(sim: Sim, requests: ResourceRequest[]): PhysicalOrder {
   const order: PhysicalOrder = new Map();
   const applicants = new Set(requests.map(r => r.id));
+  // (the same occupants arbitrateResources lets keep their exit when denied:
+  // a denial keeps its first option)
+  const retained: RetainedExit[] = requests.flatMap(r => (r.inside && !r.safeHere || r.committed) && r.options[0] && !r.options[0].unreachable
+    ? [{ id: r.id, option: r.options[0] }] : []);
   for (const request of requests) {
     const blockers = request.options.map(o => physicalBlocker(sim, o, request.id));
     order.set(request.id, new Set(blockers.every(Boolean) ? blockers.flatMap(b => b!.train >= 0 ? [b!.train] : []) : []));
@@ -792,7 +811,7 @@ function physicalOrder(sim: Sim, requests: ResourceRequest[]): PhysicalOrder {
       // An ordinary train may have no resource request and no TRAIN_AHEAD MA
       // even though all its reachable first routes are physically occupied.
       // Include those actual occupants before applying timetable order.
-      for (const blocker of routePhysicalPredecessors(sim,tr,goal)) predecessors.add(blocker);
+      for (const blocker of routePhysicalPredecessors(sim,tr,goal,retained)) predecessors.add(blocker);
     }
     order.set(tr.id, predecessors);
   }

@@ -29,7 +29,7 @@ export function overlayDuties(ctx: PlanContext, plan: Plan, tag: string, reuse: 
   const blockBase = plan.blocks.length;
   const base = plan.blocks.slice();
   const now = reuse.now;
-  const mv = createMoves(ctx, trips, dayPeriods(ctx.dayType), { notBefore: Number.isFinite(now) ? now : undefined });
+  const mv = createMoves(ctx, trips, dayPeriods(ctx.dayType), { notBefore: Number.isFinite(now) ? now : undefined, added: true });
   const { arr, dep, index } = mv;
   mv.seedBase(plan, reuse.stock);
   const added = trips.filter(t => t.overlay === tag && !t.cancelled);
@@ -139,6 +139,15 @@ export function overlayDuties(ctx: PlanContext, plan: Plan, tag: string, reuse: 
     const A = ends.shift()!;
     const car: Car = { id: A.id, ready: arr(A), trip: A, station: A.to };
     if (takeOver(car)) continue;
+    // 用户决定（2026-11-10）：taking over no base duty, the car has no more work: before 10:00 it goes home
+    // to its nearest yard only, as the day plan's idle cars do (moves.ts idleYard, planner.ts idleNearest)
+    const idle = mv.idleYard(car);
+    if (idle) {
+      mv.idleHome = true;
+      const ok = mv.homeBy(car, idle);
+      mv.idleHome = false;
+      if (ok) { owed.set(idle.id, owed.get(idle.id)! - 1); continue; }
+    }
     const yard = depots.slice().sort((a, b) => Number(owed.get(b.id)! > 0) - Number(owed.get(a.id)! > 0) || mv.distanceTo(a, A.to) - mv.distanceTo(b, A.to))
       .find(y => mv.homeBy(car, y));
     if (yard) { owed.set(yard.id, owed.get(yard.id)! - 1); continue; }

@@ -124,7 +124,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     const result = matchPool(cars, wants, {
       order: 'latest',
       maxWait: (car, want) => car.trip.dir === want.trip.dir ? THROUGH_WAIT
-        : waitLimit(T, true, want.at),
+        : waitLimit(T, true, arr(car.trip)),
       admit: (car, want) => turnAllowed(car.trip, want.trip) && (car.trip.dir === want.trip.dir || reserve(T, arr(car.trip), want.at)),
     });
     for (const [id, car] of result.pairs) link(car.trip, trips[id]);
@@ -256,7 +256,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   /** car `a` may take `d` at `st`: turning or running on, held within the limits */
   const connectAt = (a: GenTrip, d: GenTrip, st: number) => {
     const turn = a.dir !== d.dir, wait = dep(d) - arr(a);
-    return wait >= (turn ? minTurn(st) : throughMin(st, a.dir, arr(a))) - 1e-6 && wait <= waitLimit(st, turn, dep(d)) && safe(a, d)
+    return wait >= (turn ? minTurn(st) : throughMin(st, a.dir, arr(a))) - 1e-6 && wait <= waitLimit(st, turn, arr(a)) && safe(a, d)
       && (!turn || !!turnbackAt(topo, st, a.dir) && frontTurnClear(ctx, live(), a, dep(d), new Set([a.id, d.id])) && reserve(st, arr(a), dep(d)));
   };
   const trimStart = (want: Want): boolean => {
@@ -453,9 +453,12 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       mv.viaCore = across;
       for (const car of candidates) if (position(car, want)) { spare.splice(spare.indexOf(car), 1); done = true; break; }
       if (!done) for (const yard of order) if (feed(yard, want)) { done = true; break; }
-      if (!done && !across) done = trimStart(want);
+      // 用户决定（2026-11-08）：a line end's origin (浦东机场) is not cut back to spare a car
+      // running there through the core: 北翟路 cars run east in service and turn there
+      if (!done && !across && !lineEnd(want.station)) done = trimStart(want);
       if (done) break;
     }
+    if (!done && lineEnd(want.station)) { mv.viaCore = false; done = trimStart(want); }
     mv.viaCore = true;
     if (DEBUG && !done) dutyDebug.push(`feed-fail ${STATIONS[want.station].id} ${want.trip.dir} ${fmt(want.at)} cands ${candidates.length}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')}`);
     setTrace(null);
@@ -466,6 +469,22 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     else if (yard.stock) yard.sent = exits.filter(x => x.yard === yard.id).length;
 
   // ---- 3. every spare car returns to a yard, each yard to its own count
+  // 用户决定（2026-11-10/11-11）：10:00 前（OPERATIONS.noDepotReturnBefore）不回库。早高峰多出来、全天
+  // 再没有活的车就近顺向进库，不为车场配额改去别的车场；配额由之后和夜间的回库去平。
+  // 【假设】先不截短（定位走行回库），走不了才在最近车场的入口截短顺向进库（东头多余车在远东大道进川沙）：
+  // 一律不截短时这些车既回不了库也停不下（尾轨满），见 work/review/stage1-report.md 第二批。
+  const idleNearest = (car: Car): Yard | undefined => {
+    const yard = mv.idleYard(car);
+    if (!yard) return undefined;
+    let ok = false;
+    mv.idleHome = true;
+    for (const across of [false, true]) { mv.viaCore = across; if (home(car, yard) || directReturn(car, yard)) { ok = true; break; } }
+    if (!ok) { mv.viaCore = true; ok = trimEnd(car, yard); if (ok) { mv.idleHome = false; return yard; } }
+    mv.idleHome = false; mv.viaCore = true;
+    if (!ok) return undefined;
+    returned.set(yard.id, (returned.get(yard.id) ?? 0) + 1);
+    return yard;
+  };
   // drafted returns (fixed late runs) are in the yards' counts
   for (const depot of input.fixedEnds.values()) returned.set(depot, (returned.get(depot) ?? 0) + 1);
   // a hot standby car that stays at a storage place is that place's night car
@@ -536,7 +555,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       || distanceTo(a, car.station) - distanceTo(b, car.station));
     const match = matched.get(car);
     if (DEBUG) setTrace(new Map());
-    const yard = retire(car, balanced, match);
+    const yard = idleNearest(car) ?? retire(car, balanced, match);
     if (DEBUG && yard) { const last = lastOf(car.trip); dutyDebug.push(`home ${fmt(arr(car.trip))} ${STATIONS[car.station].id} ${car.trip.dir} → ${yard.name} via ${last === car.trip ? 'direct' : `${last.revenue ? '' : 'empty '}${STATIONS[last.from].id}-${STATIONS[last.to].id}`} trimmed ${car.trip.to !== car.station ? STATIONS[car.trip.to].id : '-'} match ${match?.name ?? '-'} due ${depots.map(y => due(y)).join(',')} later ${depots.map(y => later.get(y.id)).join(',')}`); }
     // a match that no longer fits when its turn comes: match the rest again
     if (match && yard !== match) rematch(homing.slice(i + 1));

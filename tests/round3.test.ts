@@ -88,13 +88,16 @@ describe('early and late added-service reservations',()=>{
     // is now the UP one to 蟠祥路; the DN one to 川沙 is omitted (shared
     // conversion track). Pin the current full-plan result without dropping
     // any requested calls; every omitted request still reports its reason.
-    // D184 (pool overlay): one request fewer is omitted.
+    // D184 (pool overlay): one request fewer is omitted. 用户决定 2026-11-10
+    // (no return before 10:00; a car with no more work goes home to its
+    // nearest yard only): the run-on is the DN one to 远东大道 (川沙), and one
+    // request more, an added arrival at 广兰路 with no way home then, is omitted.
     expect(through).toHaveLength(1);
     for(const trip of through) for(let station=1;station<=22;station++)
       expect(trip.stops.find(s=>s.st===station)?.stop).toBe(true);
-    expect(result.skipped).toBe(4);
+    expect(result.skipped).toBe(5);
     const omitted=plan.trips.filter(t=>t.overlay&&t.cancelled&&t.revenue);
-    expect(omitted).toHaveLength(4);
+    expect(omitted).toHaveLength(5);
     expect(omitted.every(t=>!!t.cancelReason)).toBe(true);
     expect(validatePlan(sim.planCtx,plan).filter(i=>i.severity==='error')).toEqual([]);
   });
