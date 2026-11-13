@@ -15,13 +15,13 @@
  *    that node ("entry key" = node*65536 + link).
  */
 import {
-  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, OPERATIONS, stationChainages, DIRECTIONS, RUN_GAP,
+  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, OPERATIONS, stationChainages, DIRECTIONS,
   type CrossoverKind, type SidingLane, type LeadDef,
 } from '../data/current';
 
 import { ahead } from './topologyOrder';
 import { SIGNAL_MARGIN } from './safetyLimits';
-export { ahead, between, directionToward } from './topologyOrder';
+export { ahead, between, directionToward, nextStations, stationPath } from './topologyOrder';
 
 export type TrackKind = 'DN' | 'UP' | 'X' | 'SID' | 'CON' | 'DEP';
 export type Dir = 1 | -1;
@@ -281,6 +281,9 @@ export interface TStation {
   name: string;
   chain: number;
   platforms: { DN: number; UP: number };
+  /** last station of a run that runs on into another: the station it joins, the distance to it,
+   * and each main's plain links on the way there (in order from this station) */
+  joins?: { station: number; interM: number; ways: Record<'DN' | 'UP', number[]> };
   /** berths a train can use to reverse here (siding/tail, ordered by preference) */
   turnbackBerths: number[];
   /** Deeper berths for a coupled rescue consist, falling back to ordinary berths. */
@@ -912,14 +915,14 @@ export function buildTopology(): Topology {
     // centre to centre is def.interM; the turnout lies (main.chain - c) beyond the join station's centre
     const legLen = jb.platform ? Math.abs(main.chain - c) - PLAT_HALF : JOIN_STUB;
     const plainLen = def.interM + (jb.platform ? -PLAT_HALF : main.chain - c - legLen) - (from.chain - chains[runLast(jb.run)]);
-    // The plain pieces lie in the gap of the chainage axis after the run; only the last piece
-    // reaches over to the chainage of the join station.
+    // The plain pieces lie in the gap of the chainage axis after the run, in true length: there a
+    // chainage is the distance run from the branch. Only their last joint is at the join station.
     const n = Math.max(2, Math.ceil(plainLen / LAYOUT.maxSectionLength));
     const far = jb.platform ? newNode('joint', c - PLAT_HALF) : newNode('joint', main.chain - legLen);
     let last = from;
     for (let k = 1; k <= n; k++) {
-      const to = k === n ? far : newNode('joint', from.chain + (RUN_GAP / 2) * k / n);
-      const l = newLink(last.id, to.id, plainLen / n, k === n ? 'CON' : jb.t, normal, last.chain, to.chain);
+      const to = k === n ? far : newNode('joint', from.chain + plainLen * k / n);
+      const l = newLink(last.id, to.id, plainLen / n, jb.t, normal, from.chain + plainLen * (k - 1) / n, from.chain + plainLen * k / n);
       jb.plain.push(l.id);
       last = to;
     }
@@ -1972,6 +1975,8 @@ export function buildTopology(): Topology {
     const frontUP = front('UP');
     return {
       index: i, id: s.id, name: s.name, chain: chains[i], platforms: stationPlat[i],
+      ...(s.joins ? { joins: { station: STATIONS.findIndex((x) => x.id === s.joins!.station), interM: s.joins.interM,
+        ways: { DN: joins.find((jb) => runLast(jb.run) === i && jb.t === 'DN')!.plain, UP: joins.find((jb) => runLast(jb.run) === i && jb.t === 'UP')!.plain } } } : {}),
       turnbackBerths: stationTurnback[i], rescueBerths: stationRescue[i].length ? stationRescue[i] : stationTurnback[i],
       storageBerths: stationStorage[i], shuntEntries: stationShunts[i], frontTurnback: { DN: frontDN, UP: frontUP }, equipped: equipped[i],
       row: r, x: chainToX(chains[i], r),

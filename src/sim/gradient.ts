@@ -37,9 +37,12 @@ export function profileOf(topo: Topology): Profile {
 
 function buildProfile(topo: Topology): Profile {
   const {elevatedFrom:elevFrom,groundFrom}=PROFILE_ANCHORS;
-  const sts = topo.stations.map((s) => ({ name: s.name, chain: s.chain }));
-  const levelOf = (s: { name: string; chain: number }) =>
+  const levelAt = (s: { name: string; chain: number }) =>
     s.chain >= groundFrom ? GROUND : s.chain >= elevFrom - FLAT ? ELEVATED : -(DEPTH[s.name] ?? STATION_DEPTH);
+  // a run that joins another is followed, on its own stretch of chainage, by the station it joins
+  const sts = topo.stations.flatMap((s) => [{ name: s.name, chain: s.chain, h: levelAt(s) },
+    ...(s.joins ? [{ name: topo.stations[s.joins.station].name, chain: s.chain + s.joins.interM, h: levelAt(topo.stations[s.joins.station]) }] : [])]);
+  const levelOf = (s: { h: number }) => s.h;
   const pts: [number, number][] = [];
   const add = (c: number, h: number) => { if (!pts.length || c > pts[pts.length - 1][0] + 0.5) pts.push([c, h]); };
   add(sts[0].chain - 2000, levelOf(sts[0]));

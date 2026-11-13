@@ -45,6 +45,14 @@ export function stationPath(from: number, to: number): number[] {
   return [...a.slice(0, meet + 1), ...b.slice(0, b.indexOf(a[meet])).reverse()];
 }
 
+/** The stations next to `station` when running `direction` on a line of `count` stations: none
+ * at a terminus, and one per run where runs meet. */
+export function nextStations(direction: 'DN' | 'UP', station: number, count: number): number[] {
+  if (!dnNext) { const next = direction === 'DN' ? station + 1 : station - 1; return next >= 0 && next < count ? [next] : []; }
+  if (direction === 'DN') return dnNext[station] >= 0 ? [dnNext[station]] : [];
+  return dnNext.flatMap((next, from) => next === station ? [from] : []);
+}
+
 /** Is `station` one of `a`, `b` or between them (either order) along the line? */
 export function between(station: number, a: number, b: number): boolean {
   if (dnNext) return stationPath(a, b).includes(station);

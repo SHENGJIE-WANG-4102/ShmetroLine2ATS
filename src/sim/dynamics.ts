@@ -4,6 +4,7 @@
  * run-time pre-computation, so planned times are achievable in the sim.
  */
 import type { Topology } from './topology';
+import { nextStations } from './topology';
 import { OPERATIONS, SIMULATION } from '../data/current';
 import { profileOf, heightAt, gradeAccelAt, brakingSpeedH, type Profile } from './gradient';
 
@@ -411,7 +412,34 @@ function trackProfile(topo: Topology, track: 'DN' | 'UP', platformKmh = Infinity
   return topo.links
     .filter((l) => l.track === track)
     .map((l) => ({ from: Math.min(l.chainA, l.chainB), to: Math.max(l.chainA, l.chainB), v: staticLinkLimit(topo, l.id, platformKmh) }))
+    .concat(joinProfile(topo, track, platformKmh))
     .sort((a, b) => a.from - b.from);
+}
+
+/** A joining run's main is laid out in true length on its own stretch of chainage as far as its
+ * plain track goes. The rest of the way to the platform at the station it joins (a platform face
+ * of its own, or the turnout and the main it meets) follows here on the same stretch. */
+function joinProfile(topo: Topology, track: 'DN' | 'UP', platformKmh: number): LimitSeg[] {
+  const segs: LimitSeg[] = [];
+  for (const st of topo.stations) {
+    if (!st.joins) continue;
+    const goal = (topo.platforms.find((p) => p.station === st.joins!.station && p.track === track && p.from === st.index)
+      ?? topo.platforms[topo.stations[st.joins.station].platforms[track]]).link;
+    const plain = topo.links[st.joins.ways[track].at(-1)!];
+    // shortest way over the links from the end of the plain track to that platform
+    const came = new Map<number, number>([[plain.id, -1]]);
+    const queue = [{ link: plain.id, node: plain.b }];
+    for (let k = 0; k < queue.length && !came.has(goal); k++) for (const id of topo.nodes[queue[k].node].links) {
+      if (came.has(id)) continue;
+      came.set(id, queue[k].link);
+      queue.push({ link: id, node: topo.links[id].a === queue[k].node ? topo.links[id].b : topo.links[id].a });
+    }
+    const way: number[] = [];
+    for (let id = goal; id !== plain.id; id = came.get(id)!) way.unshift(id);
+    let at = plain.chainB;
+    for (const id of way) { segs.push({ from: at, to: at + topo.links[id].len, v: staticLinkLimit(topo, id, platformKmh) }); at += topo.links[id].len; }
+  }
+  return segs;
 }
 
 /** limit (m/s) at chainage */
@@ -495,18 +523,28 @@ export function computeRunTimes(topo: Topology, trainLen: number, stopPlatformKm
   const profUp = trackProfile(topo, 'UP', stopPlatformKmh);
   const dn: number[] = [];
   const up: number[] = [];
+  // Entry i is the interval from station i to the next station DN of it: the next of its run, or
+  // the station its run joins, which lies `joins.interM` on along the run's own stretch of chainage.
+  const next = topo.stations.map((s, i) => (s.joins ? s.chain + s.joins.interM : i + 1 < n && nextStations('DN', i, n)[0] === i + 1 ? ch[i + 1] : undefined));
   for (let i = 0; i + 1 < n; i++) {
-    dn.push(simulateRun(profDn, hp, 1, ch[i] + half, ch[i + 1] + half, trainLen, true, [], runLevel).t);
-    up.push(simulateRun(profUp, hp, -1, ch[i + 1] - half, ch[i] - half, trainLen, true, [], runLevel).t);
+    const to = next[i];
+    if (to === undefined) { dn.push(0); up.push(0); continue; } // a run ends here
+    dn.push(simulateRun(profDn, hp, 1, ch[i] + half, to + half, trainLen, true, [], runLevel).t);
+    up.push(simulateRun(profUp, hp, -1, to - half, ch[i] - half, trainLen, true, [], runLevel).t);
   }
   const pass = (pDn: LimitSeg[], pUp: LimitSeg[]) => {
-    const passD = simulateRun(pDn, hp, 1, ch[0], ch[n - 1], trainLen, false, ch, runLevel).markTimes;
-    const passU = simulateRun(pUp, hp, -1, ch[n - 1], ch[0], trainLen, false, [...ch].reverse(), runLevel).markTimes.reverse();
     const passDn: number[] = [];
     const passUp: number[] = [];
-    for (let i = 0; i + 1 < n; i++) {
-      passDn.push(Math.max(20, (passD[i + 1] || 0) - (passD[i] || 0)));
-      passUp.push(Math.max(20, (passU[i] || 0) - (passU[i + 1] || 0)));
+    for (let a = 0, b = 0; a < n; a = b + 1) {
+      for (b = a; next[b] !== undefined && !topo.stations[b].joins; b++);
+      // the run's stations, then the station it joins; run a little past the last mark so that it is passed
+      const marks = [...ch.slice(a, b + 1), ...(next[b] === undefined ? [] : [next[b]!])];
+      const passD = simulateRun(pDn, hp, 1, marks[0], marks[marks.length - 1] + 1, trainLen, false, marks, runLevel).markTimes;
+      const passU = simulateRun(pUp, hp, -1, marks[marks.length - 1], marks[0] - 1, trainLen, false, [...marks].reverse(), runLevel).markTimes.reverse();
+      for (let i = 0; a + i < Math.min(b + 1, n - 1); i++) {
+        passDn.push(Math.max(20, (passD[i + 1] || 0) - (passD[i] || 0)));
+        passUp.push(Math.max(20, (passU[i] || 0) - (passU[i + 1] || 0)));
+      }
     }
     return [passDn, passUp];
   };

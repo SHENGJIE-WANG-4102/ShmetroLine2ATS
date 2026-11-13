@@ -2,7 +2,6 @@
 import { getGroup } from './registry';
 import { startupGroupId } from './startup';
 import { setStationOrder } from '../sim/topologyOrder';
-import type { StationData } from './types';
 export * from './types';
 export { getLine, getGroup, visibleLineGroups, scopedId } from './registry';
 
@@ -41,17 +40,18 @@ export function stationOrder(stations: readonly { id: string; interM: number | n
 /** A line with a branch registers its running order; a single run keeps array order. */
 setStationOrder(STATIONS.some(station => station.joins) ? stationOrder(STATIONS) : null);
 
-/** Gap left on the chainage axis between two runs of stations (m). */
+/** Least gap left on the chainage axis between two runs of stations (m). A joining run's way on
+ * to the station it joins is laid out in that gap in true length, so the gap is always longer. */
 export const RUN_GAP = 6000;
 /** Chainage of each station (m, rising DN-ward along the station list). A line with a branch lists
  * its runs one after another and each run gets its own stretch of the axis, RUN_GAP apart, so a
  * chainage names one place on the line. Across runs it is a coordinate only: the distance from a
  * branch's last station to the station it joins is `joins.interM`, not a difference of chainages. */
-export function stationChainages(stations: readonly Pick<StationData, 'interM'>[] = STATIONS): number[] {
+export function stationChainages(stations: readonly { interM: number | null; joins?: { interM: number } }[] = STATIONS): number[] {
   let chain = 0;
   return stations.map((station, index) => {
     if (station.interM !== null) chain += station.interM;
-    else if (index > 0) chain += RUN_GAP;
+    else if (index > 0) chain += Math.max(RUN_GAP, (stations[index - 1].joins?.interM ?? 0) + 2000);
     return chain;
   });
 }

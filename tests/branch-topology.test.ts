@@ -68,6 +68,16 @@ describe('a branch joining the main run', () => {
     expect(route.length).toBeCloseTo(1500 - 210, 0);
   });
 
+  it('times the run to the join station along the branch, not across the chainage gap', async () => {
+    const { computeRunTimes } = await import('../src/sim/dynamics');
+    const rt = computeRunTimes(topo, 140);
+    // 支线西→支线一 is 1100 m, 支线一→试验二 1500 m
+    for (const runs of [rt.dn, rt.up, rt.passDn, rt.passUp]) {
+      expect(runs[1]).toBeGreaterThan(runs[0]);
+      expect(runs[1]).toBeLessThan(runs[0] * 1.8);
+    }
+  });
+
   it('every link has a section and every section a station', () => {
     expect(topo.links.every(link => link.section >= 0)).toBe(true);
     expect(topo.sections.every(section => section.station >= 0 && section.links.length > 0)).toBe(true);

@@ -11,7 +11,7 @@
  */
 import { parseTime } from './calendar';
 import type { Topology } from './topology';
-import { ahead, directionToward, stablingBerth } from './topology';
+import { ahead, directionToward, nextStations, stablingBerth, stationPath } from './topology';
 import type { RunTimes } from './dynamics';
 import { cancelTrip, type Block, type DayType, type Plan, type PlanStop, type StopTask, type Task, type Trip, type TripKind, type TrackDir } from './model';
 import { MIN_DWELL, plannedDwell } from './calibration';
@@ -256,14 +256,13 @@ const officialClock = (s: string) => { const [h, m] = s.split(':').map(Number); 
  * runs on while its minutes do not decrease (a decrease is another train). */
 export function officialTimingPoints(dir: TrackDir, from: number, to: number, originDep: number, last?: { train: boolean }): Map<number, number> {
   const points = new Map<number, number>();
-  const sts = seq(from, to);
+  const sts = stationPath(from, to);
   const row = (st: number) => FIRST_LAST.find(r => r.station === STATIONS[st]?.name);
   for (const [key, d] of FIRST_LAST_COLUMNS) {
     if (d !== dir) continue;
     const own = row(from)?.[key];
     if (!own || Math.abs(officialClock(own) - originDep) >= 60) continue;
-    const upstream = row(dir === 'DN' ? from - 1 : from + 1)?.[key];
-    if (upstream && officialClock(upstream) <= officialClock(own)) continue;
+    if (nextStations(dir === 'DN' ? 'UP' : 'DN', from, STATIONS.length).some(st => { const upstream = row(st)?.[key]; return upstream && officialClock(upstream) <= officialClock(own); })) continue;
     if (last && key.startsWith('last')) last.train = true;
     let prev = -Infinity;
     for (const st of sts) {
@@ -276,17 +275,9 @@ export function officialTimingPoints(dir: TrackDir, from: number, to: number, or
   return points;
 }
 
-/** stations visited from a to b inclusive */
-function seq(a: number, b: number): number[] {
-  const out: number[] = [];
-  if (a <= b) for (let i = a; i <= b; i++) out.push(i);
-  else for (let i = a; i >= b; i--) out.push(i);
-  return out;
-}
-
 /** dwellFactor: a constant, or the factor in force at each stop's arrival time. */
 export function buildStops(ctx: PlanContext, dir: TrackDir, from: number, to: number, originDep: number, revenue: boolean, dwellFactor: number | ((t: number) => number), stopsAt?: (st: number) => boolean, timingPoints = true): PlanStop[] {
-  const sts = seq(from, to);
+  const sts = stationPath(from, to);
   const stops: PlanStop[] = [];
   const last = { train: false };
   const points = revenue && timingPoints ? officialTimingPoints(dir, from, to, originDep, last) : new Map<number, number>();
