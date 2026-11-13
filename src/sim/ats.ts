@@ -10,7 +10,7 @@ import type { Sim } from './engine';
 import { cancelTrip, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import { settleDroppedCalls } from './connections';
 import type { Dir, Topology, TrackPoint, RouteStep } from './topology';
-import { berthFits, nextLink, travelDirection, ahead, linkChain, reversedBerthPoint, occupiedTurnbackBerth, stablingBerth } from './topology';
+import { berthFits, nextLink, signalAtEntry, travelDirection, ahead, linkChain, reversedBerthPoint, occupiedTurnbackBerth, stablingBerth } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, signalPassed, type CmdResult } from './interlocking';
 import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission, retreatRouteBlocker, withdrawAuthority } from './movement';
 import { takeVehicle, putVehicle, peekVehicle } from './yard';
@@ -46,7 +46,27 @@ export { buildRouteTable } from './routeTable';
 
 /** Physical distance, separate from the weighted route-choice cost. */
 export function distanceToBerth(sim: Sim, sig: number, goal: number, visit?: TaskPathVisitor): number {
-  return walkRouteToBerth(sim.topo, sim.routeTable, { signal: sig }, goal, visit);
+  if (visit || !(sig >= 0 && sig < 65536 && goal >= 0 && goal < 65536 && Number.isInteger(sig) && Number.isInteger(goal)))
+    return walkRouteToBerth(sim.topo, sim.routeTable, { signal: sig }, goal, visit);
+  // The walk reads only the topology and the route table, neither of which
+  // changes at run time: arrival regulation asks for the same pair every step.
+  let memo = berthDistances.get(sim.routeTable);
+  if (!memo || memo.topo !== sim.topo) berthDistances.set(sim.routeTable, memo = { topo: sim.topo, byPair: new Map() });
+  const key = sig * 65536 + goal;
+  let distance = memo.byPair.get(key);
+  if (distance === undefined) memo.byPair.set(key, distance = walkRouteToBerth(sim.topo, sim.routeTable, { signal: sig }, goal));
+  return distance;
+}
+const berthDistances = new WeakMap<Sim['routeTable'], { topo: Topology; byPair: Map<number, number> }>();
+
+/** `${prefix}-${id}` for a train's per-step alarm lookups, built once per train
+ * (a fresh string would be built and hashed again for every lookup). */
+const trainKeys = new Map<string, string[]>();
+function trainKey(prefix: string, id: number): string {
+  if (!(id >= 0 && Number.isInteger(id))) return `${prefix}-${id}`;
+  let byId = trainKeys.get(prefix);
+  if (!byId) trainKeys.set(prefix, byId = []);
+  return byId[id] ??= `${prefix}-${id}`;
 }
 
 /** does the route set at its start signal lead (reasonably) towards the goal berth? */
@@ -107,8 +127,8 @@ function pathBoundaryAhead(sim: Sim, link: number, off: number, dir: Dir, maxDis
   for (let i = 0; i < 30 && dist < maxDist; i++) {
     const nx = nextLink(topo, l, d0, (sw) => swPos(sim, sw));
     if (!nx) return null;
-    const sid = topo.signalByEntry.get(nx.node * 65536 + nx.link);
-    if (sid !== undefined) return { sig: sid, dist };
+    const sid = signalAtEntry(topo, nx.node, nx.link);
+    if (sid >= 0) return { sig: sid, dist };
     l = nx.link;
     d0 = nx.dir;
     const entry = d0 === 1 ? 0 : topo.links[l].len;
@@ -708,10 +728,10 @@ export function preciseAtoStationStop(topo: Topology, tr: Train): boolean {
 
 export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
   const { topo } = sim;
-  const departureAlarm = `turnback-departure-train-${tr.id}`;
+  const departureAlarm = trainKey('turnback-departure-train', tr.id);
   if (sim.alarms.has(departureAlarm) && !tr.tasks.some(t => t.k === 'stop' && t.turnbackWaitBerth !== undefined))
     sim.clearAlarm(departureAlarm);
-  if (tr.phase === 'run' && (tr.v >= .05 || tr.lastDs > 1e-6)) sim.clearAlarm(`turnback-wait-unsafe-${tr.id}`);
+  if (tr.phase === 'run' && (tr.v >= .05 || tr.lastDs > 1e-6)) sim.clearAlarm(trainKey('turnback-wait-unsafe', tr.id));
   let task = tr.tasks[0];
   // Once the physical departure starts, the tail wait is consumed. Manual
   // driving followed by automatic control must not reapply it on a shared link.

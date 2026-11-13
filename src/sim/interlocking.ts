@@ -376,13 +376,14 @@ export function updateInterlocking(sim: Sim) {
         continue;
       }
     }
-    const directionOwner = sim.trains.get(ar.directionTrain ?? -1);
-    const goalSection = ar.directionGoal !== undefined && ar.directionGoal >= 0
+    // (the goal-section test reads bodies: only for a locked pull-out route)
+    const directionOwner = ar.state === 'locked' && ar.cancelAt === 0 && !ar.guide && ar.directionPullout
+      ? sim.trains.get(ar.directionTrain ?? -1) : undefined;
+    const goalSection = directionOwner && ar.directionGoal !== undefined && ar.directionGoal >= 0
       ? topo.links[topo.berths[ar.directionGoal].link].section : -1;
     const goalFree = goalSection >= 0 && topo.sections[goalSection].links.every(link =>
       !(sim.linkBodies.get(link) ?? []).some(b => b.train !== directionOwner?.id));
-    if (ar.state === 'locked' && ar.cancelAt === 0 && !ar.guide && ar.directionPullout && goalFree
-      && directionOwner && directionOwner.v < 0.1 && directionOwner.phase === 'run'
+    if (goalFree && directionOwner && directionOwner.v < 0.1 && directionOwner.phase === 'run'
       && ['manual', 'depart'].includes(directionOwner.tbStage)) {
       for (const sec of sim.sec) if (sec.tdTrain === directionOwner.id)
         Object.assign(sec, { td: 0, tdRoute: -1, tdTrain: -1, directionEsp: false });

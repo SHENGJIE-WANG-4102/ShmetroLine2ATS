@@ -117,6 +117,16 @@ export function applyInput(sim: Sim, input: RecordedInput) {
 }
 
 /** Keep one checkpoint every 10 min beyond the last two hours, including day start. */
+/** A checkpoint due at `t` during a synchronous run-up to `target` that
+ * compactCheckpoints is certain to drop by the end of the run-up (older than
+ * the 2 h fine window at `target`, in a 10-min bucket that already holds its
+ * first checkpoint): nobody can read it, so it need not be captured. The
+ * compacted list after the run-up is the same as with every capture made. */
+export function checkpointDroppedAfterRunUp(checkpoints: readonly Checkpoint[], t: number, target: number): boolean {
+  const last = checkpoints[checkpoints.length - 1];
+  return !!last && target - t > 7200 + 1 && Math.floor(last.t / 600) === Math.floor(t / 600);
+}
+
 export function compactCheckpoints(checkpoints: Checkpoint[], now: number): Checkpoint[] {
   let bucket = -1;
   return checkpoints.filter((cp, i) => {

@@ -5,13 +5,13 @@ import { utoBusy, utoVehicleWait } from './uto';
  */
 import type { Sim } from './engine';
 import type { Train, BodySeg, StopTask } from './model';
-import { nextLink, linkChain, type Dir } from './topology';
+import { nextLink, linkChain, signalAtEntry, type Dir } from './topology';
 import { profileOf, heightAt, chainSense, gradeAccelAt, gradeAlong, brakingSpeedH } from './gradient';
 import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
 import { levelAccel, trainLevel } from './energy';
 import { swPos } from './interlocking';
 import { TRACTION_UNITS } from './vehicle';
-import { PERF, brakingSpeed, jerkLimited, tractionAccel, atoTractionAccel, atoControl, atoStopApproachDistance, atoBrakeProfile, atoLimitSpeed, atoStopReady, atoStopMargin, sectionPlan, sectionRecommended, sectionEta, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
+import { PERF, brakingSpeed, jerkLimited, tractionAccel, atoTractionAccel, atoControl, withinStopApproach, atoBrakeProfile, atoLimitSpeed, atoStopReady, atoStopMargin, sectionPlan, sectionRecommended, sectionEta, staticLinkLimit, taskPlatformLimit, levelTarget, type SectionLimit } from './dynamics';
 import { routeLeadsTo, distanceToBerthFrom, rearTurnbackLeg, preciseAtoStationStop, type TaskPathVisitor } from './ats';
 import type { HaltCode } from './halt';
 import { applyEB } from './onboard';
@@ -190,6 +190,27 @@ export function rescueRouteReady(sim: Sim, tr: Train, signal: number): boolean {
   return found;
 }
 
+// scanAhead runs for every moving train at 10 Hz: it creates no closures (a
+// captured parameter would live in a heap context for the whole scan).
+const swAtBySim = new WeakMap<Sim, (sw: number) => 'N' | 'R' | null>();
+function switchReader(sim: Sim) {
+  let read = swAtBySim.get(sim);
+  if (!read) swAtBySim.set(sim, read = (sw: number) => swPos(sim, sw));
+  return read;
+}
+function signalHasPointRoute(topo: Sim['topo'], sigId: number): boolean {
+  for (const r of topo.signals[sigId].routes) if (topo.routes[r].switches.length > 0) return true;
+  return false;
+}
+function routeSwitchLost(sim: Sim, rid: number): boolean {
+  for (const x of sim.topo.routes[rid].switches) if (sim.sw[x.sw].failed && swPos(sim, x.sw) !== x.pos) return true;
+  return false;
+}
+function routeSectionFlag(sim: Sim, rid: number, flag: 'preset' | 'disturbed'): boolean {
+  for (const s of sim.topo.routes[rid].sections) if (sim.sec[s][flag]) return true;
+  return false;
+}
+
 export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP): ScanResult {
   const { topo } = sim;
   const res: ScanResult = { maDist: Infinity, maReason: '', maCode: 'NONE', maTrain: -1, hardDist: Infinity, hardCode: 'NONE', stopDist: Infinity, constraints: [], vBody: Infinity, nextSignal: -1, nextSignalDist: Infinity, maSignals: [] };
@@ -209,12 +230,11 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
   // it enters the platform it is bound for and leaves the one it has just
   // left at the platform stop limit
   const goalPlatform = berth?.kind === 'platform' ? berth.platform : -1;
-  const platformLimit = (pl: number) => taskPlatformLimit(topo, pl, tr.lastStation, goalPlatform);
 
   // body limits & ESP on body
   for (const b of tr.body) {
     res.vBody = Math.min(res.vBody, linkLimit(sim, b.link));
-    res.vBody = Math.min(res.vBody, platformLimit(topo.links[b.link].platform));
+    res.vBody = Math.min(res.vBody, taskPlatformLimit(topo, topo.links[b.link].platform, tr.lastStation, goalPlatform));
     const p = topo.links[b.link].platform;
     if (p >= 0 && sim.plat[p].esp) { res.maDist = 0; res.maReason = '站台紧急关闭'; res.maCode = 'ESP'; }
   }
@@ -267,11 +287,11 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
 
   let lastSec = l0.section;
   let guard = 0;
-  const swAt = (sw: number) => swPos(sim, sw);
   // past the stopping point we only keep looking for the next signal (for ARS)
   // once the MA end is found we only keep looking for the next signal (for ARS)
   let signalOnly = res.maDist <= 0;
   const sigPass: number[] = [];
+  const swAt = switchReader(sim);
   while (guard++ < 600) {
     if (!signalOnly && !onSight && d >= res.maDist) signalOnly = true;
     if (onSight && (d >= res.hardDist || d >= LOOKAHEAD)) break;
@@ -282,8 +302,8 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
     const node = dir === 1 ? lk.b : lk.a;
     if (signalOnly) {
       if (!nx) break;
-      const sid = topo.signalByEntry.get(node * 65536 + nx.link);
-      if (sid !== undefined) { res.nextSignal = sid; res.nextSignalDist = d; break; }
+      const sid = signalAtEntry(topo, node, nx.link);
+      if (sid >= 0) { res.nextSignal = sid; res.nextSignalDist = d; break; }
       d += topo.links[nx.link].len;
       link = nx.link;
       dir = nx.dir;
@@ -298,8 +318,8 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
     }
     const nl = topo.links[nx.link];
     // signal at entry
-    const sigId = topo.signalByEntry.get(node * 65536 + nx.link);
-    if (sigId !== undefined) {
+    const sigId = signalAtEntry(topo, node, nx.link);
+    if (sigId >= 0) {
       // the next signal (for ARS / approach locking) is only reported within the look-ahead range
       if (res.nextSignal < 0 && d < LOOKAHEAD) { res.nextSignal = sigId; res.nextSignalDist = d; }
       const sg = sim.sig[sigId];
@@ -339,19 +359,19 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
           }
         }
         if (ok && atp) sigPass.push(sigId, d);
-      } else if (!atp && tr.rmSig === sigId && tr.rmAuth > d && !topo.signals[sigId].routes.some((r) => topo.routes[r].switches.length > 0)) {
+      } else if (!atp && tr.rmSig === sigId && tr.rmAuth > d && !signalHasPointRoute(topo, sigId)) {
         ok = true; // authorised (for this one signal) to pass it at danger on plain line
       }
       if (!ok) {
         // a locked route over a switch without detection waits on the switch fault, not on ARS
-        const swLost = sg.route >= 0 && topo.routes[sg.route].switches.some((x) => sim.sw[x.sw].failed && swPos(sim, x.sw) !== x.pos);
+        const swLost = sg.route >= 0 && routeSwitchLost(sim, sg.route);
         if (atp && tr.level === 'TBTC' && sg.route >= 0 && sim.routes.get(sg.route)?.directionReverse)
           obstacle(res, d - SIGNAL_MARGIN, 'TBTC不能自动反向区间折返', 'DIRECTION_WAIT');
         else if (sg.failed) obstacle(res, d - SIGNAL_MARGIN, '信号机故障', 'SIGNAL_FAULT');
         else if (swLost) obstacle(res, d - SIGNAL_MARGIN, '进路内道岔失表', 'SWITCH_FAULT');
-        else if (!atp && sg.route >= 0 && topo.routes[sg.route].sections.some(s => sim.sec[s].preset))
+        else if (!atp && sg.route >= 0 && routeSectionFlag(sim, sg.route, 'preset'))
           obstacle(res, d - SIGNAL_MARGIN, '计轴预复位区段', 'AXLE_PRESET');
-        else if (!atp && sg.route >= 0 && topo.routes[sg.route].sections.some(s => sim.sec[s].disturbed))
+        else if (!atp && sg.route >= 0 && routeSectionFlag(sim, sg.route, 'disturbed'))
           obstacle(res, d - SIGNAL_MARGIN, '计轴故障占用', 'AXLE_FAULT');
         else obstacle(res, d - SIGNAL_MARGIN, '信号/进路未开放', 'ROUTE_WAIT');
         if (!onSight) break;
@@ -391,7 +411,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
       if (!psdSafe(ps) && atp) { obstacle(res, d - 3, '站台门未关闭锁紧', 'PSD_FAULT'); break; }
     }
     // speed limits
-    const lim = Math.min(platformLimit(nl.platform), linkLimit(sim, nx.link));
+    const lim = Math.min(taskPlatformLimit(topo, nl.platform, tr.lastStation, goalPlatform), linkLimit(sim, nx.link));
     if (d < LOOKAHEAD && (lim < res.vBody + 0.01 || lim < 25)) res.constraints.push(d, tr.mode === 'RM' ? Math.min(lim, PERF.vRM) : lim);
     // goal
     if (res.stopDist === Infinity && berth && berth.link === nx.link && berth.dir === nx.dir) {
@@ -551,14 +571,18 @@ export function computeBody(sim: Sim, tr: Train, remember = true) {
     const back = Math.max(5, Number.isFinite(err) ? -err : 0, tr.retreat?.distance ?? 0, tr.overrun);
     const retained = pathBody(sim, tr, tr.len + back);
     if (tr.hist.length > retained.length) tr.hist.splice(0, tr.hist.length - retained.length);
-    const visited = (tr.recentBody ?? []).flatMap(b => {
-      const span = retained.find(r => r.link === b.link);
-      if (!span) return [];
+    // (every moving train, every step: plain loops rather than flatMap/find)
+    const visited: BodySeg[] = [];
+    for (const b of tr.recentBody ?? []) {
+      let span: BodySeg | undefined;
+      for (const r of retained) if (r.link === b.link) { span = r; break; }
+      if (!span) continue;
       const from = Math.max(b.from, span.from), to = Math.min(b.to, span.to);
-      return to > from ? [{ link: b.link, from, to }] : [];
-    });
+      if (to > from) visited.push({ link: b.link, from, to });
+    }
     for (const b of body) {
-      const old = visited.find(v => v.link === b.link);
+      let old: BodySeg | undefined;
+      for (const v of visited) if (v.link === b.link) { old = v; break; }
       if (old) { old.from = Math.min(old.from, b.from); old.to = Math.max(old.to, b.to); }
       else visited.push({ ...b });
     }
@@ -603,8 +627,8 @@ export function advance(sim: Sim, tr: Train, ds: number): boolean {
       return false;
     }
     // passing a signal without authority (SPAD)?
-    const sigId = topo.signalByEntry.get(nx.node * 65536 + nx.link);
-    if (sigId !== undefined) {
+    const sigId = signalAtEntry(topo, nx.node, nx.link);
+    if (sigId >= 0) {
       if (!passAuthorised(sim, tr, sigId, ds - rem)) spad(sim, tr, sigId);
     }
     tr.link = nx.link;
@@ -613,7 +637,7 @@ export function advance(sim: Sim, tr: Train, ds: number): boolean {
     tr.hist.push({ link: nx.link, dir: nx.dir });
     // The cab is now inside the signal. A pull-out may change RM to ATP
     // here, whose immediate authority scan must start from this new link.
-    if (sigId !== undefined) sim.onSignalPassed(tr, sigId);
+    if (sigId >= 0) sim.onSignalPassed(tr, sigId);
   }
   return true;
 }
@@ -975,7 +999,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
       && tr.v < PERF.atoStopSnap!.speed && !atoStopReady(tr.v, scan.stopDist);
     const stopping = lowAdh || unlatchedPrecisionStop ? brakingSpeed(scan.stopDist - atoStopMargin(.2), 0, bPlan)
       : entry !== undefined ? atoBrakeProfile(entry, scan.stopDist, state?.brakeEntryDistance, state?.brakeEntryGrade).speed
-        : scan.stopDist <= atoStopApproachDistance(tr.v, tr.a, aG) ? atoBrakeProfile(tr.v, scan.stopDist, undefined, aG).speed : Infinity;
+        : withinStopApproach(scan.stopDist, tr.v, tr.a, aG) ? atoBrakeProfile(tr.v, scan.stopDist, undefined, aG).speed : Infinity;
     vT = Math.min(vT, stopping);
   }
   if (!(tr.manual && rm)) {

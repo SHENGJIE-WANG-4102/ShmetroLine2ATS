@@ -31,7 +31,8 @@ function uncachedTractionAccel(v: number): number {
   if (v >= last[0]) return PERF.aMax * last[1] * last[0] / Math.max(v, last[0]);
   let i = 1;
   while (TRACTION[i][0] < v) i++;
-  const [v0, f0] = TRACTION[i - 1], [v1, f1] = TRACTION[i];
+  // (indexed, not array destructuring: that walks an iterator on every call)
+  const p0 = TRACTION[i - 1], p1 = TRACTION[i], v0 = p0[0], f0 = p0[1], v1 = p1[0], f1 = p1[1];
   return PERF.aMax * (f0 + (f1 - f0) * (v - v0) / (v1 - v0));
 }
 
@@ -101,6 +102,17 @@ function brakeShape(entrySpeed:number,grade=0):{r:number;average:number}{
  * falling grade), holds, then releases linearly over `releaseS` at bPlan's
  * release rate. The last phase is v = Jr·τ²/2 at τ seconds before standstill. */
 function softStopShape(entrySpeed:number,grade:number){
+  // A braking train asks for its latched entry's shape every step: the last
+  // shape is reused while its inputs, including the performance data it reads, are the same.
+  const c=softStopLast,releaseS=PERF.atoSoftStop!.releaseS;
+  if(c.shape&&Object.is(c.entrySpeed,entrySpeed)&&Object.is(c.grade,grade)&&Object.is(c.jerk,PERF.jerk)&&Object.is(c.bPlan,PERF.bPlan)
+    &&Object.is(c.releaseS,releaseS)&&Object.is(c.bService,PERF.bService))return c.shape;
+  c.entrySpeed=entrySpeed;c.grade=grade;c.jerk=PERF.jerk;c.bPlan=PERF.bPlan;c.releaseS=releaseS;c.bService=PERF.bService;
+  return c.shape=uncachedSoftStopShape(entrySpeed,grade);
+}
+const softStopLast: { entrySpeed: number; grade: number; jerk: number; bPlan: number; releaseS: number; bService: number;
+  shape: Readonly<ReturnType<typeof uncachedSoftStopShape>> | undefined } = { entrySpeed: 0, grade: 0, jerk: 0, bPlan: 0, releaseS: 0, bService: 0, shape: undefined };
+function uncachedSoftStopShape(entrySpeed:number,grade:number){
   const J=PERF.jerk,release=PERF.bPlan/PERF.atoSoftStop!.releaseS;
   let peak=Math.min(PERF.bPlan,Math.max(.05,PERF.bService-grade));
   if(peak*peak/(2*J)+peak*peak/(2*release)>entrySpeed)peak=Math.sqrt(2*entrySpeed/(1/J+1/release));
@@ -177,7 +189,7 @@ export function atoControl(state: AtoState, input: AtoInput): number {
   }
   const terminal = state.phase==='brake' && state.brakeEntrySpeed!==undefined
     || state.terminalApproachDistance!==undefined
-    || Number.isFinite(stopDist) && stopDist <= atoStopApproachDistance(v,a,input.grade);
+    || Number.isFinite(stopDist) && withinStopApproach(stopDist,v,a,input.grade);
   const terminalMinSpeed = PERF.atoStopSnap?.speed ?? .1;
   const needsBrake = target < v - .2 || terminal && v > terminalMinSpeed;
   if (v < .05 && target > .1 && (!PERF.atoStopSnap || !terminal)) {
@@ -297,6 +309,26 @@ function atoTransitionDistance(v:number,a:number,brakeRate:number):number{
  * neutral phase. The stop shape itself retains its physical braking distance. */
 export function atoStopApproachDistance(v:number,a:number,grade=0):number{
   return atoBrakeDistance(v,grade)+atoTransitionDistance(v,a,PERF.bPlan)+.3;
+}
+
+/** Exactly `stopDist <= atoStopApproachDistance(v, a, grade)`. A stop far
+ * beyond a cheap upper bound of the soft-stop distance is rejected without
+ * solving the shape (most of every run); anything near it is decided by the
+ * exact distance. Bound, for the shape's unclipped peak p (the sqrt-clipped
+ * low-speed case is always solved): s1 <= v·p/J, s2 <= v²/(2p),
+ * s3 = release·(p/release)³/6; rounding is covered by the margin. */
+export function withinStopApproach(stopDist:number,v:number,a:number,grade=0):boolean{
+  const soft=PERF.atoSoftStop;
+  if(soft&&v>0){
+    const J=PERF.jerk,release=PERF.bPlan/soft.releaseS;
+    const peak=Math.min(PERF.bPlan,Math.max(.05,PERF.bService-grade));
+    if(!(peak*peak/(2*J)+peak*peak/(2*release)>v)){
+      const fall=peak/release;
+      const brake=(v*(peak/J)+v*v/(2*peak)+release*fall*fall*fall/6)*1.000001+.001;
+      if(stopDist>brake+atoTransitionDistance(v,a,PERF.bPlan)+.3)return false;
+    }
+  }
+  return stopDist<=atoStopApproachDistance(v,a,grade);
 }
 
 /** ATO / driver controller: returns commanded acceleration. */
@@ -511,6 +543,20 @@ interface SectionTrace { x: number[]; v: number[]; a: number[]; eta: number[]; s
  * eta only grows and an invalid coast never becomes valid again. */
 interface SectionTrial { trace?: SectionTrace; from?: SectionTrace; etaAtLeast?: number; etaAbove?: number; validity?: boolean }
 
+/** The integrator's controller state always carries every AtoState field, in
+ * one order: one object shape for the hot loop (an absent optional field and
+ * an undefined one read the same in atoControl). Keep in step with AtoState. */
+function copyAtoState(s: AtoState): AtoState {
+  return { phase: s.phase, recovered: s.recovered, neutral: s.neutral, plannedCoast: s.plannedCoast, brakeEntrySpeed: s.brakeEntrySpeed,
+    brakeEntryDistance: s.brakeEntryDistance, brakeEntryGrade: s.brakeEntryGrade, terminalApproachDistance: s.terminalApproachDistance };
+}
+/** Every AtoState field (keep in step with the interface): equal states give equal controller runs. */
+function sameAtoState(p: AtoState, q: AtoState): boolean {
+  return p.phase === q.phase && p.recovered === q.recovered && Object.is(p.neutral, q.neutral) && p.plannedCoast === q.plannedCoast
+    && Object.is(p.brakeEntrySpeed, q.brakeEntrySpeed) && Object.is(p.brakeEntryDistance, q.brakeEntryDistance)
+    && Object.is(p.brakeEntryGrade, q.brakeEntryGrade) && Object.is(p.terminalApproachDistance, q.terminalApproachDistance);
+}
+
 function integrateSection(dist: number, initialV: number, initialA: number, cutoff: number, coastAt: number,
   limits: readonly SectionLimit[] | undefined, margin: number, keepSamples: boolean, grade?: SectionGrade,
   trial: SectionTrial = {}): SectionPlan {
@@ -523,7 +569,7 @@ function integrateSection(dist: number, initialV: number, initialA: number, cuto
   let length = 0;
   for (const s of limits ?? []) { length += s.length; boundaries.push({end:length,cap:Math.max(.1,s.limit-margin)}); }
   if (!boundaries.length || length < dist) boundaries.push({end:dist,cap:cutoff});
-  let state: AtoState = { phase:'traction', recovered:false, neutral:0 };
+  let state: AtoState = copyAtoState({ phase:'traction', recovered:false, neutral:0 });
   let x = 0, v = Math.max(0, initialV), a = initialA, segment = 0;
   const maxTime = Math.max(3600, dist / Math.max(.1, cutoff) + 300);
   if (keepSamples) plan.samples.push({remaining:dist,speed:v});
@@ -533,25 +579,35 @@ function integrateSection(dist: number, initialV: number, initialA: number, cuto
     while (lo < hi) { const mid = (lo + hi) >> 1; if (Math.max(0, dist - from.x[mid]) <= coastAt) hi = mid; else lo = mid + 1; }
     if (lo < from.x.length) {
       x = from.x[lo]; v = from.v[lo]; a = from.a[lo]; plan.eta = from.eta[lo]; segment = from.segment[lo];
-      state = { ...from.state[lo] };
+      state = copyAtoState(from.state[lo]);
     }
   }
+  // A resumed run copies its snapshot (copyAtoState), so steps whose
+  // controller state did not change can share one snapshot object.
+  let snapshot: AtoState | undefined;
+  // One input record for every controller call: atoControl only reads it.
+  const input: AtoInput = { v, a, target: 0, cruise: cutoff, stopDist: 0, remaining: 0, plan, dt, grade: 0 };
   while (plan.eta < maxTime) {
     if (trace) {
       trace.x.push(x); trace.v.push(v); trace.a.push(a); trace.eta.push(plan.eta); trace.segment.push(segment);
-      trace.state.push({ ...state });
+      if (!snapshot || !sameAtoState(snapshot, state)) snapshot = copyAtoState(state);
+      trace.state.push(snapshot);
     }
     const remaining = Math.max(0, dist - x);
     if (atoStopReady(v, remaining)) { plan.completed=x<=dist+.3; break; }
     while (segment + 1 < boundaries.length && boundaries[segment].end <= x) segment++;
     let target = Math.min(cutoff, boundaries[segment].cap, brakingSpeed(remaining - atoStopMargin(.2), 0, PERF.bPlan));
+    // (atoLimitSpeed for each boundary, with its transition distance computed once per step)
+    let transition = NaN;
     for (let i = segment + 1; i < boundaries.length; i++) {
       const d = boundaries[i-1].end - x;
       if (d > 1000) break;
-      target = Math.min(target, atoLimitSpeed(d - 3, boundaries[i].cap, v, a));
+      if (transition !== transition) transition = atoTransitionDistance(v, a, PERF.bPlan);
+      target = Math.min(target, brakingSpeed(d - 3 - transition, boundaries[i].cap, PERF.bPlan));
     }
     const aG = grade?.(x) ?? 0;
-    const command = atoControl(state,{v,a,target:Math.max(0,target),cruise:cutoff,stopDist:remaining,remaining,plan,dt,grade:aG});
+    input.v = v; input.a = a; input.target = Math.max(0, target); input.stopDist = remaining; input.remaining = remaining; input.grade = aG;
+    const command = atoControl(state, input);
     // Only the scheduled slack-consuming coast has a coast-end floor. A
     // normal neutral transition at a lower static limit can be slower.
     if (state.phase === 'coast' && state.plannedCoast && remaining > v*v/(2*PERF.bPlan)+Math.max(3,v*.8) && v < plan.coastFloor-.1) plan.coastValid=false;
@@ -627,7 +683,24 @@ export function sectionPlan(dist: number, v: number, budget: number, ceiling: nu
   ceiling = levelCruise(level,ceiling);
   // Runs at one cutoff share their steps up to the coast point (SectionTrace).
   const traces = new Map<number, SectionTrace>();
+  // Complete runs by (cutoff, coast point): a repeated trial (earliestLegal's
+  // final run of a bisection point already tried) is the same run. A memo is
+  // used only where the question could not have stopped this run early.
+  const complete = new Map<number, Map<number, SectionPlan>>();
+  const answers = (plan: SectionPlan, question: Omit<SectionTrial, 'trace' | 'from'>) =>
+    !(question.validity && !plan.coastValid) && !(plan.eta >= (question.etaAtLeast ?? Infinity)) && !(plan.eta > (question.etaAbove ?? Infinity));
   const run = (speed: number, coast: number, question: Omit<SectionTrial, 'trace' | 'from'> = {}): SectionPlan => {
+    const known = complete.get(speed)?.get(coast);
+    if (known && answers(known, question)) return known;
+    const plan = trialRun(speed, coast, question);
+    if (answers(plan, question)) {
+      let byCoast = complete.get(speed);
+      if (!byCoast) complete.set(speed, byCoast = new Map());
+      byCoast.set(coast, plan);
+    }
+    return plan;
+  };
+  const trialRun = (speed: number, coast: number, question: Omit<SectionTrial, 'trace' | 'from'>): SectionPlan => {
     let trace = traces.get(speed);
     if (coast < 0 || !trace) {
       // A base run stopped by its question still records a true prefix: a

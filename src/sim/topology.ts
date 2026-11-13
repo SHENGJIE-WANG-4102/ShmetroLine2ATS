@@ -516,6 +516,26 @@ export function sigEntryKey(node: number, link: number): number {
   return node * 65536 + link;
 }
 
+/** `topo.signalByEntry.get(sigEntryKey(node, link)) ?? -1`, from a per-link
+ * table built once per topology (the signal map is fixed when the topology is
+ * built): the movement scans and the MA check ask at every link boundary. */
+export function signalAtEntry(topo: Pick<Topology, 'links' | 'signalByEntry'>, node: number, link: number): number {
+  let table = entrySignalTables.get(topo.signalByEntry);
+  if (!table) {
+    table = new Int32Array(topo.links.length * 2);
+    topo.links.forEach((l, i) => {
+      table![2 * i] = topo.signalByEntry.get(sigEntryKey(l.a, i)) ?? -1;
+      table![2 * i + 1] = topo.signalByEntry.get(sigEntryKey(l.b, i)) ?? -1;
+    });
+    entrySignalTables.set(topo.signalByEntry, table);
+  }
+  const l = topo.links[link];
+  if (l && node === l.a) return table[2 * link];
+  if (l && node === l.b) return table[2 * link + 1];
+  return topo.signalByEntry.get(sigEntryKey(node, link)) ?? -1;
+}
+const entrySignalTables = new WeakMap<Map<number, number>, Int32Array>();
+
 export function buildTopology(): Topology {
   const chains = stationChainages();
   const nStations = STATIONS.length;

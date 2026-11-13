@@ -10,7 +10,7 @@ import type { FromWorker, ToWorker, SimConfig } from './model';
 import { nextOperatingConfig, unfinishedAtRollover } from './operatingDay';
 import { OPERATING_DAY } from './dayRandom';
 import { capture, restore, type Checkpoint } from './state';
-import { applyInput, compactCheckpoints, exportDiagnostics, stringifyDiagnostics, type RecordedInput } from './diagnostics';
+import { applyInput, checkpointDroppedAfterRunUp, compactCheckpoints, exportDiagnostics, stringifyDiagnostics, type RecordedInput } from './diagnostics';
 import { preparePlan } from './planning';
 import { captureWarmup, readWarmup, restoreWarmup, warmupKey, writeWarmup } from './warmupCache';
 import { buildKey, loadBuild, saveBuild } from './buildCache';
@@ -152,8 +152,13 @@ function checkpoint() {
   checkpoints = compactCheckpoints(checkpoints, sim.t);
 }
 
-/** one fixed step incl. replayed commands and periodic checkpoints */
-function stepOnce(keepCheckpoints = true) {
+/** Time of the last checkpoint skipped during the start-up run-up (its
+ * 60 s cadence continues from there); -Infinity outside a run-up. */
+let skippedCheckpointAt = -Infinity;
+
+/** one fixed step incl. replayed commands and periodic checkpoints;
+ * `runUpTo`: the start-up run-up's target (checkpointDroppedAfterRunUp) */
+function stepOnce(keepCheckpoints = true, runUpTo?: number) {
   if (!sim) return;
   while (pending.length && pending[0].t <= sim.t + 1e-6) {
     const e = pending.shift()!;
@@ -164,7 +169,10 @@ function stepOnce(keepCheckpoints = true) {
   }
   sim.step(FIXED_DT);
   const last = checkpoints[checkpoints.length - 1];
-  if (keepCheckpoints && (!last || sim.t - last.t >= CP_INTERVAL - 1e-6)) checkpoint();
+  if (keepCheckpoints && (!last || sim.t - Math.max(last.t, skippedCheckpointAt) >= CP_INTERVAL - 1e-6)) {
+    if (runUpTo !== undefined && checkpointDroppedAfterRunUp(checkpoints, sim.t, runUpTo)) skippedCheckpointAt = sim.t;
+    else checkpoint();
+  }
   if (sim.reportReady) {
     post({ type: 'report', report: sim.reportReady });
     sim.reportReady = null;
@@ -182,13 +190,14 @@ function runUntil(to: number, initial = false, stopOnCap = false) {
       sim.log('I', '系统', '线上有人工驾驶（CM/RM）列车，快进停止');
       break;
     }
-    stepOnce();
+    stepOnce(true, initial ? target : undefined);
     if (performance.now() - lastProgress > 200) {
       lastProgress = performance.now();
       post({ type: 'progress', t: sim.t, target });
     }
   }
   jumping = false;
+  skippedCheckpointAt = -Infinity;
   if (!initial) {
     flushEvents(true);
     sendSnapshot();

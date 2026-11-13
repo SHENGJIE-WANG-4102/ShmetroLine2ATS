@@ -844,10 +844,7 @@ function movementStopAt(sim: Sim, tr: Train, platform: number): StopTask | null 
     let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
     const cache = queryCache(sim);
     let ends = cache.tripEnds.get(tr);
-    if (!ends) {
-      cache.tripEnds.set(tr, ends = new Map());
-      tasks.forEach((t, i) => { if (t.k === 'stop') ends!.set(t.trip, i); });
-    }
+    if (!ends) cache.tripEnds.set(tr, ends = lastStopOfTrips(tasks));
     task = null;
     for (let i = 0; i < tasks.length; i++) {
       const t = tasks[i];
@@ -864,6 +861,25 @@ function movementStopAt(sim: Sim, tr: Train, platform: number): StopTask | null 
     byPlatform.set(platform, task);
   }
   return task;
+}
+
+/** Last task index of each trip's stops. (One map write per run of a trip's
+ * stops rather than per stop: a later run of the same trip overwrites it, so
+ * every trip still maps to its last stop.) */
+function lastStopOfTrips(tasks: readonly Task[]): Map<number, number> {
+  const ends = new Map<number, number>();
+  let runTrip: number | undefined, runEnd = -1;
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    if (t.k !== 'stop') continue;
+    if (t.trip !== runTrip) {
+      if (runTrip !== undefined) ends.set(runTrip, runEnd);
+      runTrip = t.trip;
+    }
+    runEnd = i;
+  }
+  if (runTrip !== undefined) ends.set(runTrip, runEnd);
+  return ends;
 }
 
 function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: PhysicalOrder, request: ResourceRequest, option: ResourceOption): { id: number } | undefined {
@@ -916,6 +932,12 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
       && !tr.body.some(b => option.sections.has(sim.topo.links[b.link].section))
       && !needsThisOccupant(tr.id) && !queuedBehindLater(tr.id);
   });
+}
+
+/** An admitted applicant's tasks changed: drop its movement lookups. */
+function forgetMovement(sim: Sim, tr: Train) {
+  const cache = queryCache(sim);
+  cache.movementStops.delete(tr); cache.tripEnds.delete(tr);
 }
 
 /** Rules 2/3: an allocation is a whole movement. A denied occupant cannot
@@ -1008,7 +1030,7 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
           const task = tr.tasks[c.index];
           if (task.k === 'depot' && depotBerth(sim.topo, task) !== c.berth && !applyDepotChoice(sim, tr, task, c.berth)) { changed = false; break; }
         }
-        queryCache(sim).movementStops.delete(tr); queryCache(sim).tripEnds.delete(tr);
+        forgetMovement(sim, tr);
         if (!changed) {
           current.admitted = false; current.code = 'ROUTE_CONFLICT';
           const task = tr.tasks.find((t): t is Extract<Task, { k: 'depot' }> => t.k === 'depot');
@@ -1026,7 +1048,7 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
           }
           if (option.phases.some(p => reachesBerth(sim, p, c.berth))) sim.berthRes.set(c.berth, tr.id);
         }
-        queryCache(sim).movementStops.delete(tr); queryCache(sim).tripEnds.delete(tr);
+        forgetMovement(sim, tr);
       }
       decision = current;
       break;

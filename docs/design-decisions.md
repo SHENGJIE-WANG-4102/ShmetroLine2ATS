@@ -5187,3 +5187,17 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - **没修的红**：`tests/operating-day.test.ts` 有 2 条失败，是 D191 引入的（D191 验收时漏跑了这个文件）：东头车场正好用满，早上川沙或龙阳路少一两列可用车时，晚间 20:25 机场、20:47 广兰路没车可发。用户决定：缺车的日子让北翟路多出的车在 10:00 后平峰跑载客车、收车进东头车场，正常日子不触发。待做。
 - 公共文件：`src/sim/psd.ts`、`src/sim/state.ts`、`src/sim/operatingDay.ts`。新增 `tests/psd-table.test.ts`，`tests/continuous-day.test.ts` 加 2 条。
 - 验证：`tsc` 0 error；随机压测 3 例两天（`work/fuzz-audit1/`）全部 pass、0 违例。
+
+## D193 每步提速（结果逐位不变）：预热 04:00→18:00 约快 19%（2026-11-13）
+
+起因：开始时刻前的预热推演是单线程从 04:00 一步步推，选傍晚要等几分钟；预热缓存按整套配置认，改一个变量就失效（用户指出）。所以要的是通用的每步提速。分段存档方案（每半小时存一份、不绑开始时刻）用户定为下策，先不做。
+
+- **做了什么**（都不改仿真结果、不加 Sim 字段、缓存不进检查点）：
+  - ATO 区间规划（`dynamics.ts integrateSection / sectionPlan`）：控制状态固定成一种对象形状，状态没变的步共用轨迹快照，同一次规划里重复的试算复用；`softStopShape` 按全部输入记最后一次结果；「进没进停车接近距离」先用可证明的上界快速否决（`withinStopApproach`），界内照旧用精确式；牵引曲线查表去掉数组解构。这部分耗时降到原来的 0.46。
+  - `scanAhead` 去闭包，入口信号查表（`topology.ts signalAtEntry`），`computeBody` 的 flatMap/find 换成循环，`distanceToBerth` 记忆（只依赖拓扑和路由表），两个每步用的报警键串按车号缓存，`movementStopAt` 的车次末停站表少写 Map，`observeMachines` 每类实体表每次扫描只查一次，联锁里出段方向的 goalFree 只在用得上时才算。
+  - `worker.ts` 预热时不存注定被压缩掉的回退检查点（`diagnostics.ts checkpointDroppedAfterRunUp`）；压缩后留下的检查点和原来一样，预热后回退到开始时刻以前照旧能用。
+- **没做**：完整性检查改成每秒一次（只省约 2.8%，而用户自己 120× 跑正是抓问题的渠道，不值）；停着的车缓存 `scanAhead`（只占步时 1.2%，且有随时间变的输入，失效条件写不全）；退行占用、`movementStopAt` 跨秒、资源授权这三处缓存（失效条件写不全）。
+- **数字**（小核、打包后量，看比例）：凌晨 0.105→0.092 ms/步，早高峰 0.821→0.690，平峰 0.397→0.309；按 worker 方式实跑预热 04:00→10:00 114.7 s→93.7 s，04:00→18:00 259.8 s→210.3 s。
+- **等价证据**：改前改后同进程交替、同一检查点起跑，三个时段各 ≥20 000 步，每 500 步比行为指纹、每 2000 步比全状态哈希（整个回退检查点加 trace、metrics，按 IEEE 位），无差异；预热终点指纹相同。新增 `tests/step-caches.test.ts`（每个缓存/捷径和它替换的直接算法相等，改 PERF 后会失效）。15 个测试文件 220 条全过，`tsc` 0 error，随机压测 3 例两天（`work/fuzz-perf2b/`）全部 pass、0 违例。
+- **剩下的**：热点已经摊平，每处 1–2%；唯一的大块是资源仲裁（高峰约 12%，凌晨约 19%），改成增量预计再省 8–15%，动核心，要全天对比验收，另做。
+- 公共文件：`src/sim/` 下 ats、diagnostics、dynamics、interlocking、invariants、movement、resourceArbitration、topology、worker。

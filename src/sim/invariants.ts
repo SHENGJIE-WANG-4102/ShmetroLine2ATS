@@ -14,7 +14,7 @@
  */
 import type { Sim } from './engine';
 import type { Train } from './model';
-import { nextLink } from './topology';
+import { nextLink, signalAtEntry } from './topology';
 import { swPos } from './interlocking';
 import {
   MODE, EB, PSD, ROUTE, CALL, FAULT, TURNBACK, DEPOT, GUARDS, modeState, ebState, routeState,
@@ -236,8 +236,8 @@ function checkMaRoutes(sim: Sim, tr: Train) {
       violate(sim, 'MA_NO_ROUTE', [tr.id], `${tr.svc}-${tr.tripNo} 授权 ${ma.toFixed(0)} m 越过线路终点/未到位道岔（距 ${d.toFixed(0)} m）`, `${tr.id}`);
       return;
     }
-    const sid = topo.signalByEntry.get(nx.node * 65536 + nx.link);
-    if (sid !== undefined) {
+    const sid = signalAtEntry(topo, nx.node, nx.link);
+    if (sid >= 0) {
       const sg = sim.sig[sid];
       const ar = sg.route >= 0 ? sim.routes.get(sg.route) : undefined;
       // a train committed to a route (could no longer stop when its signal failed / the route
@@ -306,8 +306,12 @@ function observationIndex(g: IntegrityState): Observations {
   return index;
 }
 function observe<S extends string>(sim: Sim, m: Machine<S>, id: number, state: S, seen: Observations, tr?: Train) {
+  observeIn(sim, m, seen.machines[m.name] ??= [], id, state, seen, tr);
+}
+/** observe with the machine's entity list already looked up (the 10 Hz sweep
+ * resolves each machine's list once rather than once per entity). */
+function observeIn<S extends string>(sim: Sim, m: Machine<S>, entities: (Observation | undefined)[], id: number, state: S, seen: Observations, tr?: Train) {
   const g = sim.integrity;
-  const entities = seen.machines[m.name] ??= [];
   let entry = entities[id];
   if (!entry) {
     entry = entities[id] = { key: `${m.name}:${id}`, machine: m.name, id, seen: 0 };
@@ -351,15 +355,19 @@ export function recordTransition<S extends string>(sim: Sim, machine: Machine<S>
 function observeMachines(sim: Sim) {
   const g = sim.integrity;
   const seen = observationIndex(g);
+  const list = (m: Machine<string>) => seen.machines[m.name] ??= [];
+  const modes = list(MODE), ebs = list(EB), turnbacks = list(TURNBACK), depots = list(DEPOT);
   for (const tr of sim.trainList) {
     const id = tr.id;
-    observe(sim, MODE, id, modeState(tr), seen, tr);
-    observe(sim, EB, id, ebState(tr), seen, tr);
-    observe(sim, TURNBACK, id, tr.tbStage, seen, tr);
-    observe(sim, DEPOT, id, tr.depotStage, seen, tr);
+    observeIn(sim, MODE, modes, id, modeState(tr), seen, tr);
+    observeIn(sim, EB, ebs, id, ebState(tr), seen, tr);
+    observeIn(sim, TURNBACK, turnbacks, id, tr.tbStage, seen, tr);
+    observeIn(sim, DEPOT, depots, id, tr.depotStage, seen, tr);
   }
-  for (let p = 0; p < sim.plat.length; p++) observe(sim, PSD, p, sim.plat[p].psd, seen);
-  for (const rid of sim.routes.keys()) observe(sim, ROUTE, rid, routeState(sim, rid), seen);
+  const psds = list(PSD);
+  for (let p = 0; p < sim.plat.length; p++) observeIn(sim, PSD, psds, p, sim.plat[p].psd, seen);
+  const routes = list(ROUTE);
+  for (const rid of sim.routes.keys()) observeIn(sim, ROUTE, routes, rid, routeState(sim, rid), seen);
   for (const c of sim.calls) observe(sim, CALL, c.id, c.state, seen);
   for (const f of sim.faults) observe(sim, FAULT, f.id, f.stage, seen);
   // entities that disappeared: routes go back to idle; trains / calls / faults leave the observation
