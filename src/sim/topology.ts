@@ -495,6 +495,9 @@ interface LeadOut {
   s: Dir;
 }
 
+/** length of main a joining run keeps beyond its last platform before the connection to the other run (m) */
+const JOIN_STUB = 60;
+
 interface MainPoint {
   ch: number;
   kind: 'joint' | 'switch' | 'end';
@@ -503,6 +506,9 @@ interface MainPoint {
   swBuild?: SwBuild;
   endKind?: 'buffer';
   node?: number;
+  /** for ends: the run of stations this end belongs to, and whether it runs on into another run */
+  run?: number;
+  join?: boolean;
 }
 
 interface SwBuild {
@@ -539,6 +545,17 @@ const entrySignalTables = new WeakMap<Map<number, number>, Int32Array>();
 export function buildTopology(): Topology {
   const chains = stationChainages();
   const nStations = STATIONS.length;
+  // Runs of stations: a branch is a run of its own, on its own stretch of the chainage axis.
+  // Each run has its two mains; a run that joins another has no buffers at that end.
+  const runStart: number[] = [];
+  STATIONS.forEach((station, i) => { if (i === 0 || station.interM === null) runStart.push(i); });
+  const runOf = STATIONS.map((_, i) => runStart.reduce((run, start, r) => (start <= i ? r : run), 0));
+  const runLast = (run: number) => (runStart[run + 1] ?? nStations) - 1;
+  /** chainage extent of each run's mains (set once the terminal ends are final) */
+  const runSpan: { lo: number; hi: number }[] = [];
+  const inRun = (station: number, ch: number) => ch >= runSpan[runOf[station]].lo - 1 && ch <= runSpan[runOf[station]].hi + 1;
+  /** the node where a joining run's main ends, per track and run */
+  const joinNodes: Record<'DN' | 'UP', number[]> = { DN: [], UP: [] };
   const lastCh = chains[nStations - 1];
   const wrapAfter = STATIONS.findIndex(station => station.id === SIMULATION.topology.wrapAfter);
   const wrapChain = (chains[wrapAfter] + chains[wrapAfter + 1]) / 2;
@@ -603,10 +620,12 @@ export function buildTopology(): Topology {
 
   // terminal extents
   const westBuffer = chains[0] - PLAT_HALF - 500;
-  const eastBuffer = lastCh + PLAT_HALF + 500;
   for (const t of ['DN', 'UP'] as const) {
-    mainPts[t].push({ ch: westBuffer, kind: 'end', endKind: 'buffer' });
-    mainPts[t].push({ ch: eastBuffer, kind: 'end', endKind: 'buffer' });
+    for (let run = 0; run < runStart.length; run++) {
+      const join = STATIONS[runLast(run)].joins !== undefined;
+      mainPts[t].push({ ch: chains[runStart[run]] - PLAT_HALF - 500, kind: 'end', endKind: 'buffer', run });
+      mainPts[t].push({ ch: chains[runLast(run)] + PLAT_HALF + (join ? JOIN_STUB : 500), kind: 'end', endKind: join ? undefined : 'buffer', run, join });
+    }
     hardBounds[t].push(wrapChain);
     for (let i = 0; i < nStations; i++) hardBounds[t].push(chains[i] - PLAT_HALF, chains[i] + PLAT_HALF);
   }
@@ -714,7 +733,7 @@ export function buildTopology(): Topology {
     // move buffer to the requested tail length
     const buf = t.bufferFromStation === undefined ? outer + s * t.length : c + s * t.bufferFromStation;
     for (const tr of ['DN', 'UP'] as const) {
-      const e = mainPts[tr].find((p) => p.kind === 'end' && (s < 0 ? p.ch < c : p.ch > c))!;
+      const e = mainPts[tr].find((p) => p.kind === 'end' && p.run === runOf[t.station] && (s < 0 ? p.ch < c : p.ch > c))!;
       e.ch = buf;
     }
   }
@@ -780,17 +799,24 @@ export function buildTopology(): Topology {
   const sectionBounds: Record<'DN' | 'UP', number[]> = { DN: [], UP: [] };
   for (const t of ['DN', 'UP'] as const) {
     const pts = mainPts[t];
-    const lo = Math.min(...pts.filter((p) => p.kind === 'end').map((p) => p.ch));
-    const hi = Math.max(...pts.filter((p) => p.kind === 'end').map((p) => p.ch));
-    let b = Array.from(new Set(hardBounds[t].map((v) => Math.round(v * 10) / 10))).filter((v) => v > lo + 1 && v < hi - 1).sort((x, y) => x - y);
+    const ends = pts.filter((p) => p.kind === 'end');
+    const spans = runStart.map((_, run) => {
+      const own = ends.filter((p) => p.run === run).map((p) => p.ch);
+      return { lo: Math.min(...own), hi: Math.max(...own) };
+    });
+    if (t === 'DN') runSpan.push(...spans);
+    let b = Array.from(new Set(hardBounds[t].map((v) => Math.round(v * 10) / 10)))
+      .filter((v) => spans.some((span) => v > span.lo + 1 && v < span.hi - 1)).sort((x, y) => x - y);
     // subdivide long gaps
-    const full = [lo, ...b, hi];
     const extra: number[] = [];
-    for (let i = 0; i + 1 < full.length; i++) {
-      const gap = full[i + 1] - full[i];
-      if (gap > LAYOUT.maxSectionLength) {
-        const n = Math.ceil(gap / LAYOUT.maxSectionLength);
-        for (let k = 1; k < n; k++) extra.push(full[i] + (gap * k) / n);
+    for (const span of spans) {
+      const full = [span.lo, ...b.filter((v) => v > span.lo && v < span.hi), span.hi];
+      for (let i = 0; i + 1 < full.length; i++) {
+        const gap = full[i + 1] - full[i];
+        if (gap > LAYOUT.maxSectionLength) {
+          const n = Math.ceil(gap / LAYOUT.maxSectionLength);
+          for (let k = 1; k < n; k++) extra.push(full[i] + (gap * k) / n);
+        }
       }
     }
     b = [...b, ...extra].sort((x, y) => x - y);
@@ -805,7 +831,8 @@ export function buildTopology(): Topology {
     const pts = mainPts[t];
     for (const p of pts) {
       const n = newNode(p.kind, p.ch);
-      if (p.kind === 'end') n.endKind = 'buffer';
+      if (p.kind === 'end' && !p.join) n.endKind = 'buffer';
+      if (p.join) { n.kind = 'joint'; joinNodes[t][p.run!] = n.id; }
       if (p.kind === 'switch') {
         n.sw = p.swBuild!.sw;
         p.swBuild!.node = n.id;
@@ -813,17 +840,22 @@ export function buildTopology(): Topology {
       }
       p.node = n.id;
     }
+    /** the link east of each point (-1: none) */
+    const after: number[] = [];
     for (let i = 0; i + 1 < pts.length; i++) {
+      // no track between one run's end and the next run's start
+      if (pts[i].kind === 'end' && pts[i + 1].kind === 'end' && pts[i].run !== pts[i + 1].run) { after.push(-1); continue; }
       const l = newLink(pts[i].node!, pts[i + 1].node!, pts[i + 1].ch - pts[i].ch, t, t === 'DN' ? 1 : -1, pts[i].ch, pts[i + 1].ch);
       mainLinks[t].push(l.id);
+      after.push(l.id);
     }
     // assign toe / normal for switch nodes on mains
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
       if (p.kind !== 'switch') continue;
       const n = nodes[p.node!];
-      const westLink = mainLinks[t][i - 1];
-      const eastLink = mainLinks[t][i];
+      const westLink = after[i - 1];
+      const eastLink = after[i];
       if (p.toeSide === 'west') { n.toe = westLink; n.normal = eastLink; } else { n.toe = eastLink; n.normal = westLink; }
     }
   }
@@ -1023,7 +1055,7 @@ export function buildTopology(): Topology {
       for (const lid of mainLinks[t]) {
         const l = links[lid];
         const m = (l.chainA + l.chainB) / 2;
-        if ((ti.side === 'west' && m < ti.signalCh[t]) || (ti.side === 'east' && m > ti.signalCh[t])) l.limit = TURNOUT_SPEEDS.tail;
+        if (inRun(ti.station, m) && ((ti.side === 'west' && m < ti.signalCh[t]) || (ti.side === 'east' && m > ti.signalCh[t]))) l.limit = TURNOUT_SPEEDS.tail;
       }
     }
   }
@@ -1069,6 +1101,7 @@ export function buildTopology(): Topology {
     let cur: TSection | null = null;
     for (const lid of mainLinks[t]) {
       const l = links[lid];
+      if (cur && links[cur.links[cur.links.length - 1]].chainB !== l.chainA) cur = null; // the next run
       if (!cur) cur = newSection('plain', t, l.chainA);
       assign(lid, cur);
       const endCh = Math.round(l.chainB * 10) / 10;
@@ -1087,7 +1120,7 @@ export function buildTopology(): Topology {
     for (const ti of tailInfo) {
       const mid = (s.chainFrom + s.chainTo) / 2;
       const tr = s.track as 'DN' | 'UP';
-      if (s.kind === 'plain' && (tr === 'DN' || tr === 'UP') && ((ti.side === 'west' && mid < ti.signalCh[tr]) || (ti.side === 'east' && mid > ti.signalCh[tr]))) s.kind = 'tail';
+      if (s.kind === 'plain' && inRun(ti.station, mid) && (tr === 'DN' || tr === 'UP') && ((ti.side === 'west' && mid < ti.signalCh[tr]) || (ti.side === 'east' && mid > ti.signalCh[tr]))) s.kind = 'tail';
     }
   }
   // diverging links: attach to the section of the main/branch node they touch
@@ -1269,8 +1302,8 @@ export function buildTopology(): Topology {
   // platform signals
   for (let i = 0; i < nStations; i++) {
     const c = chains[i];
-    const westEnd = i === 0;
-    const eastEnd = i === nStations - 1;
+    const westEnd = runStart[runOf[i]] === i;
+    const eastEnd = runLast(runOf[i]) === i && !STATIONS[i].joins;
     // starting signals (normal direction, exit end)
     if (!eastEnd || equipped[i]) sigAt('DN', c + PLAT_HALF, 1, 'start');
     if (!westEnd || equipped[i]) sigAt('UP', c - PLAT_HALF, -1, 'start');
@@ -1285,8 +1318,8 @@ export function buildTopology(): Topology {
     }
   }
   // feature signals: protect both ends of each feature, both directions
-  const westLimit = (t: 'DN' | 'UP') => tailInfo.find((x) => x.side === 'west')?.signalCh[t] ?? -Infinity;
-  const eastLimit = (t: 'DN' | 'UP') => tailInfo.find((x) => x.side === 'east')?.signalCh[t] ?? Infinity;
+  const westLimit = (t: 'DN' | 'UP', station: number) => tailInfo.find((x) => x.side === 'west' && runOf[x.station] === runOf[station])?.signalCh[t] ?? -Infinity;
+  const eastLimit = (t: 'DN' | 'UP', station: number) => tailInfo.find((x) => x.side === 'east' && runOf[x.station] === runOf[station])?.signalCh[t] ?? Infinity;
   const hasSignalNear = (t: 'DN' | 'UP', ch: number, dir: Dir, within: number) =>
     signals.some((s) => links[s.link].track === t && s.dir === dir && Math.abs(s.chain - ch) <= within);
   const signalInFront = (t: 'DN' | 'UP', ch: number, dir: Dir, within: number) =>
@@ -1313,8 +1346,8 @@ export function buildTopology(): Topology {
       const ext = featureExtent(f, t);
       if (!ext) continue;
       const normal: Dir = t === 'DN' ? 1 : -1;
-      if (!hasSignalNear(t, ext.to, 1, 25) && ext.to < eastLimit(t)) sigAt(t, ext.to, 1, normal === 1 ? 'home' : 'rev');
-      if (!hasSignalNear(t, ext.from, -1, 25) && ext.from > westLimit(t)) sigAt(t, ext.from, -1, normal === -1 ? 'home' : 'rev');
+      if (!hasSignalNear(t, ext.to, 1, 25) && ext.to < eastLimit(t, f.station)) sigAt(t, ext.to, 1, normal === 1 ? 'home' : 'rev');
+      if (!hasSignalNear(t, ext.from, -1, 25) && ext.from > westLimit(t, f.station)) sigAt(t, ext.from, -1, normal === -1 ? 'home' : 'rev');
     }
   }
   // tail exit signals (both tracks, facing the platform)
@@ -1370,17 +1403,18 @@ export function buildTopology(): Topology {
   for (const ti of tailInfo) {
     const dir: Dir = ti.side === 'west' ? -1 : 1;
     for (const t of ['DN', 'UP'] as const) {
-      // the buffer-end link
+      // the buffer-end link (of this station's run)
+      const own = mainLinks[t].filter((id) => inRun(ti.station, (links[id].chainA + links[id].chainB) / 2));
       const stopCh = ti.turnbackDistance === undefined ? undefined : ti.signalCh[t] + dir * ti.turnbackDistance;
-      const lid = stopCh === undefined ? (dir === -1 ? mainLinks[t][0] : mainLinks[t][mainLinks[t].length - 1])
-        : mainLinks[t].find(id => links[id].chainA <= stopCh && stopCh <= links[id].chainB && sections[links[id].section].kind === 'tail');
+      const lid = stopCh === undefined ? (dir === -1 ? own[0] : own[own.length - 1])
+        : own.find(id => links[id].chainA <= stopCh && stopCh <= links[id].chainB && sections[links[id].section].kind === 'tail');
       if (lid === undefined) throw new Error(`Invalid tail turnback position at ${STATIONS[ti.station].id}/${t}`);
       const l = links[lid];
       const offset = stopCh === undefined ? (dir === -1 ? 15 : l.len - 15) : stopCh - l.chainA;
       const id = addBerth({ kind: 'tail', link: lid, offset, dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${DIRECTIONS[t].label}尾轨` });
       if (ti.turnback) stationTurnback[ti.station].push(id);
       if (ti.turnback && stopCh !== undefined) {
-        const deepId = dir === -1 ? mainLinks[t][0] : mainLinks[t][mainLinks[t].length - 1];
+        const deepId = dir === -1 ? own[0] : own[own.length - 1];
         const deep = links[deepId];
         stationRescue[ti.station].push(addBerth({ kind: 'tail', link: deepId, offset: dir === -1 ? 15 : deep.len - 15,
           dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${DIRECTIONS[t].label}尾轨(救援)` }));
@@ -1389,7 +1423,7 @@ export function buildTopology(): Topology {
       // (蟠祥路 下行) holds two trains, one on each of its links: they go out
       // straight to the departure platform, the inner one first.
       const away = (t === 'DN') === (dir === -1);
-      const innerId = dir === -1 ? mainLinks[t][1] : mainLinks[t][mainLinks[t].length - 2];
+      const innerId = dir === -1 ? own[1] : own[own.length - 2];
       if (!ti.turnback && away && links[innerId].len >= LINE_INFO.trainLength + 30) {
         const il = links[innerId];
         const inner = addBerth({ kind: 'tail', link: innerId, offset: dir === -1 ? 15 : il.len - 15, dir, platform: -1, station: ti.station, depot: -1, reverse: false, name: `${STATIONS[ti.station].name}${DIRECTIONS[t].label}尾轨(内)` });
