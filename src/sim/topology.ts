@@ -15,7 +15,7 @@
  *    that node ("entry key" = node*65536 + link).
  */
 import {
-  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, OPERATIONS, stationChainages, DIRECTIONS,
+  STATIONS, LAYOUT, SPEED_LIMITS, TURNOUT_SPEEDS, LINE_INFO, SIMULATION, OPERATIONS, stationChainages, DIRECTIONS, RUN_GAP,
   type CrossoverKind, type SidingLane, type LeadDef,
 } from '../data/current';
 
@@ -153,6 +153,8 @@ export interface TPlatform {
   name: string;
   /** platform whose waiting passengers this one shares (广兰路 middle-track face of the UP island) */
   pool?: number;
+  /** a joining run's own face at the station it joins: serves the trains that come from this station (the run's last) */
+  from?: number;
   /** side of the track the platform edge lies on (north = UP main side) */
   face: 'N' | 'S';
 }
@@ -791,6 +793,30 @@ export function buildTopology(): Topology {
     loops.push({ def: lp, w, e, uw, dw, ue, de, ywSw: newSwitch('siding', lp.station), yeSw: newSwitch('siding', lp.station), ends: [], middle: [], exits: [] });
   }
 
+  // A joining run: each of its mains runs on from its last station to a turnout on the
+  // same-direction main of the run it joins (the two do not cross the other main).
+  interface JoinBuild {
+    run: number; station: number; t: 'DN' | 'UP'; platform: boolean; main: SwBuild;
+    /** the way in order from the run's end: plain pieces, an own platform face, the turnout leg */
+    plain: number[]; platLink?: number; leg?: number;
+    /** entry and exit joints of the platform face (in chainage order) */
+    pa?: number; pb?: number;
+  }
+  const joins: JoinBuild[] = [];
+  for (let run = 0; run < runStart.length; run++) {
+    const def = STATIONS[runLast(run)].joins;
+    if (!def) continue;
+    const station = STATIONS.findIndex((x) => x.id === def.station);
+    for (const t of ['DN', 'UP'] as const) {
+      const at = chains[station] + def[t].at;
+      joinFeature(station, at);
+      const main: SwBuild = { sw: newSwitch('siding', station).id };
+      // the joining run lies UP-ward of the turnout: toe towards DN
+      addSwitchPt(t, at, 'east', main);
+      joins.push({ run, station, t, platform: def[t].platform ?? false, main, plain: [] });
+    }
+  }
+
   // feature-side signal positions become hard boundaries (they already are switch bounds)
   // equipped stations: any feature within 1.2 km of the station centre
   const equipped = chains.map((c, i) => features.some((f) => f.station === i || f.pts.some((p) => Math.abs(p.ch - c) < 1200)));
@@ -874,6 +900,39 @@ export function buildTopology(): Topology {
     dn.reverse = l1.id;
     up.reverse = l2.id;
     l1.limit = l2.limit = TURNOUT_SPEEDS.crossover;
+  }
+
+  // joining runs: from the run's end to the turnout on the main it joins
+  for (const jb of joins) {
+    const def = STATIONS[runLast(jb.run)].joins!;
+    const from = nodes[joinNodes[jb.t][jb.run]];
+    const main = findMainNode(jb.main);
+    const c = chains[jb.station];
+    const normal: Dir = jb.t === 'DN' ? 1 : -1;
+    // centre to centre is def.interM; the turnout lies (main.chain - c) beyond the join station's centre
+    const legLen = jb.platform ? Math.abs(main.chain - c) - PLAT_HALF : JOIN_STUB;
+    const plainLen = def.interM + (jb.platform ? -PLAT_HALF : main.chain - c - legLen) - (from.chain - chains[runLast(jb.run)]);
+    // The plain pieces lie in the gap of the chainage axis after the run; only the last piece
+    // reaches over to the chainage of the join station.
+    const n = Math.max(2, Math.ceil(plainLen / LAYOUT.maxSectionLength));
+    const far = jb.platform ? newNode('joint', c - PLAT_HALF) : newNode('joint', main.chain - legLen);
+    let last = from;
+    for (let k = 1; k <= n; k++) {
+      const to = k === n ? far : newNode('joint', from.chain + (RUN_GAP / 2) * k / n);
+      const l = newLink(last.id, to.id, plainLen / n, k === n ? 'CON' : jb.t, normal, last.chain, to.chain);
+      jb.plain.push(l.id);
+      last = to;
+    }
+    if (jb.platform) {
+      const pb = newNode('joint', c + PLAT_HALF);
+      jb.platLink = newLink(far.id, pb.id, 2 * PLAT_HALF, 'SID', normal, far.chain, pb.chain).id;
+      jb.pa = far.id; jb.pb = pb.id;
+      last = pb;
+    }
+    const leg = newLink(last.id, main.id, legLen, 'CON', normal, last.chain, main.chain);
+    leg.limit = TURNOUT_SPEEDS.siding;
+    main.reverse = leg.id;
+    jb.leg = leg.id;
   }
 
   // sidings
@@ -1203,6 +1262,11 @@ export function buildTopology(): Topology {
       assign(lid, newSection(lid === lb.platLink ? 'platform' : 'siding', 'SID', (l.chainA + l.chainB) / 2));
     }
   }
+  // joining runs: each plain piece and the platform face are sections of their own
+  for (const jb of joins) {
+    for (const lid of jb.plain) { const sec = newSection('plain', jb.t, links[lid].chainA); sec.station = jb.station; moveTo(lid, sec.id); }
+    if (jb.platLink !== undefined) moveTo(jb.platLink, newSection('platform', 'SID', chains[jb.station]).id);
+  }
   // depot transfer tracks: one section per link
   for (const ld of leads) for (const lid of ld.links) moveTo(lid, newSection('depot', 'DEP', links[lid].chainA).id);
   // remove empty sections (from re-assignment) by compaction
@@ -1256,6 +1320,19 @@ export function buildTopology(): Topology {
       name: `${STATIONS[i].name} 中间线站台`, pool: stationPlat[i].UP, face: 'N',
     };
     links[lb.platLink].platform = p.id;
+    platforms.push(p);
+  }
+
+  // a joining run's own platform face at the station it joins
+  for (const jb of joins) {
+    if (jb.platLink === undefined) continue;
+    const i = jb.station;
+    const p: TPlatform = {
+      id: platforms.length, station: i, track: jb.t, link: jb.platLink, section: links[jb.platLink].section,
+      name: `${STATIONS[i].name} ${DIRECTIONS[jb.t].label}站台(${STATIONS[runStart[jb.run]].name}方向)`,
+      from: runLast(jb.run), face: jb.t === 'UP' ? 'N' : 'S',
+    };
+    links[jb.platLink].platform = p.id;
     platforms.push(p);
   }
 
@@ -1358,6 +1435,17 @@ export function buildTopology(): Topology {
       const sid = addSignal(n, mainLinkFrom(t, n, dir), 'exit');
       signals[sid].role = 'exit';
     }
+  }
+  // joining runs: a train of the run is held clear of the main at its own platform face, or
+  // short of the turnout leg; one leaving the main for the run is covered by the main's signals
+  for (const jb of joins) {
+    const normal: Dir = jb.t === 'DN' ? 1 : -1;
+    const plat = jb.platLink === undefined ? undefined : links[jb.platLink];
+    if (plat) {
+      const [entry, exit] = normal === 1 ? [jb.pa!, jb.pb!] : [jb.pb!, jb.pa!];
+      addSignal(entry, plat.id, 'home');
+      addSignal(exit, normal === 1 ? jb.leg! : jb.plain[jb.plain.length - 1], 'start');
+    } else if (normal === 1) signals[addSignal(links[jb.leg!].a, jb.leg!, 'home')].station = jb.station;
   }
   // siding and middle-track exit signals
   for (const b of sidingBerthInfo) addSignal(b.exitNode, b.exitLink, 'exit');

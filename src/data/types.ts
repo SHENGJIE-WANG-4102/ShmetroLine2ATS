@@ -8,6 +8,13 @@ export interface SourceRef {
     url: string;
     used: string;
 }
+/** Where one main of a joining run meets the same-direction main of the run it joins. */
+export interface JoinTrack {
+    /** the turnout on that main, from the join station's centre (m, DN-ward positive) */
+    at: number;
+    /** this track has a platform face of its own at the join station before it meets the main */
+    platform?: boolean;
+}
 export interface StationData {
     opened?: boolean;
     pisLayout?: 'classic' | 'wide';
@@ -22,7 +29,7 @@ export interface StationData {
     /** A branch: the station list holds one run of stations after another, each listed DN-ward
      * (a branch before the run it joins, so that the list as a whole still runs DN). The last
      * station of a branch names the station it runs into, and the distance to it. */
-    joins?: { station: string; interM: number };
+    joins?: { station: string; interM: number } & Record<'DN' | 'UP', JoinTrack>;
     transfers: string[];
     dwell: number;
     demand: number;
