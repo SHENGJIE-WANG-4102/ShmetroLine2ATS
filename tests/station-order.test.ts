@@ -55,3 +55,20 @@ describe('station order', () => {
     expect(() => setStationOrder([1, 0])).toThrow();
   });
 });
+
+describe('branch station data', () => {
+  // main run A-B-C-D, branch X-Y joining at B
+  const stations = [
+    { id: 'A', interM: null }, { id: 'B', interM: 1000 }, { id: 'C', interM: 1500 }, { id: 'D', interM: 800 },
+    { id: 'X', interM: null }, { id: 'Y', interM: 700, joins: { station: 'B', interM: 1200 } },
+  ];
+  it('derives the running order and chainages from the station list', async () => {
+    const data = await import('../src/data/current');
+    expect(data.stationOrder(stations)).toEqual([1, 2, 3, -1, 5, 1]);
+    // the branch is measured back from the station it joins
+    expect(data.stationChainages(stations)).toEqual([0, 1000, 2500, 3300, -900, -200]);
+    expect(data.stationOrder(stations.slice(0, 4))).toEqual([1, 2, 3, -1]);
+    expect(() => data.stationOrder([{ id: 'X', interM: null, joins: { station: 'nowhere' } }])).toThrow();
+    setStationOrder(null);
+  });
+});
