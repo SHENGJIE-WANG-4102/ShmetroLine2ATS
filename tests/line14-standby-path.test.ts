@@ -17,7 +17,8 @@ describe('14号线热备真实泊位双程有向路径', () => {
     const places = tt.hotStandbyPlaces(sim.topo);
     const arrivals = sim.plan.trips.filter(trip => trip.standby);
     expect(arrivals.map(trip=>sim.topo.stations[trip.to].id).sort()).toEqual(
-      (dayType==='weekday'?['CYL','HPN','YSL','ZXX']:['CYL','HPN','YSL','ZXX','LTN']).sort());
+      // weekday: both turnback places stay empty, each reported as a warning (track needed by the turning service, yard stock)
+      (dayType==='weekday'?['CYL','HPN','YSL']:['CYL','HPN','YSL','ZXX','LTN']).sort());
     for (const trip of arrivals) {
       const block = sim.plan.blocks[trip.block], next = sim.plan.trips[block.trips[block.trips.indexOf(trip.id)+1]];
       const place = places.find(place => place.station === trip.to)!;

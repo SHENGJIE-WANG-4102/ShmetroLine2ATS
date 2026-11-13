@@ -14,6 +14,8 @@ describe('14号线官方窗口与完整交路',()=>{
    const issues=tt.validatePlan(sim.planCtx,sim.plan);
    expect(issues.filter(issue=>issue.severity==='error')).toEqual([]);
    expect(issues.filter(issue=>issue.severity==='warn')).toEqual(dayType==='weekday'?[{
+    severity:'warn',code:'UNASSIGNED',t:35100,text:'真新新村热备无可行折返线容量时隙，未开行该热备运用'
+   },{
     severity:'warn',code:'UNASSIGNED',t:35100,text:'蓝天路热备无可行基地库存时隙，未开行该热备运用'
    }]:[]);
    const revenue=sim.plan.trips.filter(t=>t.revenue&&!t.cancelled);

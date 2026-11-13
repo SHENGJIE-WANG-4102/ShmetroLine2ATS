@@ -45,7 +45,6 @@ export interface DutyInput {
   reservedStarts: ReadonlyMap<number, number>;
   /** arrivals whose car goes to a yard / a stable berth by a draft */
   fixedEnds: ReadonlyMap<number, number>;
-  standbyEnds: ReadonlyMap<number, number>;
   /** departures a request already starts from a line storage berth */
   stableStarts: ReadonlyMap<number, number>;
   /** arrivals a previous pass left without a home: they go home before exits are fitted */
@@ -94,7 +93,6 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   }
   for (const [id, depot] of input.reservedStarts) startOf.set(id, { kind: 'depot', depot, time: 0 });
   for (const [id, depot] of input.fixedEnds) endOf.set(id, { kind: 'depot', depot });
-  for (const [id, berth] of input.standbyEnds) endOf.set(id, { kind: 'stable', station: topo.berths[berth].station, berth });
   for (const [id, berth] of input.stableStarts) startOf.set(id, { kind: 'stable', station: topo.berths[berth].station, berth });
 
 
@@ -480,7 +478,8 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     let done = false;
     if (DEBUG) setTrace(new Map());
     // a storage place's overnight car must leave in the morning: it goes first
-    const stored = (y: Yard) => y.depot < 0 && y.stock - exits.filter(x => x.yard === y.id).length > 0;
+    // (not for a published first train: that one comes out of its own end's depot when it can)
+    const stored = (y: Yard) => !locked.has(want.trip.id) && y.depot < 0 && y.stock - exits.filter(x => x.yard === y.id).length > 0;
     // a yard the drafted returns (fixed runs) would overfill sends its cars out first
     const overfull = (y: Yard) => y.depot >= 0 && fixedIn[y.depot] - exits.filter(x => x.yard === y.id).length > topo.depots[y.depot].capacity - y.stock;
     const order = yards.slice().sort((a, b) => Number(stored(b)) - Number(stored(a)) || Number(overfull(b)) - Number(overfull(a))
@@ -543,11 +542,6 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   };
   // drafted returns (fixed late runs) are in the yards' counts
   for (const depot of input.fixedEnds.values()) returned.set(depot, (returned.get(depot) ?? 0) + 1);
-  // a hot standby car that stays at a storage place is that place's night car
-  for (const berth of input.standbyEnds.values()) {
-    const yard = yards.find(y => y.depot < 0 && y.night === berth);
-    if (yard) returned.set(yard.id, (returned.get(yard.id) ?? 0) + 1);
-  }
   // line storage first: its latest reachable cars after its clock
   for (const yard of yards.filter(y => y.depot < 0)) {
     while (due(yard) > 0) {
@@ -633,6 +627,16 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   }
 
   function lastOf(t: GenTrip): GenTrip { let cur = t; while (cur.next !== undefined) cur = trips[cur.next]; return cur; }
+
+  // Stationed hot standbys (hotStandby places with a yard source): each is a
+  // duty of its own, out of a yard to its place for the window and home to
+  // the same yard afterwards. They are fitted last, into the slots, leads,
+  // tracks and stock the day's service leaves; one that cannot run is reported.
+  for (const place of hotStandbyPlaces(topo)) if (place.depot && place.incoming) for (const window of standbyWindows(ctx.dayType, place)) {
+    const reason = mv.stationedStandby(place, window);
+    if (reason) issues.push({ severity: place.optional ? 'warn' : 'error', code: 'UNASSIGNED', t: window.from,
+      text: `${STATIONS[place.station].name}热备无可行${reason}时隙，未开行该热备运用` });
+  }
 
   // ---- 4. duties
   const blocks: Block[] = [];

@@ -81,7 +81,7 @@ export const LINE14_SIMULATION: SimulationData = {
         excludeKinds: [{ station: '云山路', dir: 'UP', from: 1035, to: 1185, kinds: ['small'], days: ['weekday'] }],
       },
     },
-    reference: { DN: 'DSJ', UP: 'DSJ' }, positioningRevenue: false, preserveRevenueRoutes: true,
+    reference: { DN: 'DSJ', UP: 'DSJ' }, carryMainlineMoves: true, positioningRevenue: false, preserveRevenueRoutes: true,
     templates, dayPeriods, shownPeriods: dayPeriods,
     dwellBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },
     runBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },

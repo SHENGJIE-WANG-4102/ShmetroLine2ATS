@@ -190,7 +190,7 @@ describe('terminal waiting with a real manual departure', () => {
     expect(holder).toMatchObject(holderBefore);
   });
 
-  it('runs the 1063 to 1084 turn from alighting through the tail and its scheduled call', async () => {
+  it('runs the 1063 to 1080 turn from alighting through the tail and its scheduled call', async () => {
     vi.stubEnv('ATS_LINE','14'); vi.resetModules();
     const LineSim = (await import('../src/sim/engine')).Sim;
     const lineAts = await import('../src/sim/ats');
@@ -198,10 +198,10 @@ describe('terminal waiting with a real manual departure', () => {
     const lineInterlocking = await import('../src/sim/interlocking');
     const lineTimetable = await import('../src/sim/timetable');
     const lineArbitration = await import('../src/sim/resourceArbitration');
-    const sim = new LineSim({ dayType:'weekday', date:'2026-10-19', dateLabel:'1063-1084',
+    const sim = new LineSim({ dayType:'weekday', date:'2026-10-19', dateLabel:'1063-1080',
       startTime:14400, seed:14201, noPossessions:true, randomFaults:0, autoDispatch:false, autoRadio:false });
     const a=sim.plan.trips.find(t => t.no==='1063')!;
-    const d=sim.plan.trips.find(t => t.no==='1084')!;
+    const d=sim.plan.trips.find(t => t.no==='1080')!;
     expect(a).toBeDefined(); expect(d).toBeDefined();
     const block=sim.plan.blocks[a.block];
     expect(block.trips.indexOf(d.id)).toBe(block.trips.indexOf(a.id)+1);

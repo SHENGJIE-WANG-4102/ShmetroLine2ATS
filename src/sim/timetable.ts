@@ -1286,54 +1286,6 @@ export function draftFixedPassengerSupply(ctx: PlanContext, requests: ServiceReq
   return {pairs,anchors,starts,issues};
 }
 
-/** D166 experiment: a spare is a passenger service that clears at its
- * storage location, held as the assigned overnight car if still unused. */
-export function draftStandbyArrivals(ctx: PlanContext, requests: ServiceRequest[], published: ReadonlySet<number> = new Set()) {
-  const {topo}=ctx, starts=new Map<number,number>(),ends=new Map<number,number>();
-  const issues:PlanIssue[]=[];
-  const index=new DepIndex(requests), factor=(t:number)=>dwellFactorAt(ctx.dayType,t);
-  for (const place of hotStandbyPlaces(topo).filter(p=>p.depot&&p.incoming)) {
-    const depot=depotIndex(topo,place.depot!), dir=place.incoming!;
-    if(depot<0||!topo.berths[place.berth]){
-      issues.push({severity:'error',code:'UNASSIGNED',t:0,text:`${topo.stations[place.station]?.name ?? place.station} 热备缺少出入段或存车位置`});continue;
-    }
-    const origin=exitStation(topo,depot,dir);
-    const overnight=overnightPlaces(topo).find(x=>topo.berths[x.arrivalBerth].link===topo.berths[place.berth].link);
-    if(!overnight||origin===place.station){issues.push({severity:'error',code:'UNASSIGNED',t:0,text:`${topo.stations[place.station].name} 热备没有可用的载客进位或过夜泊位`});continue;}
-    for(const window of standbyWindows(ctx.dayType,place)) {
-      // Prefer an existing service whose complete requested core has already
-      // been served at this point. Select the outer terminal before publishing.
-      const reusable=requests.filter(t=>t.dir===dir && !t.locked && !published.has(t.id) && !isPublishedOrigin(ctx,t))
-        .map(t=>({trip:t,at:t.stops.findIndex(p=>p.st===place.station)}))
-        .filter(({trip,at})=>at>0 && at<trip.stops.length-1 && trip.stops[at].arr>=window.from && trip.stops[at].arr<window.need
-          && trip.stops.filter(p=>!ahead('DN',p.st,CORE_W)&&!ahead('DN',CORE_E,p.st)).every(p=>trip.stops.slice(0,at+1).some(q=>q.st===p.st)))
-        .sort((a,b)=>a.trip.stops[a.at].arr-b.trip.stops[b.at].arr)[0];
-      if(reusable){
-        const {trip,at}=reusable;
-        trip.to=place.station;trip.kind='wd';trip.stops=trip.stops.slice(0,at+1).map(p=>({...p}));
-        trip.stops.at(-1)!.dep=trip.stops.at(-1)!.arr;trip.standby=true;trip.locked=true;
-        ends.set(trip.id,overnight.arrivalBerth);continue;
-      }
-      const duration=buildStops(ctx,dir,origin,place.station,0,true,factor).at(-1)!.arr;
-      let selected:PlanStop[]|undefined, selectedMargin=-Infinity;
-      const traffic=new Map<number,number[]>();
-      for(const t of requests) if(t.dir===dir) for(const p of t.stops) {
-        const a=traffic.get(p.st)??[];a.push(p.dep);traffic.set(p.st,a);
-      }
-      for(let offset=0;offset<=3600;offset+=10) {
-        const stops=buildStops(ctx,dir,origin,place.station,window.from-duration+offset,true,factor);
-        if(stops.at(-1)!.arr>=window.need||!index.clear(stops,dir))continue;
-        const margin=Math.min(...stops.flatMap(p=>(traffic.get(p.st)??[]).map(dep=>Math.abs(dep-p.dep))));
-        if(margin>selectedMargin){selected=stops;selectedMargin=margin;}
-      }
-      if(!selected){issues.push({severity:'error',code:'UNASSIGNED',t:window.from,text:`${topo.stations[place.station].name} 热备没有可行的载客进位时隙`});continue;}
-      const trip:ServiceRequest={id:requests.length,dir,kind:'wd',from:origin,to:place.station,stops:selected,revenue:true,standby:true,locked:true};
-      requests.push(trip);index.add(trip);starts.set(trip.id,depot);ends.set(trip.id,overnight.arrivalBerth);
-    }
-  }
-  return {starts,ends,issues};
-}
-
 /** Match draft requests to stock and daily homes, publish their final passenger
  * boundaries, then resolve bounded timing conflicts. Published routes are fixed. */
 const generatedPlans = new Map<string, Plan>();
@@ -1383,15 +1335,13 @@ export function restorePlans(stored: readonly StoredPlan[]) {
 function buildPlan(ctx: PlanContext): Plan {
   const { requests, periods, firstService: published, issues: layoutIssues } = layoutService(ctx);
   const fixedDraft = CARRY_MOVES ? draftFixedPassengerSupply(ctx, requests, published, ctx.fixedRuns ?? FIXED_LATE_TRAINS) : {pairs: [], anchors: [], starts:new Map<number,number>(), issues: []};
-  const standbyDraft = CARRY_MOVES ? draftStandbyArrivals(ctx,requests,published) : {starts:new Map<number,number>(),ends:new Map<number,number>(),issues: []};
-  const reservedStarts=new Map([...standbyDraft.starts,...fixedDraft.starts]);
-  return buildPoolPlan(ctx, requests, periods, published, layoutIssues, fixedDraft, standbyDraft, reservedStarts);
+  return buildPoolPlan(ctx, requests, periods, published, layoutIssues, fixedDraft, new Map(fixedDraft.starts));
 }
 
 /** D178: the day duty from the terminal pools (duty/planner.ts). */
 function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], periods: Period[], published: ReadonlySet<number>, layoutIssues: PlanIssue[],
   fixedDraft: { pairs: [number, number, number, number, (number | undefined)?][]; anchors: number[]; issues: PlanIssue[] },
-  standbyDraft: { ends: Map<number, number>; issues: PlanIssue[] }, reservedStarts: Map<number, number>): Plan {
+  reservedStarts: Map<number, number>): Plan {
   const W = 0;
   const locked = new Set(requests.filter(r => r.locked || published.has(r.id) || isPublishedOrigin(ctx, r)).map(r => r.id));
   const anchors = new Set([...published, ...fixedDraft.anchors, ...locked]);
@@ -1412,7 +1362,7 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
     }
     requested = drafts.map(trip => trip.stops[0].dep);
     spaceServiceDepartures(drafts, anchors, requested);
-    return { drafts, ...planDuties({ ctx, trips: drafts, periods, locked, reservedStarts, fixedEnds, standbyEnds: standbyDraft.ends, stableStarts, homeFirst, matchHomes, requestedDeps: requested, ...rebalance }) };
+    return { drafts, ...planDuties({ ctx, trips: drafts, periods, locked, reservedStarts, fixedEnds, stableStarts, homeFirst, matchHomes, requestedDeps: requested, ...rebalance }) };
   };
   // Yard rebalancing (用户决定 2026-11-13): the first pass also probes. A
   // departure no yard can supply for want of a car borrows one at the nearest
@@ -1464,7 +1414,7 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
     overlays: [], fleetPeak: 0,
   };
   laidOutService.set(plan, serviceStructure);
-  generationIssues.set(plan, [...layoutIssues, ...fixedDraft.issues, ...standbyDraft.issues, ...issues, ...serviceStructureIssues(plan)]);
+  generationIssues.set(plan, [...layoutIssues, ...fixedDraft.issues, ...issues, ...serviceStructureIssues(plan)]);
   numberPlan(plan);
   rejectedTurns.set(plan, []);
   plan.fleetPeak = fleetPeak(plan);
@@ -1530,9 +1480,12 @@ function officialFirst(st:number,dir:TrackDir):number|undefined {
   return firstClock.get(key);
 }
 export function stationOpening(st:number,dir:TrackDir,openers:readonly Trip[]):number {
+  // a station not in service never opens: an empty move may pass it
+  if(!stationOpened(st))return Infinity;
   const clock=officialFirst(st,dir);
-  if(CARRY_MOVES&&clock!==undefined)return clock;
   const own=openers.filter(t=>t.dir===dir).flatMap(t=>t.stops.filter(s=>s.st===st&&s.stop&&s.st!==t.to).map(s=>s.dep));
+  // the published clock, or the first train itself when it calls a little ahead of that minute
+  if(CARRY_MOVES&&clock!==undefined)return Math.min(clock,...own);
   if(own.length)return Math.min(...own);
   return clock??-Infinity;
 }

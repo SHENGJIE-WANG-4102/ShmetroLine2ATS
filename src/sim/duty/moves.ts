@@ -18,8 +18,9 @@ import {
   minTurn, outboundWindow, overnightPlaces, storageArrivalBerth, terminalCapacity, terminalOverflows,
   tailOrderClear, turnbackAt, DepIndex, MAX_LAYOVER, THROUGH_WAIT, MIN_HEADWAY, CARRY_MOVES, OPENING, CORE_W, CORE_E,
   TEMPLATES, periodAt, openingAnchors, DEPOT_ENTRY_CLEAR, depotMoves, terminalOccupancy, portalReversal, INTERMEDIATE_WAIT,
-  noDepotReturnBefore, lineEndStand as lineEndStandAt, leadMoveConflict, type LeadMove,
+  noDepotReturnBefore, lineEndStand as lineEndStandAt, leadMoveConflict, type LeadMove, depotIndex, platformBerth,
 } from '../timetable';
+import { berthRoundTripReachable, buildRouteTable, type RouteTable } from '../routeTable';
 import { OPERATIONS, STATIONS } from '../../data/current';
 import { ahead, between, sharedTransferLink } from '../topology';
 import type { PoolCar, PoolDemand } from './pool';
@@ -69,6 +70,10 @@ export function fmt(t: number) {
 }
 
 export type Moves = ReturnType<typeof createMoves>;
+
+const routeTables = new WeakMap<PlanContext['topo'], RouteTable>();
+/** a stationed standby arrives within this of its window's start (s) 【假设】L14-03：最多后移 1 小时 */
+const STANDBY_SLIP = 3600;
 
 /** `notBefore`: no yard exit or move may start earlier (a plan changed while the day runs); `added`: the
  * duties of added services (加开, duty/overlay.ts) */
@@ -334,7 +339,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   /** latest move from→to arriving by `latest` (and not before `earliest`) that fits the stream */
   const fitBefore = (dir: TrackDir, from: number, to: number, earliest: number, latest: number, own: PlanStop[] | undefined,
     accept: (stops: PlanStop[]) => boolean) => {
-    const probe = moveStops(dir, from, to, 0);
+    const probe = moveStops(dir, from, to, 0) ?? moveStops(dir, from, to, latest); // (only its run time is used)
     if (!probe) return null;
     let start = latest - probe.stops.at(-1)!.arr;
     for (let k = 0; k < 6; k++) {
@@ -448,6 +453,55 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     endOf.set(trip.id, { kind: 'depot', depot });
     const [from, to] = inboundWindow(topo, depot, trip);
     addInbound({ depot, dir: trip.dir, from, to, at: arr(trip) + DEPOT_ENTRY_CLEAR, st: trip.to, arr: arr(trip), trip: trip.id });
+  };
+  /** A stationed hot standby (a hotStandby place with yard sources, 用户决定 L14-03): a car leaves a
+   * yard, stands on the place's track from the window's start and goes home to the same yard after
+   * its end. Sources in the data's order; one counts only if the track's two stopping heads are
+   * reachable by normal routes from and to the main line that way. A turnback track is held in the
+   * station's place calendar like any long turn; a storage track is clear before its night car is due.
+   * Returns the reason when no source can run it. */
+  const stationedStandby = (place: { station: number; berth: number; track: 'turnback' | 'storage'; depot?: string; incoming?: TrackDir;
+    alternatives?: readonly { depot: string; incoming: TrackDir }[] }, window: { from: number; to: number }): string | undefined => {
+    let reason = '进位';
+    const P = place.station, track = topo.berths[place.berth].link;
+    const night = yards.find(y => y.depot < 0 && y.night !== undefined && topo.berths[y.night].link === track);
+    for (const source of [{ depot: place.depot!, incoming: place.incoming! }, ...(place.alternatives ?? [])]) {
+      const depot = depotIndex(topo, source.depot), dir = source.incoming, back = opposite(dir);
+      if (depot < 0) continue;
+      const ex = exitStation(topo, depot, dir), en = entryStation(topo, depot, back);
+      const head = storageArrivalBerth(topo, place.berth, dir), tail = storageArrivalBerth(topo, place.berth, back);
+      const there = moveStops(dir, ex, P, window.from), home = moveStops(back, P, en, window.to);
+      if (head === undefined || tail === undefined || !there || !home || there.stops.length < 2 || home.stops.length < 2) { reason = '泊位进出路径'; continue; }
+      let table = routeTables.get(topo);
+      if (!table) routeTables.set(topo, table = buildRouteTable(topo));
+      if (!berthRoundTripReachable(topo, table, platformBerth(topo, there.stops.at(-2)!.st, dir), head, tail,
+        platformBerth(topo, home.stops[1].st, back))) { reason = '泊位进出路径'; continue; }
+      const yard = yards[depot], run = there.stops.at(-1)!.arr - window.from;
+      const arrives = (stops: PlanStop[]) => stops.at(-1)!.arr >= window.from - 1e-6 && stops.at(-1)!.arr <= window.from + STANDBY_SLIP;
+      const from = Math.max(OPENING.dayStart, notBefore, window.from - run - 60), until = window.from + STANDBY_SLIP - run + 60;
+      const out = fitAfter(dir, ex, P, from, until, undefined, stops => arrives(stops) && exitFits(yard, dir, stops));
+      if (!out) {
+        // the slot and the lead exist but the yard has no car to spare then
+        if (fitAfter(dir, ex, P, from, until, undefined, stops => arrives(stops) && exitClear(depot, dir, stops))) reason = '基地库存';
+        continue;
+      }
+      const latest = Math.min(window.to + STANDBY_SLIP, (night?.after ?? Infinity) - 60 - MIN_HEADWAY);
+      const into = fitAfter(back, P, en, window.to, latest, undefined, stops => entryFits(depot, back, en, stops)
+        && (place.track !== 'turnback' || T('standby-track', reserve(P, out.stops.at(-1)!.arr, stops[0].dep, false))));
+      if (!into) {
+        // the way home exists but the station's turning needs this track meanwhile
+        reason = place.track === 'turnback' && fitAfter(back, P, en, window.to, latest, undefined, stops => entryFits(depot, back, en, stops)) ? '折返线容量' : '回段';
+        continue;
+      }
+      if (place.track === 'turnback') reserve(P, out.stops.at(-1)!.arr, into.stops[0].dep);
+      const arrival = addMove(dir, ex, P, out.stops, out.revenue), departure = addMove(back, P, en, into.stops, into.revenue);
+      arrival.standby = true;
+      link(arrival, departure);
+      leaveYard(yard, arrival);
+      enterYard(depot, departure);
+      return undefined;
+    }
+    return reason;
   };
   /** the latest move from→P running `dir` that brings a car for departure `d` there (turning at P when
    * `dir` is not d's): its wait, the car's berth and, turning, P's turnback and front route; `fits`: the rest */
@@ -718,7 +772,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     E, lineEnd, factor, arr, dep, live, services, leavingFrom, lineEndStand, throughMin, waitLimit, openers, index, slot, lastService, POSITIONING,
     addMove, startOf, endOf, link, places, standbyPlaces, reserve, yards, asTrip, safe, moveStops, outerQuiet, exitClear, entryClear,
     exits, inbound, outbound, addExit, addInbound, dropInbound, fitBefore, fitAfter, toward, depotDir, position, lowest, canDraw, canTake,
-    feed, distanceTo, idleYard, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter, leadMoves,
+    feed, distanceTo, idleYard, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter, leadMoves, stationedStandby,
     get redirecting() { return redirecting; }, set redirecting(v: typeof redirecting) { redirecting = v; },
     get viaCore() { return viaCore; }, set viaCore(v: boolean) { viaCore = v; },
     get early() { return early; }, set early(v: boolean) { early = v; },
