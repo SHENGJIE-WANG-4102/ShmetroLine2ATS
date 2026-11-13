@@ -46,18 +46,31 @@ export { buildRouteTable } from './routeTable';
 
 /** Physical distance, separate from the weighted route-choice cost. */
 export function distanceToBerth(sim: Sim, sig: number, goal: number, visit?: TaskPathVisitor): number {
-  if (visit || !(sig >= 0 && sig < 65536 && goal >= 0 && goal < 65536 && Number.isInteger(sig) && Number.isInteger(goal)))
+  if (!(sig >= 0 && sig < 65536 && goal >= 0 && goal < 65536 && Number.isInteger(sig) && Number.isInteger(goal)))
     return walkRouteToBerth(sim.topo, sim.routeTable, { signal: sig }, goal, visit);
   // The walk reads only the topology and the route table, neither of which
   // changes at run time: arrival regulation asks for the same pair every step.
   let memo = berthDistances.get(sim.routeTable);
-  if (!memo || memo.topo !== sim.topo) berthDistances.set(sim.routeTable, memo = { topo: sim.topo, byPair: new Map() });
+  if (!memo || memo.topo !== sim.topo) berthDistances.set(sim.routeTable, memo = { topo: sim.topo, byPair: new Map(), paths: new Map() });
   const key = sig * 65536 + goal;
+  if (visit) {
+    // The same walk calls the visitor with the same (link, from, to) sequence
+    // (its return value is unused): record it once and replay it.
+    let path = memo.paths.get(key);
+    if (!path) {
+      const steps: number[] = [];
+      const distance = walkRouteToBerth(sim.topo, sim.routeTable, { signal: sig }, goal, (link, from, to) => { steps.push(link, from, to); });
+      memo.paths.set(key, path = { distance, steps });
+    }
+    const steps = path.steps;
+    for (let i = 0; i < steps.length; i += 3) visit(steps[i], steps[i + 1], steps[i + 2]);
+    return path.distance;
+  }
   let distance = memo.byPair.get(key);
   if (distance === undefined) memo.byPair.set(key, distance = walkRouteToBerth(sim.topo, sim.routeTable, { signal: sig }, goal));
   return distance;
 }
-const berthDistances = new WeakMap<Sim['routeTable'], { topo: Topology; byPair: Map<number, number> }>();
+const berthDistances = new WeakMap<Sim['routeTable'], { topo: Topology; byPair: Map<number, number>; paths: Map<number, { distance: number; steps: number[] }> }>();
 
 /** `${prefix}-${id}` for a train's per-step alarm lookups, built once per train
  * (a fresh string would be built and hashed again for every lookup). */

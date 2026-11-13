@@ -217,11 +217,14 @@ export function approachLocked(sim: Sim, sig: number): boolean {
 
 /** an approaching train that cannot stop before the signal stopping target with the guaranteed emergency brake (-1 none) */
 export function committedTrain(sim: Sim, sig: number): number {
-  for (const tr of sim.trainList) {
-    if (tr.v <= 0.01 || tr.mode === 'RM' || !tr.maSigs.includes(sig) && !(tr.maCut && tr.eb)) continue;
-    if (!canStopBeforeSignal(sim,tr,sig,'emergency')) return tr.id;
-  }
+  for (const tr of sim.trainList) if (committedTo(sim, tr, sig)) return tr.id;
   return -1;
+}
+
+/** `tr` itself is approaching `sig` and cannot stop before it (committedTrain's test for one train). */
+export function committedTo(sim: Sim, tr: Train, sig: number): boolean {
+  if (tr.v <= 0.01 || tr.mode === 'RM' || !tr.maSigs.includes(sig) && !(tr.maCut && tr.eb)) return false;
+  return !canStopBeforeSignal(sim,tr,sig,'emergency');
 }
 
 export function cancelRoute(sim: Sim, sig: number, opts: { force?: boolean; manual?: boolean; source?: 'ars' | 'dispatcher' | 'fault' | 'recovery'; train?: number } = {}): CmdResult {

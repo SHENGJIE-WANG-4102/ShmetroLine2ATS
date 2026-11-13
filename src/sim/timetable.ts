@@ -2817,7 +2817,8 @@ export function addTurnback(topo: Topology, trip: Trip, tasks: Task[]) {
 function retargetArrival(tasks: Task[], station: number, berth: number) {
   for (let i = tasks.length - 1; i >= 0; i--) {
     const t = tasks[i];
-    if (t.k === 'stop' && t.station === station) { t.berth = berth; break; }
+    // a copy: a running train's task objects are shared with its checkpoints
+    if (t.k === 'stop' && t.station === station) { if (t.berth !== berth) tasks[i] = { ...t, berth }; break; }
   }
 }
 

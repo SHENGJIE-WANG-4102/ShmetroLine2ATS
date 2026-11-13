@@ -5,7 +5,7 @@ import type { Sim } from './engine';
 import { STANDBY_CALL, type Task, type Train, type StopTask } from './model';
 import type { TrackPoint, RouteStep, WaitingStage } from './topology';
 import { berthFits, pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, turnbackLeadBerth, topologyResourceLinks, sharedTransferLink, turnbackBerthsForConsist, occupiedTurnbackBerth, stablingBerth } from './topology';
-import { approachLocked, committedTrain } from './interlocking';
+import { approachLocked, committedTo, committedTrain } from './interlocking';
 import { canStopBeforeSignal } from './protection';
 import { SIGNAL_MARGIN } from './protection';
 import type { HaltCode, WaitAlternative } from './halt';
@@ -93,15 +93,34 @@ const queryCaches = new WeakMap<Sim, ReturnType<typeof newQueryCache>>();
 function newQueryCache() {
   return {
     protection: new WeakMap<ResourceOption, Map<number, boolean>>(),
-    running: new WeakMap<ReadonlySet<number>, Map<number, boolean>>(),
     switches: new WeakMap<ResourcePhase, Sim['topo']['routes'][number]['switches']>(),
     /** earlierOrigin's current-movement stop per train and platform. Only an
      * admitted applicant's own tasks change during an allocation; it drops its entry. */
     movementStops: new WeakMap<Train, Map<number, StopTask | null>>(),
     /** last task index of each trip's stops, per train (same lifetime as movementStops) */
     tripEnds: new WeakMap<Train, Map<number, number>>(),
+    /** While the allocation is being built (`building`): a train's
+     * movementStopAt for every platform at once, from one walk over its
+     * tasks. The walk reads only tr.tasks, tr.phase, the topology and the
+     * train's tripEnds entry. During building none of these changes except
+     * for an admitted applicant, whose cowTask/applyDepotChoice is followed
+     * by forgetMovement, which drops this table with the other two; nothing
+     * else in arbitrateResources writes tasks or phases. Outside building
+     * (per-step and ARS queries) every first lookup walks afresh, exactly as
+     * before, so movementStops keeps its first-lookup values and timing. */
+    movementTables: new WeakMap<Train, Map<number, StopTask>>(),
+    building: false,
+    /** The same movementStops entries, stored by platform and by the train's
+     * place in trainList when the first lookup came while building (trainList
+     * does not change then): `slots` maps each train of that list to its
+     * place, `rows` holds one sparse array per platform (undefined = no
+     * entry, as a missing Map key). A train not in `slots` keeps its entries in
+     * movementStops. Only the storage differs, never the stored values. */
+    slots: undefined as Map<Train, number> | undefined,
+    rows: new Map<number, (StopTask | null | undefined)[]>(),
   };
 }
+type QueryCache = ReturnType<typeof newQueryCache>;
 function queryCache(sim: Sim) {
   let cache = queryCaches.get(sim);
   if (!cache) queryCaches.set(sim, cache = newQueryCache());
@@ -149,17 +168,23 @@ function unsafeBerth(sim: Sim, berth: number): boolean {
   return sharedLink(sim, b.link) || b.reverse;
 }
 
+/** safeWaitingPoint(topo, { link, far end, dir }, link length, { protectedLinks: resources }).
+ * For that point the consist covers exactly this one link, so the only read
+ * of protectedLinks is `resources.has(link)` (made first once the length is
+ * valid; a zero-length link is unsafe either way). Everything else reads the
+ * immutable topology only, so it is kept per topology object. */
+const runningSafety = new WeakMap<Sim['topo'], Int8Array>();
 function safeRunningLink(sim: Sim, link: number, dir: number, resources: ReadonlySet<number>): boolean {
-  const cache = queryCache(sim).running;
-  let results = cache.get(resources);
-  if (!results) cache.set(resources, results = new Map());
-  const key = link * 2 + (dir === 1 ? 0 : 1), cached = results.get(key);
-  if (cached !== undefined) return cached;
-  const l = sim.topo.links[link];
-  const safe = safeWaitingPoint(sim.topo, { link, off: dir === 1 ? l.len : 0, dir: dir as 1 | -1 },
-    l.len, { protectedLinks: resources });
-  results.set(key, safe);
-  return safe;
+  if (resources.has(link)) return false;
+  let table = runningSafety.get(sim.topo);
+  if (!table) runningSafety.set(sim.topo, table = new Int8Array(sim.topo.links.length * 2));
+  const key = link * 2 + (dir === 1 ? 0 : 1);
+  let safe = table[key];
+  if (safe === 0) {
+    const l = sim.topo.links[link];
+    safe = table[key] = safeWaitingPoint(sim.topo, { link, off: dir === 1 ? l.len : 0, dir: dir as 1 | -1 }, l.len) ? 1 : -1;
+  }
+  return safe > 0;
 }
 
 /** Rule 2: the grant ends when the WHOLE body reaches a safe place, rather
@@ -609,7 +634,8 @@ function makeRequest(sim: Sim, id: number, tasks: Task[], point: TrackPoint, len
       : { turnbackLead: turnbackLeadAt(sim, tr) });
   const committed = !!tr && firstPhase.routes.some(rid => {
     const ar = sim.routes.get(rid);
-    return ar && (committedTrain(sim, sim.topo.routes[rid].start) === tr.id
+    // (committedTrain names tr only if tr itself is committed: test that first)
+    return ar && (committedTo(sim, tr, sim.topo.routes[rid].start) && committedTrain(sim, sim.topo.routes[rid].start) === tr.id
       || tr.maSigs.includes(sim.topo.routes[rid].start) && !canStopBeforeSignal(sim, tr, sim.topo.routes[rid].start, 'supervision'));
   });
   for (const option of options) {
@@ -659,7 +685,7 @@ export function collectResourceRequests(sim: Sim): ResourceRequest[] {
     const r = point ? makeRequest(sim, tr.id, tr.tasks, point, tr.len, first, tr) : undefined;
     if (r) requests.push(r);
     else if (transit?.entered) requests.push({ id: tr.id, train: tr, tasks: tr.tasks,
-      options: [structuredClone(transit.option)], inside: true, committed: false,
+      options: [cloneData(transit.option)], inside: true, committed: false,
       readyAt: sim.t, time: tr.halt.since || sim.t });
   }
   for (const b of sim.plan.blocks) {
@@ -833,34 +859,102 @@ function physicallyNeeds(order: PhysicalOrder, train: number, owner: number | ((
  * actual current stop, not the next station; an ordinary running service has
  * not begun its destination's cab change. */
 function movementStopAt(sim: Sim, tr: Train, platform: number): StopTask | null {
-  const stops = queryCache(sim).movementStops;
-  let byPlatform = stops.get(tr);
-  if (!byPlatform) stops.set(tr, byPlatform = new Map());
-  let task = byPlatform.get(platform);
+  const cache = queryCache(sim);
+  return movementStopIn(sim, cache, tr, trainSlot(sim, cache, tr), platform);
+}
+
+/** movementStopAt with the cache and the train's slot (-1: none) in hand. */
+function movementStopIn(sim: Sim, cache: QueryCache, tr: Train, slot: number, platform: number): StopTask | null {
+  let row: (StopTask | null | undefined)[] | undefined, byPlatform: Map<number, StopTask | null> | undefined, task: StopTask | null | undefined;
+  if (slot >= 0) {
+    row = cache.rows.get(platform);
+    if (!row) cache.rows.set(platform, row = []);
+    task = row[slot];
+  } else {
+    byPlatform = cache.movementStops.get(tr);
+    if (!byPlatform) cache.movementStops.set(tr, byPlatform = new Map());
+    task = byPlatform.get(platform);
+  }
   if (task === undefined) {
-    const tasks = tr.tasks, first = tasks[0];
-    let trip = first?.k === 'stop' ? first.trip : -1;
-    const station = first && 'station' in first ? first.station : undefined;
-    let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
-    const cache = queryCache(sim);
-    let ends = cache.tripEnds.get(tr);
-    if (!ends) cache.tripEnds.set(tr, ends = lastStopOfTrips(tasks));
-    task = null;
-    for (let i = 0; i < tasks.length; i++) {
-      const t = tasks[i];
-      if ('station' in t && t.station !== station) sameStation = false;
-      // Finishing a local cab change starts this same movement's service;
-      // it does not expose a later turn at another station to the queue.
-      if (sameStation && t.k === 'stop' && t.dep !== null && (t.arr === null || t.arr === t.dep)) trip = t.trip;
-      if (t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip)
-        && t.dep !== null && sim.topo.berths[t.berth].platform === platform) { task = t; break; }
-      // Off the current station the trip no longer changes: past its last
-      // stop (or with none) nothing later can match.
-      if (!sameStation && i > 0 && (trip < 0 || i >= (ends.get(trip) ?? -1))) break;
-    }
-    byPlatform.set(platform, task);
+    if (cache.building) task = (cache.movementTables.get(tr) ?? movementTable(sim, tr, cache)).get(platform) ?? null;
+    else task = walkMovement(sim, tr, cache, platform);
+    if (row) row[slot] = task; else byPlatform!.set(platform, task);
   }
   return task;
+}
+
+/** The train's place in the building-time trainList, -1 if it has none. */
+function trainSlot(sim: Sim, cache: QueryCache, tr: Train): number {
+  if (!cache.slots) {
+    if (!cache.building) return -1;
+    cache.slots = new Map(sim.trainList.map((t, i) => [t, i]));
+  }
+  return cache.slots.get(tr) ?? -1;
+}
+
+/** movementStopAt's value if this allocation's cache already holds it. */
+function knownMovementStop(sim: Sim, tr: Train, platform: number): StopTask | null | undefined {
+  const cache = queryCache(sim), slot = trainSlot(sim, cache, tr);
+  return slot >= 0 ? cache.rows.get(platform)?.[slot] : cache.movementStops.get(tr)?.get(platform);
+}
+
+/** Each train's last full walk (movementTable), reused across allocations.
+ * The walk reads only: tr.tasks (task objects' k/station/trip/dep/arr/berth),
+ * whether tr.phase is 'run', the topology, and the train's tripEnds map, which
+ * it computes itself from the same tasks when absent. So the result is the
+ * same while the tasks array holds the same task objects in the same order
+ * (task objects are never edited in place while in tr.tasks: cowTask
+ * replaces the slot; shift/splice/push or a new array change the elements
+ * compared here), the run test and the topology object are unchanged. Only a
+ * walk that computed its own tripEnds is kept, so a reused map always equals
+ * lastStopOfTrips of the compared tasks. */
+const lastWalks = new WeakMap<Train, { topo: Sim['topo']; tasks: Task[]; running: boolean; ends: Map<number, number>; table: Map<number, StopTask> }>();
+function movementTable(sim: Sim, tr: Train, cache: QueryCache): Map<number, StopTask> {
+  const tasks = tr.tasks, running = tr.phase === 'run', ends = cache.tripEnds.get(tr), last = lastWalks.get(tr);
+  if (last && last.topo === sim.topo && last.running === running && (ends === undefined || ends === last.ends)
+    && sameTasks(last.tasks, tasks)) {
+    if (ends === undefined) cache.tripEnds.set(tr, last.ends);
+    cache.movementTables.set(tr, last.table);
+    return last.table;
+  }
+  const table = new Map<number, StopTask>();
+  cache.movementTables.set(tr, table);
+  walkMovement(sim, tr, cache, -1, table);
+  if (ends === undefined) lastWalks.set(tr, { topo: sim.topo, tasks: tasks.slice(), running, ends: cache.tripEnds.get(tr)!, table });
+  return table;
+}
+
+function sameTasks(a: readonly Task[], b: readonly Task[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** The stops of `tr`'s current movement, in task order: the first at
+ * `platform`, or (with `table`) the first at every platform. */
+function walkMovement(sim: Sim, tr: Train, cache: QueryCache, platform: number, table?: Map<number, StopTask>): StopTask | null {
+  const tasks = tr.tasks, first = tasks[0];
+  let trip = first?.k === 'stop' ? first.trip : -1;
+  const station = first && 'station' in first ? first.station : undefined;
+  let sameStation = station !== undefined && (tr.phase !== 'run' || first?.k === 'reverse');
+  let ends = cache.tripEnds.get(tr);
+  if (!ends) cache.tripEnds.set(tr, ends = lastStopOfTrips(tasks));
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    if ('station' in t && t.station !== station) sameStation = false;
+    // Finishing a local cab change starts this same movement's service;
+    // it does not expose a later turn at another station to the queue.
+    if (sameStation && t.k === 'stop' && t.dep !== null && (t.arr === null || t.arr === t.dep)) trip = t.trip;
+    if (t.k === 'stop' && (t === first || sameStation || trip >= 0 && t.trip === trip) && t.dep !== null) {
+      const at = sim.topo.berths[t.berth].platform;
+      if (table) { if (!table.has(at)) table.set(at, t); }
+      else if (at === platform) return t;
+    }
+    // Off the current station the trip no longer changes: past its last
+    // stop (or with none) nothing later can match.
+    if (!sameStation && i > 0 && (trip < 0 || i >= (ends.get(trip) ?? -1))) break;
+  }
+  return null;
 }
 
 /** Last task index of each trip's stops. (One map write per run of a trip's
@@ -924,9 +1018,11 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   // service with an earlier departure from that same platform also precedes
   // it. Inspect only the service's current movement, never later circulations;
   // ordinary through trains receive no resource claim of their own.
-  return sim.trainList.find(tr => {
+  const cache = queryCache(sim), listed = sim.trainList.length && trainSlot(sim, cache, sim.trainList[0]) === 0;
+  return sim.trainList.find((tr, i) => {
     if (tr.id === request.id || tr.failed) return false;
-    const task = movementStopAt(sim, tr, platform);
+    // (while building, a train's place in trainList is its slot)
+    const task = movementStopIn(sim, cache, tr, listed ? i : trainSlot(sim, cache, tr), platform);
     // (pure conditions, cheapest first)
     return !!task && task.dep! < origin.dep!
       && !tr.body.some(b => option.sections.has(sim.topo.links[b.link].section))
@@ -936,8 +1032,9 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
 
 /** An admitted applicant's tasks changed: drop its movement lookups. */
 function forgetMovement(sim: Sim, tr: Train) {
-  const cache = queryCache(sim);
-  cache.movementStops.delete(tr); cache.tripEnds.delete(tr);
+  const cache = queryCache(sim), slot = cache.slots?.get(tr);
+  cache.movementStops.delete(tr); cache.tripEnds.delete(tr); cache.movementTables.delete(tr);
+  if (slot !== undefined) for (const row of cache.rows.values()) row[slot] = undefined;
 }
 
 /** Rules 2/3: an allocation is a whole movement. A denied occupant cannot
@@ -949,7 +1046,7 @@ function allocationBlocker(sim: Sim, result: ResourceAllocation, option: Resourc
       return { train: prior.request.id, detail: `${sim.topo.sections[sec].name} 完整动作准入：${resourceApplicantLabel(sim, prior.request.id)}`, code: 'ROUTE_WAIT' };
   }
   for (const phase of option.phases) for (const sw of phaseSwitches(sim, phase)) {
-    const prior = result.switches.get(sw.sw)?.find(p => p.decision.request.id !== self && [...p.positions].some(pos => pos !== sw.pos));
+    const prior = result.switches.get(sw.sw)?.find(p => p.decision.request.id !== self && otherPosition(p.positions, sw.pos));
     if (prior) return { train: prior.decision.request.id, detail: `${sim.topo.switches[sw.sw].name} 完整动作准入：${resourceApplicantLabel(sim, prior.decision.request.id)}`, code: 'ROUTE_WAIT' };
   }
 }
@@ -973,8 +1070,16 @@ function occupantsFirst(requests: ResourceRequest[], physical: PhysicalOrder): R
 }
 
 /** One decision for entry, every intermediate cab change and the safe exit. */
+/** `[...positions].some(pos => pos !== wanted)` without the copy. */
+function otherPosition(positions: ReadonlySet<'N' | 'R'>, wanted: 'N' | 'R'): boolean {
+  for (const pos of positions) if (pos !== wanted) return true;
+  return false;
+}
+
 export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): ResourceAllocation {
-  queryCaches.set(sim, newQueryCache());
+  const cache = newQueryCache();
+  queryCaches.set(sim, cache);
+  cache.building = true;
   refreshTransits(sim);
   const result: ResourceAllocation = { decisions: new Map(), claims: new Map(), switches: new Map() };
   // Route releases can refresh a train's authority while this allocation is
@@ -1090,20 +1195,98 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
   }
   result.physical = physical;
   allocations.set(sim, result);
+  cache.building = false;
+  finished.add(result);
   return result;
 }
+
+/** Allocations whose claims, switches and origins are complete. Only these
+ * are indexed per route; a view read while one is being built uses the scan. */
+const finished = new WeakSet<ResourceAllocation>();
+/** Per finished allocation and route: the train-independent part of
+ * routeResourceBlocker's scan, in its order. Section claims kept are those
+ * needing this route's protection (routeNeedsResourceProtection: route
+ * geometry and the claim's option only); switch grants kept are those
+ * holding another position. A finished allocation's claims/switches maps
+ * and its options are never changed afterwards (adoptSpawnResources renames
+ * a decision's request, which is read live at query time). */
+const routeClaimIndex = new WeakMap<ResourceAllocation, Map<number, { sections: ResourceDecision[]; switches: ResourceDecision[]; origin: boolean }>>();
+function routeClaims(sim: Sim, result: ResourceAllocation, rid: number) {
+  let byRoute = routeClaimIndex.get(result);
+  if (!byRoute) routeClaimIndex.set(result, byRoute = new Map());
+  let entry = byRoute.get(rid);
+  if (!entry) {
+    const route = sim.topo.routes[rid], sections: ResourceDecision[] = [], switches: ResourceDecision[] = [];
+    for (const sec of route.sections) {
+      const claim = result.claims.get(sec);
+      if (claim && routeNeedsResourceProtection(sim, rid, claim.option)) sections.push(claim);
+    }
+    for (const sw of route.switches) for (const prior of result.switches.get(sw.sw) ?? [])
+      if (otherPosition(prior.positions, sw.pos)) switches.push(prior.decision);
+    // whether originPrecedence can find any entrant on this route at all
+    const origin = !!result.origins && route.steps.some(step => result.origins!.has(sim.topo.links[step.link].platform));
+    byRoute.set(rid, entry = { sections, switches, origin });
+  }
+  return entry;
+}
+
+/** Internal lookups, exposed only so tests can check them against direct computation. */
+export const arbitrationInternals = { movementStopAt, occupiesMovement, cloneData, safeRunningLink };
 
 export function invalidateResourceAllocation(sim: Sim) { allocations.delete(sim); approaches.delete(sim); queryCaches.delete(sim); }
 
 function rememberTransit(sim: Sim, tr: Train, option: ResourceOption) {
   if (!option.resourceLinks) return;
-  const previous = sim.resourceTransit.get(tr.id), saved = structuredClone(option);
+  const previous = sim.resourceTransit.get(tr.id), saved = cloneData(option);
   delete saved.readyAt;
   saved.choices = []; // task-array indices are not carried into another day
   const entered = previous?.entered || tr.body.some(b => option.sections.has(sim.topo.links[b.link].section));
   const visited = previous?.visited || tr.body.some(b => option.resourceLinks!.has(b.link));
   sim.resourceTransit.set(tr.id, { option: saved, entered, visited });
 }
+
+/** structuredClone(value) for plain data (objects, arrays, Sets, Maps and
+ * primitives): same values, key and element order, and shared references
+ * preserved within the copy, as structuredClone does. Anything else (another
+ * prototype, an array hole) falls back to structuredClone of the whole value. */
+function cloneData<T>(value: T): T {
+  const seen = new Map<object, unknown>();
+  const copy = (v: unknown): unknown => {
+    if (typeof v !== 'object' || v === null) {
+      if (typeof v === 'function' || typeof v === 'symbol') throw notPlain;
+      return v;
+    }
+    const known = seen.get(v);
+    if (known !== undefined) return known;
+    if (Array.isArray(v)) {
+      if (Object.getPrototypeOf(v) !== Array.prototype || Object.keys(v).length !== v.length) throw notPlain;
+      const out: unknown[] = new Array(v.length);
+      seen.set(v, out);
+      for (let i = 0; i < v.length; i++) out[i] = copy(v[i]);
+      return out;
+    }
+    const proto = Object.getPrototypeOf(v);
+    if (proto === Set.prototype) {
+      const out = new Set<unknown>();
+      seen.set(v, out);
+      for (const x of v as Set<unknown>) out.add(copy(x));
+      return out;
+    }
+    if (proto === Map.prototype) {
+      const out = new Map<unknown, unknown>();
+      seen.set(v, out);
+      for (const [k, x] of v as Map<unknown, unknown>) { const key = copy(k); out.set(key, copy(x)); }
+      return out;
+    }
+    if (proto !== Object.prototype || Object.getOwnPropertySymbols(v).length) throw notPlain;
+    const out: Record<string, unknown> = {};
+    seen.set(v, out);
+    for (const k of Object.keys(v)) out[k] = copy((v as Record<string, unknown>)[k]);
+    return out;
+  };
+  try { return copy(value) as T; } catch (e) { if (e === notPlain) return structuredClone(value); throw e; }
+}
+const notPlain = new Error('not plain data');
 
 /** Read an already derived view only; diagnostics/checkers must never allocate. */
 export function peekResourceAllocation(sim: Sim): ResourceAllocation | undefined { return allocations.get(sim); }
@@ -1115,7 +1298,11 @@ export function resourceAllocation(sim: Sim): ResourceAllocation {
 /** Rules 2/5: a route that enters this train's protected movement needs
  * its own current whole-movement grant, even if nobody else has a claim. */
 export function resourceAdmissionBlocked(sim: Sim, train: Train, rid: number): boolean {
-  const decision = resourceAllocation(sim).decisions.get(train.id);
+  return admissionBlocked(sim, resourceAllocation(sim), train, rid);
+}
+
+function admissionBlocked(sim: Sim, result: ResourceAllocation, train: Train, rid: number): boolean {
+  const decision = result.decisions.get(train.id);
   const request = approaches.get(sim)?.get(train.id) ?? decision?.request;
   if (!request?.options.some(o => routeNeedsResourceProtection(sim, rid, o))) return false;
   return !decision?.admitted || !decision.option.phases[0]?.routes.includes(rid);
@@ -1125,12 +1312,12 @@ export function resourceAdmissionBlocked(sim: Sim, train: Train, rid: number): b
  * applicant entry. Restrict this train's new authority, keeping the physical
  * route available for a predecessor which is already clearing it. */
 export function resourceAuthorityBlocker(sim: Sim, train: Train, rid: number): ResourceBlocker | undefined {
-  const decision = resourceAllocation(sim).decisions.get(train.id);
-  if (resourceAdmissionBlocked(sim, train, rid)) return {
+  const result = resourceAllocation(sim), decision = result.decisions.get(train.id);
+  if (admissionBlocked(sim, result, train, rid)) return {
     train: decision?.blocker ?? -1, code: decision?.code ?? 'ROUTE_WAIT',
     detail: decision?.detail || `${sim.topo.signals[sim.topo.routes[rid].start].name} 等待本车当前整段动作准入`,
   };
-  const claim = routeResourceBlocker(sim, train, rid);
+  const claim = claimBlocker(sim, result, train, rid);
   if (claim) return { train: claim.request.id, code: claim.precedence ? 'REGULATION' : 'ROUTE_WAIT', detail: resourceWaitDetail(sim, rid, claim) };
 }
 
@@ -1183,15 +1370,45 @@ function needsResourceProtection(sim: Sim, rid: number, option: ResourceOption):
  * exit. The exit may return through ordinary track before a cab change;
  * membership in the physical resource inventory alone is insufficient. */
 function occupiesMovement(train: Train, option: ResourceOption): boolean {
-  return option.phases.some(p => p.path.some(s => train.body.some(b => b.link === s.link
-    && b.to > Math.min(s.from, s.to) && b.from < Math.max(s.from, s.to))));
+  let spans = movementSpans.get(option);
+  if (!spans) movementSpans.set(option, spans = spansOf(option));
+  for (const b of train.body) {
+    const list = spans.get(b.link);
+    if (list) for (let i = 0; i < list.length; i += 2) if (b.to > list[i] && b.from < list[i + 1]) return true;
+  }
+  return false;
+}
+
+/** Per option, each path link's [min, max) spans over all phases. Built at
+ * the first query; an option's phases are final once makeRequest returns
+ * (clipSafeExit/scopeOption are their only writers, both before it), and a
+ * carried transit option is a fresh structuredClone each time. */
+const movementSpans = new WeakMap<ResourceOption, Map<number, number[]>>();
+function spansOf(option: ResourceOption): Map<number, number[]> {
+  const spans = new Map<number, number[]>();
+  for (const p of option.phases) for (const s of p.path) {
+    let list = spans.get(s.link);
+    if (!list) spans.set(s.link, list = []);
+    list.push(Math.min(s.from, s.to), Math.max(s.from, s.to));
+  }
+  return spans;
 }
 
 /** All ARS routes, including ordinary through traffic, obey the same grants. */
-export function routeResourceBlocker(sim: Sim, train: Train, rid: number): ResourceDecision | undefined {
-  const result = resourceAllocation(sim);
+export function routeResourceBlocker(sim: Sim, train: Train, rid: number, indexed = true): ResourceDecision | undefined {
+  return claimBlocker(sim, resourceAllocation(sim), train, rid, indexed);
+}
+
+/** (`indexed` false: always the plain scan, for checking the index) */
+function claimBlocker(sim: Sim, result: ResourceAllocation, train: Train, rid: number, indexed = true): ResourceDecision | undefined {
   // Rule 3 protects actual occupancy of the movement's geometry. Merely
   // sharing a long section behind its entry does not authorize a fresh entry.
+  if (indexed && finished.has(result)) {
+    const index = routeClaims(sim, result, rid);
+    for (const claim of index.sections) if (claim.request.id !== train.id && !occupiesMovement(train, claim.option)) return claim;
+    for (const decision of index.switches) if (decision.request.id !== train.id && !occupiesMovement(train, decision.option)) return decision;
+    return index.origin ? originPrecedence(sim, result, train, rid) : undefined;
+  }
   const occupies = (claim: ResourceDecision) => occupiesMovement(train, claim.option);
   for (const sec of sim.topo.routes[rid].sections) {
     const claim = result.claims.get(sec);
@@ -1222,17 +1439,27 @@ function originPrecedence(sim: Sim, result: ResourceAllocation, train: Train, ri
   // every approaching train's braking distance)
   const start = sim.topo.routes[rid].start;
   for (const step of sim.topo.routes[rid].steps) {
-    const entrants = result.origins.get(sim.topo.links[step.link].platform);
+    const platform = sim.topo.links[step.link].platform, entrants = result.origins.get(platform);
     if (!entrants) continue;
-    if (sim.sig[start].route === rid && approachLocked(sim, start)) return undefined;
-    const stop = movementStopAt(sim, train, sim.topo.links[step.link].platform);
-    if (!stop) return undefined;
     // Neither the entrant nor the train it waits for may need this train to
     // move first: an earlier service queued behind it would close the loop
     // entrant -> that service -> this train -> entrant.
     const needs = (id: number) => id === train.id || id !== -1 && physicallyNeeds(result.physical!, id, train.id);
-    const first = entrants.find(e => e.decision.request.id !== train.id && e.dep <= stop.dep!
+    const precedes = (stop: StopTask) => entrants.find(e => e.decision.request.id !== train.id && e.dep <= stop.dep!
       && !needs(e.decision.request.id) && !needs(e.decision.blocker));
+    // With this train's stop already looked up (all pure reads, nothing
+    // stored), approach locking only decides a found precedence: test it last.
+    const known = knownMovementStop(sim, train, platform);
+    if (known !== undefined) {
+      const first = known ? precedes(known) : undefined;
+      if (!first || sim.sig[start].route === rid && approachLocked(sim, start)) return undefined;
+      return { ...first.decision, precedence: true };
+    }
+    // (first lookup: it is stored only when not approach locked, as before)
+    if (sim.sig[start].route === rid && approachLocked(sim, start)) return undefined;
+    const stop = movementStopAt(sim, train, platform);
+    if (!stop) return undefined;
+    const first = precedes(stop);
     return first && { ...first.decision, precedence: true };
   }
 }

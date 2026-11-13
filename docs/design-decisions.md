@@ -5215,3 +5215,14 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - **代价**：有改送的日子建图约 13 s（默认约 4.5 s），跨日 03:45 生成新图时 worker 多等这几秒。
 - 测试：`tests/duty-balance.test.ts` 加 4 条规则断言（少 1、2 列时 0 error、各车场晚上回到早上的数、载客车次数不变、多出来穿过核心段的走行都在 10:00 以后平峰且载客）；`operating-day.test.ts` 期望没改，转绿。8 个测试文件 179 条全过，`tsc` 0 error，随机压测 3 例两天（`work/fuzz-rebal/`）全部 pass、0 违例。
 - 公共文件：`src/sim/timetable.ts`、`src/sim/duty/moves.ts`、`src/sim/duty/planner.ts`、`src/sim/duty/overlay.ts`。测试线运行图不变（`tests/test-line.test.ts` 通过）。
+
+## D195 资源仲裁提速，结果逐位不变（2026-11-13）
+
+- 直通先发查找：仲裁构建期间每列车一次走完全部站台；任务数组逐元素还是同一批对象时跨秒复用。
+- 已完成的仲裁结果按进路建索引，进路资源阻塞只查与本车有关的申领；占用判断按 link 建区间表。
+- 运行线安全停车点按拓扑记忆；过境快照改为纯数据深拷贝；判「已越过制动点」先看本车自己。
+- 缓存写入的时点和值与原来一致，规则一条没动，没加 Sim 字段。
+- 证据：三段同进程 A/B 全状态哈希 48 次一致；两例全天加调度命令并跨日，各 111 次一致；随机压测 3 例两天 0 违例；两种日型运行图哈希不变。
+- 收益：整步快 5.6–6.6%，预热 04:00→18:00 约 249 s → 237 s（约 5%）。剩下最大的一块是申请资源时的几何计算，动着的车每秒位置都变，再降要换算法。
+- 顺带修正：延长运用时到达停站改泊位不再原地改任务对象（该对象与回退检查点共用），改为换成副本。
+- 动了公共文件：`src/sim/resourceArbitration.ts`、`ats.ts`、`interlocking.ts`、`protection.ts`、`timetable.ts`；新增 `tests/arbitration-caches.test.ts`、`tests/arbitration-caches-carry.test.ts`。

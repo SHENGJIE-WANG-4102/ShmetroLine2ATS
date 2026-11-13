@@ -62,6 +62,23 @@ export function restrictionDistanceAt(topo: Topology, position: RestrictionPosit
   if (!Number.isFinite(speed) || !topo.links[position.link]) return Infinity;
   const sense = chainSense(topo, position.link, position.dir);
   if (!sense) return restrictionDistance(speed, brake);
+  // The same object (a train) asks again with unchanged inputs many times a
+  // step; its last answer per brake is the value under the same key below
+  // (=== numbers print the same; the value is a pure function of the key).
+  const last = (brake === 'supervision' ? lastSupervision : lastEmergency).get(position);
+  if (last && last.topo === topo && last.link === position.link && last.off === position.off
+    && last.dir === position.dir && last.len === position.len && last.speed === speed) return last.value;
+  const value = chainedRestrictionDistance(topo, position, speed, brake, sense);
+  (brake === 'supervision' ? lastSupervision : lastEmergency).set(position,
+    { topo, link: position.link, off: position.off, dir: position.dir, len: position.len, speed, value });
+  return value;
+}
+
+interface LastRestriction { topo: Topology; link: number; off: number; dir: number; len: number; speed: number; value: number }
+const lastEmergency = new WeakMap<object, LastRestriction>(), lastSupervision = new WeakMap<object, LastRestriction>();
+
+function chainedRestrictionDistance(topo: Topology, position: RestrictionPosition, speed: number,
+  brake: RestrictionBrake, sense: number): number {
   const g = geometry(topo), len = Number.isFinite(position.len) ? Math.max(0, position.len) : 0;
   const key = `${position.link}/${position.off}/${position.dir}/${len}/${speed}/${brake}`;
   const cached = g.distances.get(key);
