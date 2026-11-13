@@ -8,6 +8,9 @@
  */
 import type { Block, Plan, PlanStop, TrackDir, Trip } from '../model';
 import type { PlanContext, Period, GenTrip } from '../timetable';
+
+/** a yard move over a shared-lead station's tracks (`st`); `trip`: the trip a return enters on */
+export interface LeadBooking { st: number; move: LeadMove; trip?: number }
 import { plannedDwell } from '../calibration';
 import {
   addTo, buildStops, carryingStops, passesOpenStation, connectionSafe, depotLeadLink, depotStartTime,
@@ -15,7 +18,7 @@ import {
   minTurn, outboundWindow, overnightPlaces, storageArrivalBerth, terminalCapacity, terminalOverflows,
   tailOrderClear, turnbackAt, DepIndex, MAX_LAYOVER, THROUGH_WAIT, MIN_HEADWAY, CARRY_MOVES, OPENING, CORE_W, CORE_E,
   TEMPLATES, periodAt, openingAnchors, DEPOT_ENTRY_CLEAR, depotMoves, terminalOccupancy, portalReversal, INTERMEDIATE_WAIT,
-  noDepotReturnBefore, lineEndStand as lineEndStandAt,
+  noDepotReturnBefore, lineEndStand as lineEndStandAt, leadMoveConflict, type LeadMove,
 } from '../timetable';
 import { OPERATIONS, STATIONS } from '../../data/current';
 import { ahead, between, sharedTransferLink } from '../topology';
@@ -126,17 +129,18 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const endOf = new Map<number, Block['end']>();
   const link = (a: GenTrip, d: GenTrip) => { a.next = d.id; d.prev = a.id; };
   // ---- terminal places: one occupancy calendar per station
-  const places = new Map<number, { from: number; to: number }[]>();
+  /** `dep`: the departure (`to` adds the platform's clearing time) */
+  const places = new Map<number, { from: number; to: number; dep: number }[]>();
   const standbyPlaces = new Map<number, { from: number; to: number }[]>();
   const clearAfter = (st: number) => OPERATIONS.platformTurnClear[STATIONS[st].id] ?? 0;
   const reserve = (st: number, from: number, to: number, commit = true) => {
     const list = places.get(st) ?? [];
-    const held = { from, to: to + clearAfter(st) };
+    const held = { from, to: to + clearAfter(st), dep: to };
     const combined = [...list, held];
     // (every committed hold passed this check: only the ones near the new one can overflow with it)
     if (terminalOverflows(topo, st, combined.filter(p => p.to >= held.from - 3600 && p.from <= held.to + 3600)).length) return false;
     if (!tailOrderClear(topo, st, list, held.from, held.to)) return false;
-    if (!leadRoom(st, held.from, held.to)) return false;
+    if (!leadRoom(st, { turn: held })) return false;
     // Off-peak and while a standby stands, keep the arrival platform free:
     // only a peak arrival wave may hold a car on it.
     const standby = standbyPlaces.get(st) ?? [];
@@ -224,13 +228,13 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const exitClear = (depot: number, dir: TrackDir, stops: PlanStop[]) => {
     const [start, clear] = outboundWindow(ctx, depot, { dir, stops });
     const lead = depotLeadLink(topo, depot, false, dir);
-    if (!leadRoom(exitStation(topo, depot, dir), start, clear, lead)) return false;
+    if (!leadRoom(exitStation(topo, depot, dir), { move: { depot, link: lead, window: [start, clear] } })) return false;
     return lead === undefined || inbound.every(m => m.depot !== depot || depotLeadLink(topo, depot, true, m.dir) !== lead || clear <= m.from || start >= m.to);
   };
   const entryClear = (depot: number, dir: TrackDir, to: number, stops: PlanStop[]) => {
     const [from, until] = inboundWindow(topo, depot, { to, stops });
     const lead = depotLeadLink(topo, depot, true, dir);
-    if (!leadRoom(entryStation(topo, depot, dir), from, until, lead)) return false;
+    if (!leadRoom(entryStation(topo, depot, dir), { move: { depot, link: lead, window: [from, until], entry: { dir, station: to, arr: stops.at(-1)!.arr } } })) return false;
     return lead === undefined || outbound.every(m => m.depot !== depot || depotLeadLink(topo, depot, false, m.dir) !== lead || m.to <= from || m.from >= until);
   };
   const exits: { yard: number; at: number }[] = [];
@@ -248,40 +252,61 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     return events;
   };
   /** `car`: a window held ahead for a spare car that can only enter directly */
-  /** `at`: the car counts in the yard's stock, the same moment as the day ledger (depotMoves) */
-  const inbound: { depot: number; dir: TrackDir; from: number; to: number; at: number; car?: number }[] = [];
+  /** `at`: the car counts in the yard's stock, the same moment as the day ledger (depotMoves);
+   * `st`, `arr`: the return's last stop and its arrival there; `trip`: the trip it enters on
+   * (this plan's; the car it brings: planner.ts carOf) */
+  const inbound: { depot: number; dir: TrackDir; from: number; to: number; at: number; st: number; arr: number; trip?: number; car?: number }[] = [];
   const outbound: { depot: number; dir: TrackDir; from: number; to: number }[] = [];
   const addExit = (x: (typeof exits)[number]) => { ledgerVersion++; exits.push(x); };
   /** D189: where the turnback tracks are also the depot leads (淞虹路 1/2 道), a turning
    * car stands on one of them from its arrival to its departure, and a yard move
    * passes over its own lead: every turn must find one track free of the moves
-   * and the other turns for its whole stand. `track`: the new window's lead, or
-   * undefined for a new turn (any track). */
+   * (the rule validation checks, leadMoveConflict) and of the other turns for its
+   * whole stand. `add`: the new turn, or the new move. */
   // (only where a turning car may wait on them, plannedWaitBerth: two or more such tracks)
   const sharedTurnLeads = (st: number) => topo.stations[st].turnbackBerths.length > 1
     && topo.stations[st].turnbackBerths.some(b => sharedTransferLink(topo, topo.berths[b].link));
-  const leadRoom = (st: number, from: number, to: number, track?: number) => {
+  type Stand = { from: number; to: number; dep: number };
+  /** the yard moves booked so far over the leads of shared-lead stations (or of `at` only), as the lead rule sees them */
+  const leadMoves = (at?: number): LeadBooking[] => {
+    const here = (st: number) => at === undefined ? st >= 0 && sharedTurnLeads(st) : st === at;
+    return [
+      ...outbound.filter(m => here(exitStation(topo, m.depot, m.dir)))
+        .map(m => ({ st: exitStation(topo, m.depot, m.dir), move: { depot: m.depot, link: depotLeadLink(topo, m.depot, false, m.dir), window: [m.from, m.to] as const } })),
+      ...inbound.filter(m => here(entryStation(topo, m.depot, m.dir))).map(m => ({ st: entryStation(topo, m.depot, m.dir), trip: m.trip,
+        move: { depot: m.depot, link: depotLeadLink(topo, m.depot, true, m.dir), window: [m.from, m.to] as const, entry: { dir: m.dir, station: m.st, arr: m.arr } } })),
+    ];
+  };
+  /** while a car is sent off-peak to another yard (planner.ts redirect): the moves the plain day
+   * plan books (the probe pass) bind its turn too, but for that car's own return there */
+  let redirecting: { moves: readonly LeadBooking[]; own: (b: LeadBooking) => boolean } | undefined;
+  const leadRoom = (st: number, add: { turn: Stand } | { move: LeadMove }) => {
     if (st < 0 || !sharedTurnLeads(st)) return true;
-    const tracks = topo.stations[st].turnbackBerths.map(b => topo.berths[b].link);
-    type W = { from: number; to: number; track?: number };
-    const near = (w: W) => w.from < to + 3600 && w.to > from - 3600;
-    const pinned: W[] = [
-      ...outbound.filter(m => exitStation(topo, m.depot, m.dir) === st).map(m => ({ from: m.from, to: m.to, track: depotLeadLink(topo, m.depot, false, m.dir) })),
-      ...inbound.filter(m => entryStation(topo, m.depot, m.dir) === st).map(m => ({ from: m.from, to: m.to, track: depotLeadLink(topo, m.depot, true, m.dir) })),
-    ].filter(near);
-    const turns: W[] = (places.get(st) ?? []).filter(near).map(h => ({ from: h.from, to: h.to }));
-    (track === undefined ? turns : pinned).push({ from, to, track });
+    const [lo, hi] = 'turn' in add ? [add.turn.from, add.turn.to] : add.move.window;
+    const near = (from: number, to: number) => from < hi + 3600 && to > lo - 3600;
+    const nearBy = (b: LeadBooking) => b.st === st && near(...b.move.window);
+    const moves: LeadMove[] = [...leadMoves(st).filter(nearBy), ...(redirecting?.moves.filter(b => nearBy(b) && !redirecting!.own(b)) ?? [])].map(b => b.move);
+    const turns: Stand[] = (places.get(st) ?? []).filter(h => near(h.from, h.to));
+    if ('turn' in add) turns.push(add.turn); else moves.push(add.move);
     turns.sort((a, b) => a.from - b.from);
-    const busy = new Map<number, W[]>(tracks.map(t => [t, pinned.filter(w => w.track === t)]));
-    // a move on a lead that is not one of the tracks (or unknown) blocks nothing here
-    const clash = (t: number, w: W) => busy.get(t)!.some(o => o.from < w.to && o.to > w.from);
+    // the turnback a car arriving there turns on (each way that turns there)
+    const rear = (['DN', 'UP'] as TrackDir[]).flatMap(arrDir => {
+      const tb = turnbackAt(topo, st, arrDir);
+      return tb?.kind === 'rear' ? [{ arrDir, depDir: (arrDir === 'DN' ? 'UP' : 'DN') as TrackDir, berths: tb.berths }] : [];
+    });
+    const berths = [...new Set(rear.flatMap(r => r.berths))];
+    const free = (w: Stand, berth: number) => !moves.some(m => rear.some(r => r.berths.includes(berth)
+      && leadMoveConflict(topo, { station: st, arrDir: r.arrDir, depDir: r.depDir, from: w.from, to: w.dep }, berth, m)));
+    const options = turns.map(w => berths.filter(b => free(w, b)));
+    const busy = new Map<number, Stand[]>(berths.map(b => [topo.berths[b].link, []]));
     const place = (k: number): boolean => {
       if (k === turns.length) return true;
-      for (const t of tracks) {
-        if (clash(t, turns[k])) continue;
-        busy.get(t)!.push(turns[k]);
+      for (const b of options[k]) {
+        const track = busy.get(topo.berths[b].link)!;
+        if (track.some(o => o.from < turns[k].to && o.to > turns[k].from)) continue;
+        track.push(turns[k]);
         if (place(k + 1)) return true;
-        busy.get(t)!.pop();
+        track.pop();
       }
       return false;
     };
@@ -422,7 +447,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const enterYard = (depot: number, trip: GenTrip) => {
     endOf.set(trip.id, { kind: 'depot', depot });
     const [from, to] = inboundWindow(topo, depot, trip);
-    addInbound({ depot, dir: trip.dir, from, to, at: arr(trip) + DEPOT_ENTRY_CLEAR });
+    addInbound({ depot, dir: trip.dir, from, to, at: arr(trip) + DEPOT_ENTRY_CLEAR, st: trip.to, arr: arr(trip), trip: trip.id });
   };
   /** the latest move from→P running `dir` that brings a car for departure `d` there (turning at P when
    * `dir` is not d's): its wait, the car's berth and, turning, P's turnback and front route; `fits`: the rest */
@@ -662,7 +687,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
    * stock now and the events still to come. */
   const seeded = new Map<number, { exit?: (typeof exits)[number]; out?: (typeof outbound)[number]; entry?: (typeof inbound)[number] }>();
   const seedBase = (plan: Plan, live?: { at: number; levels: number[]; departed: number[]; done: number[] }) => {
-    for (const [st, list] of terminalOccupancy(plan)) places.set(st, [...(places.get(st) ?? []), ...list.map(o => ({ from: o.from, to: o.to + clearAfter(st) }))]);
+    for (const [st, list] of terminalOccupancy(plan)) places.set(st, [...(places.get(st) ?? []), ...list.map(o => ({ from: o.from, to: o.to + clearAfter(st), dep: o.to }))]);
     if (live) for (const y of yards) if (y.depot >= 0) y.stock = live.levels[y.depot];
     for (const m of depotMoves(plan.blocks, plan.trips, ctx)) {
       if (live && (live.done.includes(m.block) || m.delta < 0 && live.departed.includes(m.block) || m.time < live.at)) continue;
@@ -674,8 +699,8 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
         own.exit = { yard: m.depot, at: m.time }; addExit(own.exit);
         own.out = { depot: m.depot, dir: ts[0].dir, from, to }; outbound.push(own.out);
       } else if (m.delta > 0 && ts.length) {
-        const [from, to] = inboundWindow(topo, m.depot, ts.at(-1)!);
-        own.entry = { depot: m.depot, dir: ts.at(-1)!.dir, from, to, at: m.time }; addInbound(own.entry);
+        const last = ts.at(-1)!, [from, to] = inboundWindow(topo, m.depot, last);
+        own.entry = { depot: m.depot, dir: last.dir, from, to, at: m.time, st: last.to, arr: last.stops.at(-1)!.arr }; addInbound(own.entry);
       }
     }
   };
@@ -693,7 +718,8 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     E, lineEnd, factor, arr, dep, live, services, leavingFrom, lineEndStand, throughMin, waitLimit, openers, index, slot, lastService, POSITIONING,
     addMove, startOf, endOf, link, places, standbyPlaces, reserve, yards, asTrip, safe, moveStops, outerQuiet, exitClear, entryClear,
     exits, inbound, outbound, addExit, addInbound, dropInbound, fitBefore, fitAfter, toward, depotDir, position, lowest, canDraw, canTake,
-    feed, distanceTo, idleYard, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter,
+    feed, distanceTo, idleYard, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter, leadMoves,
+    get redirecting() { return redirecting; }, set redirecting(v: typeof redirecting) { redirecting = v; },
     get viaCore() { return viaCore; }, set viaCore(v: boolean) { viaCore = v; },
     get early() { return early; }, set early(v: boolean) { early = v; },
     get idleHome() { return idleHome; }, set idleHome(v: boolean) { idleHome = v; },

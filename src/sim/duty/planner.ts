@@ -22,12 +22,12 @@ import type { PlanIssue, PlanContext, Period, GenTrip } from '../timetable';
 import {
   officialIntervalAt, officialPeriodAt, connectionSafe, depotIndex, depotStartTime, entryStation, frontTurnClear, hotStandbyPlaces,
   minTurn, overnightPlaces, standbyWindows, turnbackAt, MAX_LAYOVER, THROUGH_WAIT, MIN_HEADWAY, CORE_W, CORE_E, MAX_DIAGRAM_SHIFT_S, stationIndex,
-  TEMPLATES, periodAt, DEPOT_ENTRY_CLEAR, inboundWindow, outboundWindow,
+  TEMPLATES, periodAt, DEPOT_ENTRY_CLEAR, inboundWindow, outboundWindow, noDepotReturnBefore,
 } from '../timetable';
 import { OPERATIONS, STATIONS } from '../../data/current';
 import { ahead } from '../topology';
 import { matchPool } from './pool';
-import { createMoves, THROUGH_MIN, DEBUG, dutyDebug, setTrace, getTrace, T, fmt, type Car, type Want, type Yard } from './moves';
+import { createMoves, THROUGH_MIN, DEBUG, dutyDebug, setTrace, getTrace, T, fmt, type Car, type Want, type Yard, type LeadBooking } from './moves';
 
 export { dutyDebug };
 
@@ -53,10 +53,22 @@ export interface DutyInput {
   /** match the evening cars to the cars each yard is owed (a further pass
    * when the balanced order left a yard's count open) */
   matchHomes?: boolean;
+  /** probe (yard rebalancing): a departure no yard can supply for want of a car
+   * borrows one at the nearest depot that then can; the plan is not used, only
+   * its ledger (`lent`, `spare`) */
+  borrow?: boolean;
+  /** yard rebalancing: cars a depot short of cars must receive before these
+   * times, by an off-peak car redirected from a depot that never used all its
+   * own (`donors`: per depot, how many it can give) */
+  deliver?: readonly { depot: number; before: number }[];
+  donors?: readonly number[];
+  /** yard rebalancing: the probe pass's moves over shared-lead stations (`leads`, `carOf` the car each return brings) */
+  reference?: readonly (LeadBooking & { car?: number })[];
 }
 
-/** cars each depot sent out and took back */
-export interface DutyLedger { exits: number[]; returns: number[]; homeless: number[] }
+/** cars each depot sent out and took back; `lent`: cars a probe borrowed
+ * (depot, departure time); `spare`: per depot, the cars it never used all day */
+export interface DutyLedger { exits: number[]; returns: number[]; homeless: number[]; lent: { depot: number; at: number }[]; spare: number[]; leads: (LeadBooking & { car?: number })[] }
 
 /** a spare car positioned to another station's departure has left at most this before (s) */
 const POSITION_SPAN = 2 * 3600;
@@ -64,6 +76,9 @@ const POSITION_SPAN = 2 * 3600;
 
 export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIssue[]; ledger: DutyLedger } {
   const { ctx, trips, periods, locked } = input;
+  /** the car a return brings in: the trip it arrived on, before the moves added to take it in */
+  const firstAdded = trips.length;
+  const carOf = (id: number) => { let t = trips[id]; while (t.id >= firstAdded && t.prev !== undefined) t = trips[t.prev]; return t.id; };
   const { topo } = ctx;
   const issues: PlanIssue[] = [];
   const mv = createMoves(ctx, trips, periods);
@@ -231,7 +246,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   }
   for (const [id, depot] of input.fixedEnds) {
     const [from, to] = inboundWindow(topo, depot, trips[id]);
-    addInbound({ depot, dir: trips[id].dir, from, to, at: arr(trips[id]) + DEPOT_ENTRY_CLEAR });
+    addInbound({ depot, dir: trips[id].dir, from, to, at: arr(trips[id]) + DEPOT_ENTRY_CLEAR, st: trips[id].to, arr: arr(trips[id]), trip: id });
   }
   // A spare car standing at a yard's entry in its own direction goes in
   // there unless it is used elsewhere: hold its entry before exits are fitted.
@@ -239,7 +254,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     const depot = topo.depots.findIndex((_, d) => entryStation(topo, d, car.trip.dir) === car.station);
     if (depot < 0) continue;
     const [from, to] = inboundWindow(topo, depot, car.trip);
-    addInbound({ depot, dir: car.trip.dir, from, to, at: arr(car.trip) + DEPOT_ENTRY_CLEAR, car: car.trip.id });
+    addInbound({ depot, dir: car.trip.dir, from, to, at: arr(car.trip) + DEPOT_ENTRY_CLEAR, st: car.trip.to, arr: arr(car.trip), trip: car.trip.id, car: car.trip.id });
   }
 
   // ---- 2. supply each departure left without a car
@@ -422,12 +437,39 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     return yard;
   };
   const fixedIn = topo.depots.map((_, d) => [...input.fixedEnds.values()].filter(x => x === d).length);
+  // Yard rebalancing (用户决定 2026-11-13): a depot whose morning stock falls
+  // short of the day's departures from it receives, before it needs it, a car
+  // that retires off-peak after OPERATIONS.noDepotReturnBefore and would have
+  // gone home to a depot that never used all its own cars. The car runs there
+  // in service (homeBy's carrying move). Which depots are short or spare comes
+  // from the probe pass (input.deliver / donors); normal stock never asks.
+  const noReturnBefore = noDepotReturnBefore();
+  const deliveries = (input.deliver ?? []).map(d => ({ ...d, done: false }));
+  const givable = (input.donors ?? []).slice();
+  const redirect = (car: Car, nearest: Yard): Yard | undefined => {
+    const at = arr(car.trip);
+    if (at < noReturnBefore || TEMPLATES[periodAt(periods, at).template].peak || !(givable[nearest.depot] > 0)) return undefined;
+    for (const d of deliveries) {
+      if (d.done || d.depot === nearest.depot || at > d.before - POSITION_SPAN) continue;
+      const target = yards.find(y => y.depot === d.depot)!;
+      // it may not take the leads the plain plan's moves use, but for its own return there
+      mv.redirecting = { moves: input.reference ?? [], own: b => (b as { car?: number }).car === car.trip.id };
+      const went = retire(car, [target]);
+      mv.redirecting = undefined;
+      if (!went) continue;
+      d.done = true; givable[nearest.depot]--;
+      if (DEBUG) dutyDebug.push(`rebalance ${fmt(at)} ${STATIONS[car.station].id} ${car.trip.dir} → ${went.name} (instead of ${nearest.name}) for ${fmt(d.before)}`);
+      return went;
+    }
+    return undefined;
+  };
+  const lent: DutyLedger['lent'] = [];
   for (const want of unmet.sort((a, b) => a.at - b.at)) {
     for (const car of spare.filter(c => c.trip.next === undefined && !endOf.has(c.trip.id)
       && arr(c.trip) < Math.min(want.at - POSITION_SPAN, storageClock - 60))) {
       const order = yards.filter(y => y.depot >= 0).sort((a, b) => distanceTo(a, car.station) - distanceTo(b, car.station));
       if (DEBUG) setTrace(new Map());
-      const went = retire(car, order);
+      const went = (deliveries.length ? redirect(car, order[0]) : undefined) ?? retire(car, order);
       if (DEBUG) dutyDebug.push(`retire ${fmt(arr(car.trip))} ${STATIONS[car.station].id} ${car.trip.dir} → ${went?.name ?? '-'}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')}`);
       setTrace(null);
       if (went) spare.splice(spare.indexOf(car), 1);
@@ -460,6 +502,20 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     }
     if (!done && lineEnd(want.station)) { mv.viaCore = false; done = trimStart(want); }
     mv.viaCore = true;
+    // probe: would one more car at a depot supply it? (the nearest such depot is short)
+    if (!done && input.borrow) {
+      const byDistance = yards.filter(y => y.depot >= 0).sort((a, b) => distanceTo(a, want.station) - distanceTo(b, want.station));
+      for (const yard of byDistance) {
+        yard.stock++;
+        if (feed(yard, want)) { lent.push({ depot: yard.depot, at: want.at }); done = true; break; }
+        yard.stock--;
+      }
+      // still without a car while the nearest depot has none left to draw from then on: that
+      // depot is a car short all the same (an earlier departure took the car or the slot it
+      // would run in); the car stays this departure's, not one more for later ones
+      const nearest = byDistance[0];
+      if (!done && nearest && !mv.canDraw(nearest, want.at)) lent.push({ depot: nearest.depot, at: want.at });
+    }
     if (DEBUG && !done) dutyDebug.push(`feed-fail ${STATIONS[want.station].id} ${want.trip.dir} ${fmt(want.at)} cands ${candidates.length}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')}`);
     setTrace(null);
     if (!done) issues.push({ severity: 'error', code: 'UNASSIGNED', t: want.at,
@@ -512,8 +568,17 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   // longer fits when its turn comes falls back to the balanced order below.
   const reach = new Map<Car, Yard[]>();
   const matched = new Map<Car, Yard>();
-  const rematch = (rest: Car[]) => {
+  const rematch = (all: Car[]) => {
     reach.clear(); matched.clear();
+    // An idle morning car goes to its nearest yard whatever the counts
+    // (idleNearest): it is no car to match, and the count it fills there is
+    // not offered to the others.
+    const idle = new Map<number, number>();
+    const rest = all.filter(car => {
+      const y = car.trip.next === undefined && !endOf.has(car.trip.id) ? mv.idleYard(car) : undefined;
+      if (y) idle.set(y.id, (idle.get(y.id) ?? 0) + 1);
+      return !y;
+    });
     mv.dry = true;
     // a car's yards, fewest extra moves first (straight in, then a move, then
     // a cut run), then the nearest
@@ -527,7 +592,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       reach.set(car, [...cost.keys()].sort((a, b) => cost.get(a)! - cost.get(b)! || distanceTo(a, car.station) - distanceTo(b, car.station)));
     }
     mv.dry = false; mv.viaCore = true;
-    const slots = new Map(depots.map(y => [y.id, Math.max(0, due(y))]));
+    const slots = new Map(depots.map(y => [y.id, Math.max(0, due(y) - (idle.get(y.id) ?? 0))]));
     const holders = new Map<number, Car[]>(depots.map(y => [y.id, []]));
     const assign = (car: Car, seen: Set<number>): boolean => {
       for (const y of reach.get(car)!) {
@@ -589,8 +654,11 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   const ledger: DutyLedger = {
     exits: topo.depots.map((_, d) => exits.filter(x => x.yard === d).length),
     returns: topo.depots.map((_, d) => blocks.filter(b => b.end.kind === 'depot' && b.end.depot === d).length),
-    homeless,
+    homeless, lent, leads: input.borrow ? mv.leadMoves().map(b => ({ ...b, car: b.trip === undefined ? undefined : carOf(b.trip) })) : [],
+    // a depot a car was lent to is short, never spare
+    spare: topo.depots.map((_, d) => lent.some(l => l.depot === d) ? 0 : Math.max(0, mv.lowest(yards.find(y => y.depot === d)!, -Infinity, 0))),
   };
+  if (DEBUG && (input.borrow || input.deliver)) dutyDebug.push(`rebalance ${input.borrow ? 'probe' : 'pass'}: lent ${lent.map(l => `${topo.depots[l.depot].name}@${fmt(l.at)}`).join(' ')} spare ${ledger.spare} undelivered ${deliveries.filter(d => !d.done).map(d => `${topo.depots[d.depot].name}@${fmt(d.before)}`).join(' ')} exits ${ledger.exits} returns ${ledger.returns}`);
   return { blocks, issues, ledger };
 }
 

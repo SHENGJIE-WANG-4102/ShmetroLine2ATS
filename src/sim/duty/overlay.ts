@@ -37,7 +37,7 @@ export function overlayDuties(ctx: PlanContext, plan: Plan, tag: string, reuse: 
   for (const a of added) {
     const d = a.next !== undefined ? trips[a.next] : undefined;
     if (d && d.from === a.to && d.dir !== a.dir)
-      mv.places.set(a.to, [...(mv.places.get(a.to) ?? []), { from: arr(a), to: dep(d) + mv.clearAfter(a.to) }]);
+      mv.places.set(a.to, [...(mv.places.get(a.to) ?? []), { from: arr(a), to: dep(d) + mv.clearAfter(a.to), dep: dep(d) }]);
   }
   const depots = mv.yards.filter(y => y.depot >= 0);
   /** cars a yard is still owed back: the base plan's own shortfall, and each added exit */

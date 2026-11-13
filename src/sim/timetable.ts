@@ -21,7 +21,7 @@ import { FIRST_LAST, OFFICIAL_HEADWAYS } from '../data/current';
 import type { ClockBand } from '../data/simulation';
 import { plannedWaiting } from './plannedWaiting';
 import {  plannedWaitLong, plannedWaitBerth } from './plannedWaitBerth';
-import { planDuties } from './duty/planner';
+import { planDuties, type DutyInput } from './duty/planner';
 import { overlayDuties } from './duty/overlay';
 
 export interface Template {
@@ -1397,7 +1397,7 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
   const anchors = new Set([...published, ...fixedDraft.anchors, ...locked]);
   const stableStarts = new Map(requests.filter(r => r.stableBerth !== undefined).map(r => [r.id, r.stableBerth!]));
   let requested: number[] = [];
-  const draft = (homeFirst?: ReadonlySet<number>, matchHomes = false) => {
+  const draft = (homeFirst?: ReadonlySet<number>, matchHomes = false, rebalance: Pick<DutyInput, 'borrow' | 'deliver' | 'donors' | 'reference'> = {}) => {
     const drafts: GenTrip[] = [];
     for (const request of requests) {
       const trip = addTo(drafts, request.dir, request.kind, request.from, request.to, request.stops.map(stop => ({ ...stop })), request.revenue, request.overlay);
@@ -1412,18 +1412,32 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
     }
     requested = drafts.map(trip => trip.stops[0].dep);
     spaceServiceDepartures(drafts, anchors, requested);
-    return { drafts, ...planDuties({ ctx, trips: drafts, periods, locked, reservedStarts, fixedEnds, standbyEnds: standbyDraft.ends, stableStarts, homeFirst, matchHomes, requestedDeps: requested }) };
+    return { drafts, ...planDuties({ ctx, trips: drafts, periods, locked, reservedStarts, fixedEnds, standbyEnds: standbyDraft.ends, stableStarts, homeFirst, matchHomes, requestedDeps: requested, ...rebalance }) };
   };
+  // Yard rebalancing (用户决定 2026-11-13): the first pass also probes. A
+  // departure no yard can supply for want of a car borrows one at the nearest
+  // depot that then can (`lent`), and the pass counts the cars each depot
+  // never drew (`spare`). Where it borrowed, every pass is drafted again with
+  // spare cars sent there off-peak, in service (planner.ts redirect), and that
+  // is the day's plan: whatever it still cannot cover is reported, not swapped
+  // for another plan. With the usual stock no departure fails, nothing is
+  // borrowed and the first pass is the plain one.
+  let pass = draft(undefined, false, { borrow: true });
+  const lent = pass.ledger.lent;
+  const rebalance = lent.length ? { deliver: lent.map(l => ({ depot: l.depot, before: l.at })), donors: pass.ledger.spare, reference: pass.ledger.leads } : {};
+  if (lent.length) pass = draft(undefined, false, rebalance);
   // A car the day left without a home goes home first in a second pass,
   // before the exits it collided with are fitted (D178: no cross-yard
   // lending; a car with no room nearby runs home empty after the service).
-  let pass = draft();
   const homeFirst = pass.ledger.homeless.length ? new Set(pass.ledger.homeless) : undefined;
-  if (homeFirst) pass = draft(homeFirst);
+  if (homeFirst) pass = draft(homeFirst, false, rebalance);
   // The evening cars go home in the balanced order (depotReturns); when that
   // leaves a yard's count open, they are matched to the yards' counts.
   const open = (p: typeof pass) => p.ledger.exits.reduce((sum, n, d) => sum + Math.abs(n - p.ledger.returns[d]), 0);
-  if (open(pass)) { const matched = draft(homeFirst, true); if (open(matched) < open(pass)) pass = matched; }
+  if (open(pass)) { const matched = draft(homeFirst, true, rebalance); if (open(matched) < open(pass)) pass = matched; }
+  return finish(pass);
+
+  function finish(pass: ReturnType<typeof draft>): Plan {
   const { drafts, blocks, issues } = pass;
   if (SIMULATION.timetable.positioningRevenue === false) for (const trip of drafts.slice(requests.length)) {
     trip.revenue = false;
@@ -1455,6 +1469,7 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
   rejectedTurns.set(plan, []);
   plan.fleetPeak = fleetPeak(plan);
   return plan;
+  }
 }
 
 /** Publish only the chosen depot moves after matching; unused feeder candidates
@@ -2436,30 +2451,48 @@ function dutyTurnBerths(topo: Topology, plan: Plan, block: Block, arrival: Trip,
   return berths;
 }
 
-/** One resource rule for turnback choice, duty matching and validation. */
+/** A turn standing at `station` from its arrival (`from`, running `arrDir`) to its departure (`to`, running `depDir`). */
+export interface LeadTurn { station: number; arrDir: TrackDir; depDir: TrackDir; from: number; to: number }
+/** A yard move over its depot lead `link` during `window`; `entry`: a return entering the
+ * depot, with the direction it runs in and its last stop and arrival there. */
+export interface LeadMove { depot: number; link: number | undefined; window: readonly [number, number]; entry?: { dir: TrackDir; station: number; arr: number } }
+
+/** One resource rule for a turn on a turnback track that is also a depot lead (淞虹路 1/2 道)
+ * and a yard move: the duty planner's track assignment (duty/moves.ts leadRoom), the
+ * turnback choice of tasks and duty matching, and validation (DEPOT_CONFLICT) all ask this.
+ * The turn on `berth` conflicts while the move holds that track, or when a return enters
+ * there close to the turn's departure over the turn's exit route. */
+export function leadMoveConflict(topo: Topology, turn: LeadTurn, berth: number, move: LeadMove): boolean {
+  if (move.link === undefined) return false;
+  const [start, clear] = move.window;
+  if (topo.berths[berth].link === move.link && turn.from < clear - .001 && start < turn.to - .001) return true;
+  const entry = move.entry;
+  return !!entry && !topo.depots[move.depot].portals.entry[entry.dir].reverse
+    && entry.station === turn.station && entry.dir === turn.arrDir && turn.from < entry.arr
+    && Math.abs(entry.arr - turn.to) < DEPOT_TURN_CLEAR
+    && returnSharesTurnExit(topo, move.depot, entry.dir, turn.station, turn.depDir, berth);
+}
+
 function turnLeadConflict(topo: Topology, move: YardMove, trips: readonly Trip[], arrival: Trip, departure: Trip, berth: number): boolean {
   if (move.link === undefined || !move.window || move.trip === undefined) return false;
-  const [start, clear] = move.window;
-  const from = arrival.stops.at(-1)!.arr, to = departure.stops[0].dep;
-  if (topo.berths[berth].link === move.link && from < clear - .001 && start < to - .001) return true;
-  const moving = effectiveTrip(trips[move.trip]), yard = topo.depots[move.depot];
-  return !!moving && move.delta > 0 && !yard.portals.entry[moving.dir].reverse
-    && moving.to === arrival.to && moving.dir === arrival.dir && from < moving.stops.at(-1)!.arr
-    && Math.abs(moving.stops.at(-1)!.arr - to) < DEPOT_TURN_CLEAR
-    && returnSharesTurnExit(topo, move.depot, moving, departure, berth);
+  const moving = effectiveTrip(trips[move.trip]);
+  return leadMoveConflict(topo, { station: arrival.to, arrDir: arrival.dir, depDir: departure.dir, from: arrival.stops.at(-1)!.arr, to: departure.stops[0].dep }, berth, {
+    depot: move.depot, link: move.link, window: move.window,
+    ...(moving && move.delta > 0 ? { entry: { dir: moving.dir, station: moving.to, arr: moving.stops.at(-1)!.arr } } : {}),
+  });
 }
 
 /** Check the actual interlocking sections. SHR2 -> DN and UP -> SHR1 are
  * disjoint straight routes (layout PDF); SHR1 -> DN crosses that return.
  * Keep the existing clearance whenever routes overlap or are unknown. */
-function returnSharesTurnExit(topo: Topology, depot: number, incoming: Trip, outgoing: Trip, berth: number): boolean {
+function returnSharesTurnExit(topo: Topology, depot: number, inDir: TrackDir, station: number, outDir: TrackDir, berth: number): boolean {
   const yard = topo.depots[depot];
   if (!yard) return true;
-  const entryStub = yard.transferPaths[yard.portals.entry[incoming.dir].path].stub;
+  const entryStub = yard.transferPaths[yard.portals.entry[inDir].path].stub;
   const tail = topo.links[topo.berths[berth].link];
   const head = topo.berths[berth].dir === 1 ? tail.a : tail.b;
-  const platform = topo.platforms[topo.stations[outgoing.from].platforms[outgoing.dir]].link;
-  const entries = topo.routes.filter(route => route.steps.at(-1)?.link === entryStub && topo.links[route.steps[0].link].track === incoming.dir);
+  const platform = topo.platforms[topo.stations[station].platforms[outDir]].link;
+  const entries = topo.routes.filter(route => route.steps.at(-1)?.link === entryStub && topo.links[route.steps[0].link].track === inDir);
   const exits = topo.routes.filter(route => topo.signals[route.start].node === head && route.end >= 0 && topo.signals[route.end].link === platform);
   if (!entries.length || !exits.length) return true;
   return entries.some(entry => exits.some(exit => entry.sections.some(section => exit.sections.includes(section))

@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { Sim } from '../src/sim/engine';
 import type { DayType, Trip } from '../src/sim/model';
-import { entryStation, exitStation, portalReversal, turnbackAt, noDepotReturnBefore } from '../src/sim/timetable';
+import { entryStation, exitStation, portalReversal, turnbackAt, noDepotReturnBefore, validatePlan, depotLedger, periodAt, TEMPLATES, CORE_W, CORE_E, type Period } from '../src/sim/timetable';
 import { between } from '../src/sim/topologyOrder';
 import { parseTime } from '../src/sim/calendar';
 import { OPERATIONS, STATIONS } from '../src/data/current';
@@ -169,4 +169,38 @@ describe.each(['weekday', 'weekend'] as DayType[])('duty balance in the %s plan'
     }
     expect(bad).toEqual([]);
   });
+});
+
+/**
+ * Yard rebalancing (用户决定 2026-11-13): a morning stock moved between yards
+ * (a car short at one, spare at another, as the rollover's actual yard counts
+ * can leave them) still gives a valid day: the short yard receives a spare
+ * car off-peak, after noDepotReturnBefore, carried in service; every yard ends
+ * at its own count; no service trip is added or dropped.
+ */
+describe.each(['weekday', 'weekend'] as DayType[])('yard rebalancing in the %s plan', dayType => {
+  const base = new Sim({ dayType, dateLabel: 'test', startTime: 4 * 3600, seed: 3, noPossessions: true });
+  // service trips per direction (outer legs may join or leave elsewhere with other stock; none is added or dropped)
+  const service = (sim: Sim) => (['DN', 'UP'] as const).map(dir => sim.plan.trips.filter(t => !t.cancelled && t.revenue && t.dir === dir
+    && !['ins', 'wd', 'empty', 'adj'].includes(t.kind)).length);
+  const moveKey = (t: Trip) => `${t.dir} ${t.from}-${t.to} ${Math.round(t.stops[0].dep)}`;
+  const baseMoves = new Set(base.plan.trips.filter(t => ['ins', 'wd'].includes(t.kind)).map(moveKey));
+  const short = base.topo.depots.length - 1;
+  it.each([1, 2])('%s car(s) short at the last yard, spare at the first', shift => {
+    const stock = base.depotStock.slice(); stock[0] += shift; stock[short] -= shift;
+    const sim = new Sim({ ...base.config, depotStock: stock });
+    const errors = validatePlan(sim.planCtx, sim.plan, true, false, { checkWaiting: true }).filter(i => i.severity === 'error');
+    expect(errors.map(i => `${i.code} ${i.text}`)).toEqual([]);
+    expect(depotLedger(sim.topo, sim.plan).final).toEqual(sim.depotStock);
+    expect(service(sim)).toEqual(service(base));
+    // every move the shifted stock adds through the core runs after the morning peak, off-peak, carrying
+    const added = sim.plan.trips.filter(t => !t.cancelled && ['ins', 'wd'].includes(t.kind) && !baseMoves.has(moveKey(t))
+      && t.stops.some(p => p.st === CORE_W) && t.stops.some(p => p.st === CORE_E));
+    for (const t of added) {
+      const at = t.stops[0].dep;
+      expect(at, `${t.no} ${clock(at)}`).toBeGreaterThanOrEqual(noDepotReturnBefore());
+      expect(TEMPLATES[periodAt(sim.plan.periods as Period[], at).template].peak, `${t.no} ${clock(at)} peak`).toBeFalsy();
+      expect(t.revenue, `${t.no} carries`).toBe(true);
+    }
+  }, 300000);
 });
