@@ -4,7 +4,8 @@ import {describe,it,expect} from 'vitest';
 import {Sim} from '../src/sim/engine';
 import {nextOperatingConfig,carryWorld,DAY_S} from '../src/sim/operatingDay';
 import {dayNumber} from '../src/sim/yard';
-import {capture,restore,DAY_STATE} from '../src/sim/state';
+import {capture,restore,DAY_STATE,SIM_STATE} from '../src/sim/state';
+import {doorMotionTick} from '../src/sim/psd';
 import {exportDiagnostics,parseDiagnostics,stringifyDiagnostics,replayDiagnostics} from '../src/sim/diagnostics';
 import {computeBody,indexBodies} from '../src/sim/movement';
 import {spawnDue,updateTrainTasks} from '../src/sim/ats';
@@ -120,6 +121,44 @@ describe('continuous operating days',()=>{
   const raw=new Sim({...nextOperatingConfig(s),noPossessions:true});carryWorld(raw,s);scan(raw.trainList);
   expect(n.possessions[0].to).toBe(stamp-DAY_S);
   expect(n.sw[1].moveUntil).toBe(0);
+ });
+ it('declares the operating-day ownership of every live Sim field exactly once',()=>{
+  const s=night(),n=new Sim(nextOperatingConfig(s),s);
+  for(const sim of [s,n]){
+   const fields=Object.keys(sim).filter(k=>typeof (sim as any)[k]!=='function');
+   const undeclared=fields.filter(k=>!(k in DAY_STATE)&&!(k in SIM_STATE));
+   expect(undeclared,`Sim fields without a DAY_STATE / SIM_STATE entry: ${undeclared}`).toEqual([]);
+  }
+  expect(Object.keys(SIM_STATE).filter(k=>k in DAY_STATE)).toEqual([]);
+  for(const k of [...Object.keys(DAY_STATE),...Object.keys(SIM_STATE)])expect(k in n,`declared field ${k} missing on Sim`).toBe(true);
+ });
+ it('leaves plan-numbered alarms with the old day, keeps the rest, and carries the platform doors',()=>{
+  const s=night();s.t=99900;
+  const tr=fixtureTrain(s),berth=s.topo.berths.find(b=>b.kind==='platform')!,p=berth.platform;
+  // yesterday's duty 3 lost its trips; the alarm is never cleared and its key names a block id
+  s.log('C','运营','old duty 3',{key:'lost-3'});s.log('C','运营','old relief',{key:'standby-3'});
+  s.log('B','运营','old source',{key:'source-departure-12'});s.log('C','运营','old hot',{key:`hot-${tr.id}-12`});
+  s.log('B','车辆','train fault',{key:`tf-${tr.id}`,train:tr.id});
+  s.checkIntegrity=false;
+  // the train stands with its doors closing at the rollover
+  s.plat[p].psd='open';s.plat[p].psdTrain=tr.id;
+  Object.assign(tr,{doorsOpen:true,doorSide:'L',vfault:null,doorLockedAt:s.t+5,doorMotion:{kind:'closing',platform:p,trainAt:s.t+5,psdAt:s.t+4.7}});
+  const n=new Sim(nextOperatingConfig(s),s);
+  expect([...n.alarms.keys()].filter(k=>/^(lost|standby|source-departure|hot)-/.test(k))).toEqual([]);
+  expect(n.alarms.get(`tf-${tr.id}`)?.t).toBe(99900-DAY_S);
+  expect(n.checkIntegrity).toBe(false);
+  // the new day's own duty 3 is reported, not swallowed by yesterday's key
+  const before=n.events.length;n.log('C','运营','new duty 3',{key:'lost-3'});
+  expect(n.events.slice(before).map(e=>e.text)).toEqual(['new duty 3']);
+  expect(n.alarms.get('lost-3')?.text).toBe('new duty 3');
+  // PSD state, its train link and the closing motion carry on the new clock
+  const carried=n.trains.get(tr.id)!;
+  expect(n.plat[p]).toMatchObject({psd:'open',psdTrain:tr.id});
+  expect(carried.doorMotion).toMatchObject({kind:'closing',trainAt:99905-DAY_S});
+  n.t=carried.doorMotion!.trainAt+.01;doorMotionTick(n);
+  expect(n.plat[p]).toMatchObject({psd:'closed',psdTrain:-1});
+  expect(carried.doorsOpen).toBe(false);
+  expect(n.integrity.violations).toEqual([]);
  });
  it('drops completed daily data and saves/replays the inherited start, including old saves',()=>{
   let s=night();const sizes=[];

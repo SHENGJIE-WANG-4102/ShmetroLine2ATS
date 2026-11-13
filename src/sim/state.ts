@@ -33,22 +33,26 @@ export interface Checkpoint {
   drivingStops: Sim['drivingStops'];
 }
 
+/** Sim's own data fields: its methods and the rng closure are not state. */
+type SimField = { [K in keyof Sim]: Sim[K] extends (...args: never[]) => unknown ? never : K }[keyof Sim];
+
 export const CLONED = [
   'sw', 'sec', 'sig', 'plat', 'zoneState', 'routes', 'routeUnlockedSw', 'berthRes', 'resourceTransit', 'depotStock', 'depotShortLogged', 'blockDone',
   'faults', 'alarms', 'noRouteLogged', 'yards', 'vehicles', 'stabledPool', 'calls', 'pendingCalls', 'env', 'possessions',
   'instructorSchedule', 'instructorOccurred', 'randomSchedule', 'randomFaultVehicles', 'ridership', 'metrics', 'scenario', 'dispatcher', 'integrity', 'bookmarks', 'incidents', 'connections', 'vehicleResets', 'energy',
-] as const;
+] as const satisfies readonly SimField[];
 
 export const SCALARS = [
   'ridershipTarget', 'instructorFired', 'dailyEvaluationEnded', 'passengerScale', 'nextTrainId', 'nextFaultId', 'passengersServed', 'passengersCleared', 'passengersStranded', 'depTotal', 'depOnTime', 'tripsDone',
   'nextCallId', 'autoRadio', 'autoDispatch', 'atoLine', 'scenarioFired', 'holidayFired', 'runLevel', 'randomLevel', 'nextRandomAt', 'nextBookmarkId', 'planRev',
-] as const;
+] as const satisfies readonly SimField[];
+type CheckpointField = (typeof CLONED)[number] | (typeof SCALARS)[number];
 
 /** Train-owned state (doors, rescue duty/load, reverser, retreat, recent path, CM advisory, ATO buttons, DMI sequence,
  * departureDisplay.at/readyAt, UTO control/door warning/acknowledgement clocks) is carry: cloneTrain saves it with the vehicle and carryTrain shifts its clocks.
  * DAY_STATE below lists Sim-owned fields only; no duplicate top-level display clock is needed. */
 /** Every checkpoint field must explicitly declare its operating-day ownership. */
-export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number], 'carry' | 'daily'> = {
+export const DAY_STATE: Record<CheckpointField, 'carry' | 'daily'> = {
   sw: 'carry',
   sec: 'carry',
   sig: 'carry',
@@ -109,6 +113,67 @@ export const DAY_STATE: Record<(typeof CLONED)[number] | (typeof SCALARS)[number
   nextBookmarkId: 'carry',
   planRev: 'daily',
 };
+
+/**
+ * The other Sim fields (the checkpoint's top level, indexes, worker/UI
+ * settings). Together with DAY_STATE every Sim data field is declared: a new
+ * field that is in neither does not compile (tests/continuous-day.test.ts
+ * also checks the live object).
+ *   carry   — moved explicitly by carryWorld / carryTrains (clocks shifted, ids kept)
+ *   mixed   — the new day's own, plus what carryTrains appends
+ *   daily   — built for each day from its config, or the day's own record (archived with the old day)
+ *   derived — rebuilt from the topology or from other state, never carried by itself
+ *   session — worker / UI settings, counters and flags of the running worker; worker.ts rollover
+ *             re-applies speed, paused, pisStation and dmiTrain to the new day
+ */
+export const SIM_STATE: Record<Exclude<SimField, CheckpointField>, 'carry' | 'mixed' | 'daily' | 'derived' | 'session'> = {
+  t: 'carry', // carryWorld: minus one day
+  secAcc: 'carry',
+  nextEventId: 'carry', // event ids stay unique across the archived days
+  trains: 'carry', // carryTrains: ids kept, clocks shifted, trip/block ids remapped (carryTrain)
+  trainList: 'carry',
+  checkIntegrity: 'carry', // a run setting like autoDispatch
+  plan: 'mixed', // the new diagram plus the remaining duties of running trains (appendDuty)
+  config: 'daily', // nextOperatingConfig: next date, session settings carried
+  planCtx: 'daily',
+  holiday: 'daily',
+  rngState: 'daily', // seeded from the next config
+  events: 'daily',
+  newEvents: 'daily',
+  inputLog: 'daily',
+  depLog: 'daily',
+  drivingStops: 'daily',
+  startState: 'daily',
+  removedTraces: 'daily',
+  reportReady: 'daily',
+  topo: 'derived',
+  rt: 'derived',
+  routeTable: 'derived',
+  dayStart: 'derived',
+  exposure: 'derived',
+  linkBodies: 'derived', // indexBodies on addTrain
+  bodyDirty: 'derived',
+  alarmsDirty: 'derived',
+  planDirty: 'derived',
+  speed: 'session',
+  paused: 'session',
+  pisStation: 'session',
+  dmiTrain: 'session', // a train id; train ids are kept
+  replaying: 'session',
+  stepsThisSecond: 'session',
+  stepsPerSec: 'session',
+  speedWanted: 'session',
+  droppedPerSec: 'session',
+};
+
+/** Alarm keys numbered by the day's plan: block ids, trip ids (the last part
+ * of the hot-standby / first-ready keys), and fleet-short's block-or-depot.
+ * The new day numbers its plan from 0 again, so a carried one names another
+ * duty and, while uncleared, swallows that duty's own alarm (Sim.log skips a
+ * key already present; most of these are never cleared). Their record leaves
+ * with the archived day; a condition still in force is raised again under the
+ * new ids. */
+export const DAILY_ALARM_KEY = /^(short|lost|stable-missing|standby|standby-short|fleet-short|hot|hotswap|firstready|source-departure)-[-\d]+$/;
 
 function cloneTrain(tr: Train): Train {
   return {

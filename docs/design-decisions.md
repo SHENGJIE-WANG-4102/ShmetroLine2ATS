@@ -5175,3 +5175,15 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
   - 测试线：`ATS_LINE=test` 的 plan-hash 在阶段 1 前半批和改前一致；全部改完后 `tests/test-line.test.ts` 通过。14号线在另一条分支，这里没有核它的运行图，合并时要重看。
   - 测试：`tests/core.test.ts`、`tests/dispatcher.test.ts`、`tests/round3.test.ts`。
 - 随机压测（3 例、每例两天、带天气和随机调度操作，`work/fuzz-stage1d/`）：101 工作日、102 双休日、103 工作日带进博会，都是 pass、0 违例。之前两轮在 103 例上查出的就是上面两处运行时问题。相关单测 6 个文件 161 条全过，`tsc` 0 error。
+
+## D192 审计复核：站台门转换表外的请求不再让软件崩，Sim 字段全部登记跨日归属，按当天编号的报警不带到第二天（2026-11-13）
+
+外部审计报告里的两条风险，复核后处理。
+
+- **运行中 throw**：`psd.ts go()` 碰到转换表里没有的请求（只有 open↔pslOpen：站台门还开着时再做一次 PSL 开门）会抛异常，worker 一崩整个软件就没了。正常运营没找到触发现场，调度操作能碰到。改成记完整性违例（A 级报警，测试和压测照样算违例），门保持原状态，下一次关门在表里，不会卡住。`src/sim` 其它 throw 逐个看过：都在建拓扑、排图（Sim 构造）、脚本里，运行中走不到。
+- **跨日登记**：审计说站台门状态没归类，这条不对（`plat` 本来就是 carry，新测试证明跨日后门状态和关门动作接得上）。Sim 上不在检查点清单里的 37 个字段现在全部登记进 `state.ts SIM_STATE`（carry / mixed / daily / derived / session），用类型约束，新加字段不登记编译不过。`checkIntegrity` 原来跨日后被重置成 true，现在带过去。
+- **按当天编号的报警**：short-、lost-、stable-missing-、standby-、fleet-short-、hot-、hotswap-、firstready-、source-departure- 这批报警的 key 带当天的表号或车次号，多数不会清除。第二天表号从 0 重编，`Sim.log` 碰到同名 key 直接跳过，新一天同号的报警就被吞了。跨日时丢掉这批（`DAILY_ALARM_KEY`），原记录随上一天归档，条件还在会按新编号重报。
+- **顺带查清**（没改）：末班后定点班车没有在虹桥火车站原地换端（2号线在虹桥火车站、虹桥2号航站楼都没有折返条件，用户确认）。模型里是一趟普通载客车终到国家会展中心，进尽头线换端，空车跑一站到虹桥火车站上行站台，停 3 分钟按点发。数据里的 `depotFrom: 'BZL'` 走不到（后备路径要求虹桥火车站能折返）。D191「已知遗留」里那条「虹桥2号航站楼没有折返能力」是站名记错，作废。
+- **没修的红**：`tests/operating-day.test.ts` 有 2 条失败，是 D191 引入的（D191 验收时漏跑了这个文件）：东头车场正好用满，早上川沙或龙阳路少一两列可用车时，晚间 20:25 机场、20:47 广兰路没车可发。用户决定：缺车的日子让北翟路多出的车在 10:00 后平峰跑载客车、收车进东头车场，正常日子不触发。待做。
+- 公共文件：`src/sim/psd.ts`、`src/sim/state.ts`、`src/sim/operatingDay.ts`。新增 `tests/psd-table.test.ts`，`tests/continuous-day.test.ts` 加 2 条。
+- 验证：`tsc` 0 error；随机压测 3 例两天（`work/fuzz-audit1/`）全部 pass、0 违例。

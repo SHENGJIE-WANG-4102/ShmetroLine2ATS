@@ -6,7 +6,7 @@
  * clock (04:00–27:45), so carried state has its times moved back one day.
  */
 import { describeTask, type Sim } from './engine';
-import { DAY_STATE } from './state';
+import { DAY_STATE, DAILY_ALARM_KEY } from './state';
 import { yardCount, dayNumber } from './yard';
 import { dateLabel, dayTypeOf, isoDate, parseIso } from './calendar';
 import type { Block, Possession, SimConfig, StopTask, Task, Train, Trip } from './model';
@@ -70,6 +70,7 @@ export function carryWorld(sim: Sim, from: Sim): Possession[] {
   sim.t = from.t - DAY_S;
   sim.secAcc = from.secAcc;
   sim.nextEventId = from.nextEventId;
+  sim.checkIntegrity = from.checkIntegrity;
   sim.sw = from.sw.map(s => ({ ...s, moveUntil: back(s.moveUntil) }));
   sim.sec = from.sec.map(s => ({ ...s, poss: -1 }));
   sim.sig = from.sig.map(s => ({ ...s }));
@@ -108,7 +109,9 @@ export function carryWorld(sim: Sim, from: Sim): Possession[] {
   }
   // Alarm evidence belongs to the archived day. Rebuild keys together so
   // renumbering possession 5->0 cannot overwrite an old possession-0 alarm.
+  // Keys numbered by the old plan stay with the archived day (DAILY_ALARM_KEY).
   sim.alarms = new Map([...sim.alarms].flatMap(([key, alarm]) => {
+    if (DAILY_ALARM_KEY.test(key)) return [];
     if (alarm.cleared !== undefined) alarm.cleared = back(alarm.cleared);
     delete alarm.snapshot;
     if (!key.startsWith('poss-')) return [[key, alarm] as const];

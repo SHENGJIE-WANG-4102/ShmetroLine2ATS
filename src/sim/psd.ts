@@ -23,6 +23,7 @@ import { DOOR_CLOSE_S } from './calibration';
 import { OPERATIONS } from '../data/current';
 import { doorCloseHold } from './vehicle';
 import { simulatedAmDriver } from './onboard';
+import { violate } from './invariants';
 
 /** PSL operation by station staff per open / close (s) 【假设】 */
 export const PSL_EXTRA = 15;
@@ -31,11 +32,22 @@ export const BYPASS_EXTRA = 25;
 /** 用户要求：开门偏差≤0.5秒，关门PSD先；具体0.3秒为【假设】。 */
 export const DOOR_STAGGER_S = 0.3;
 
-function go(sim: Sim, p: number, to: PsdState) {
+/** A transition outside the PSD table is a model inconsistency, not an
+ * operating situation, and must not stop the worker: it is reported as an
+ * integrity violation (A alarm, counted by tests and fuzz runs) and the doors
+ * keep their current state. Of the transitions the callers request, the table
+ * only lacks open↔pslOpen: the doors stay open either way, and the following
+ * close (open/pslOpen → closed) is in the table. */
+function go(sim: Sim, p: number, to: PsdState): boolean {
   const ps = sim.plat[p];
-  if (ps.psd === to) return;
-  if (!inTable(PSD, ps.psd, to)) throw new Error(`PSD ${sim.topo.platforms[p].name}: ${ps.psd}→${to} not in table`);
+  if (ps.psd === to) return true;
+  if (!inTable(PSD, ps.psd, to)) {
+    violate(sim, 'FSM', ps.psdTrain >= 0 && sim.trains.has(ps.psdTrain) ? [ps.psdTrain] : [],
+      `${PSD.label}[${p}]：${sim.topo.platforms[p].name} ${ps.psd}→${to} 不在转换表中，保持${ps.psd}`, `${PSD.name}:${p}`);
+    return false;
+  }
   ps.psd = to;
+  return true;
 }
 
 /** the doors are open for passengers (or failed open) */
