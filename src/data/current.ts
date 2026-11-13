@@ -41,21 +41,19 @@ export function stationOrder(stations: readonly { id: string; interM: number | n
 /** A line with a branch registers its running order; a single run keeps array order. */
 setStationOrder(STATIONS.some(station => station.joins) ? stationOrder(STATIONS) : null);
 
-/** Chainage of each station (m, rising DN-ward). The main run starts at 0; a branch is measured
- * back from the station it joins, so its chainages overlap the main run's on its own tracks. */
-export function stationChainages(stations: readonly Pick<StationData, 'id' | 'interM' | 'joins'>[] = STATIONS): number[] {
+/** Gap left on the chainage axis between two runs of stations (m). */
+export const RUN_GAP = 6000;
+/** Chainage of each station (m, rising DN-ward along the station list). A line with a branch lists
+ * its runs one after another and each run gets its own stretch of the axis, RUN_GAP apart, so a
+ * chainage names one place on the line. Across runs it is a coordinate only: the distance from a
+ * branch's last station to the station it joins is `joins.interM`, not a difference of chainages. */
+export function stationChainages(stations: readonly Pick<StationData, 'interM'>[] = STATIONS): number[] {
   let chain = 0;
-  const chains = stations.map(station => {
+  return stations.map((station, index) => {
     if (station.interM !== null) chain += station.interM;
+    else if (index > 0) chain += RUN_GAP;
     return chain;
   });
-  for (let last = stations.length - 1; last >= 0; last--) {
-    const joins = stations[last].joins;
-    if (!joins) continue;
-    chains[last] = chains[stations.findIndex(station => station.id === joins.station)] - joins.interM;
-    for (let i = last; i > 0 && stations[i].interM !== null; i--) chains[i - 1] = chains[i] - stations[i].interM!;
-  }
-  return chains;
 }
 export function fleetEntry(no: string) {
   return FLEET.find(entry => entry.no === no);

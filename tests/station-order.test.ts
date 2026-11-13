@@ -57,18 +57,23 @@ describe('station order', () => {
 });
 
 describe('branch station data', () => {
-  // main run A-B-C-D, branch X-Y joining at B
+  // branch X-Y joins the run A-B-C-D at B; the branch is listed first so the list runs DN throughout
   const stations = [
-    { id: 'A', interM: null }, { id: 'B', interM: 1000 }, { id: 'C', interM: 1500 }, { id: 'D', interM: 800 },
     { id: 'X', interM: null }, { id: 'Y', interM: 700, joins: { station: 'B', interM: 1200 } },
+    { id: 'A', interM: null }, { id: 'B', interM: 1000 }, { id: 'C', interM: 1500 }, { id: 'D', interM: 800 },
   ];
   it('derives the running order and chainages from the station list', async () => {
     const data = await import('../src/data/current');
-    expect(data.stationOrder(stations)).toEqual([1, 2, 3, -1, 5, 1]);
-    // the branch is measured back from the station it joins
-    expect(data.stationChainages(stations)).toEqual([0, 1000, 2500, 3300, -900, -200]);
-    expect(data.stationOrder(stations.slice(0, 4))).toEqual([1, 2, 3, -1]);
+    expect(data.stationOrder(stations)).toEqual([1, 3, 3, 4, 5, -1]);
+    // each run has its own stretch of the axis
+    const gap = data.RUN_GAP;
+    expect(data.stationChainages(stations)).toEqual([0, 700, 700 + gap, 1700 + gap, 3200 + gap, 4000 + gap]);
+    expect(data.stationOrder(stations.slice(2))).toEqual([1, 2, 3, -1]);
+    expect(data.stationChainages(stations.slice(2))).toEqual([0, 1000, 2500, 3300]);
     expect(() => data.stationOrder([{ id: 'X', interM: null, joins: { station: 'nowhere' } }])).toThrow();
     setStationOrder(null);
+    setStationOrder(data.stationOrder(stations));
+    expect(stationPath(0, 5)).toEqual([0, 1, 3, 4, 5]);
+    expect(ahead('DN', 1, 2)).toBe(false); expect(ahead('UP', 4, 0)).toBe(true); expect(ahead('UP', 4, 2)).toBe(true);
   });
 });

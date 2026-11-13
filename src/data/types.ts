@@ -19,9 +19,9 @@ export interface StationData {
     formerName?: string;
     /** distance from the previous station in the list (m); null where a run of stations starts */
     interM: number | null;
-    /** A branch: the station list holds the main run first (DN = down the list), then each
-     * branch as its own run, also listed DN-ward. The last station of a branch names the
-     * main-run station it runs into, and the distance to it. */
+    /** A branch: the station list holds one run of stations after another, each listed DN-ward
+     * (a branch before the run it joins, so that the list as a whole still runs DN). The last
+     * station of a branch names the station it runs into, and the distance to it. */
     joins?: { station: string; interM: number };
     transfers: string[];
     dwell: number;
