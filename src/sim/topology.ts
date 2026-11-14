@@ -1143,11 +1143,15 @@ export function buildTopology(): Topology {
   }
 
   // ------------------------------------------------------------------ zones
-  const zones: TZone[] = LAYOUT.zones.map((z, i) => {
-    const from = i === 0 ? -1e9 : (chains[z.fromStation - 1] + chains[z.fromStation]) / 2;
-    const to = i === LAYOUT.zones.length - 1 ? 1e9 : (chains[z.toStation] + chains[z.toStation + 1]) / 2;
-    return { id: i, key: z.id, name: z.name, chainFrom: from, chainTo: to };
+  // zone boundaries halfway between stations; a zone ending at a joining run's last station
+  // holds the run's way on to the station it joins (it lies in the chainage gap after the run)
+  const zoneEnds = LAYOUT.zones.map((z, i) => {
+    if (i === LAYOUT.zones.length - 1) return 1e9;
+    const mid = (chains[z.toStation] + chains[z.toStation + 1]) / 2;
+    const way = joins.filter((jb) => runLast(jb.run) === z.toStation).flatMap((jb) => jb.plain.map((lid) => Math.max(links[lid].chainA, links[lid].chainB)));
+    return Math.max(mid, ...way.map((c) => c + 1));
   });
+  const zones: TZone[] = LAYOUT.zones.map((z, i) => ({ id: i, key: z.id, name: z.name, chainFrom: i === 0 ? -1e9 : zoneEnds[i - 1], chainTo: zoneEnds[i] }));
   const zoneOf = (ch: number) => {
     for (const z of zones) if (ch >= z.chainFrom && ch < z.chainTo) return z.id;
     return zones.length - 1;
@@ -1326,13 +1330,14 @@ export function buildTopology(): Topology {
     }
     stationPlat.push(rec);
   }
-  // middle-track face of an island platform (shares the UP face's waiting passengers)
+  // middle-track face of an island platform (shares that main face's waiting passengers)
   for (const lb of loops) {
     if (lb.platLink === undefined) continue;
     const i = lb.def.station;
+    const t = lb.def.island === 'DN' ? 'DN' : 'UP';
     const p: TPlatform = {
-      id: platforms.length, station: i, track: 'UP', link: lb.platLink, section: links[lb.platLink].section,
-      name: `${STATIONS[i].name} 中间线站台`, pool: stationPlat[i].UP, face: 'N',
+      id: platforms.length, station: i, track: t, link: lb.platLink, section: links[lb.platLink].section,
+      name: `${STATIONS[i].name} 中间线站台`, pool: stationPlat[i][t], face: t === 'UP' ? 'N' : 'S',
     };
     links[lb.platLink].platform = p.id;
     platforms.push(p);
@@ -1955,7 +1960,9 @@ export function buildTopology(): Topology {
       if (far) placeLane([...far.links!, ...pb.inner[i === 0 ? 'U' : 'D'].slice(3)], i === 0 ? yu : yd);
     });
   }
-  for (const lb of loops) placeLane([...lb.ends, ...lb.middle], laneY(lb.def.platform ? 'midDN' : 'mid'));
+  // a middle track with a platform face lies off the island it shares, towards the other main
+  for (const lb of loops) placeLane([...lb.ends, ...lb.middle],
+    laneY(!lb.def.platform || lb.def.island === 'both' ? 'mid' : lb.def.island === 'DN' ? 'midUP' : 'midDN'));
   // a joining run: along its own stretch on the main's lane, then outside the main it meets
   for (const jb of joins) {
     for (const lid of jb.plain) if (nodes[links[lid].a].pos.length === 0) nodes[links[lid].a].pos = posFor(nodes[links[lid].a].chain, jb.t === 'UP' ? g.upY : g.dnY);

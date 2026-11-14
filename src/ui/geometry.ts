@@ -36,6 +36,8 @@ export interface GeomParams {
   detail: boolean;
   /** main-line nodes this far outside the window are still placed (continuous track at the view edges) */
   nodeMargin?: number;
+  /** beyond the window only the mains run on into the margin: no switches of the next station */
+  marginMainsOnly?: boolean;
   /** screen px kept free below the last row when zoomed out (labels are not scaled with the geometry) */
   padBottom?: number;
   /** same above the first row (train windows stacked above the up track) */
@@ -191,19 +193,23 @@ export class Geometry {
     const pos: (P | null)[] = topo.nodes.map(() => null);
     const m = p.nodeMargin ?? 1;
     const inWin = (c: number) => c >= p.chainFrom - m && c <= p.chainTo + m;
+    const inside = (c: number) => c >= p.chainFrom - 1 && c <= p.chainTo + 1;
+    /** a node off the mains, or a switch on them, in the margin is left out with marginMainsOnly */
+    const placeable = (n: Topology['nodes'][number], onMain: boolean) =>
+      inWin(n.chain) && (!p.marginMainsOnly || inside(n.chain) || (onMain && n.kind === 'joint'));
     const at = (ch: number, dy: number): P => {
       const row = this.chainRow(ch);
       return { row, x: this.chainX(ch, row), y: this.rows[row].top + dy };
     };
     // main tracks
     for (const n of topo.nodes) {
-      if (!inWin(n.chain)) continue;
+      if (!placeable(n, true)) continue;
       const main = n.links.map((l) => topo.links[l]).find((l) => isMain(l) && !(l.jump && l.b === n.id));
       if (main) pos[n.id] = at(n.chain, main.track === 'UP' ? p.upY : p.dnY);
     }
     // sidings, on the lane the topology gave them (fraction of the UP→DN gap)
     for (const n of topo.nodes) {
-      if (pos[n.id] || !inWin(n.chain)) continue;
+      if (pos[n.id] || !placeable(n, false)) continue;
       if (!n.links.some((l) => topo.links[l].track === 'SID' || topo.links[l].jump)) continue;
       const d = n.pos[0];
       const f = d ? (d.y - topo.layout.rowTop[d.row] - topo.layout.upY) / (topo.layout.dnY - topo.layout.upY) : 0.5;
@@ -215,7 +221,7 @@ export class Geometry {
     for (const d of topo.depots) {
       d.transferPaths.forEach((path, k) => {
         const T = topo.nodes[path.throat];
-        if (!inWin(T.chain)) return;
+        if (!placeable(T, false)) return;
         const row = this.chainRow(T.chain);
         const top = this.rows[row].top;
         const s = Math.sign(topo.nodes[path.gate].chain - T.chain) || 1;
@@ -229,7 +235,7 @@ export class Geometry {
     // the rest (diagonal halves: crossovers, connectors, depot legs) sit between their neighbours
     for (let pass = 0; pass < 4; pass++) {
       for (const n of topo.nodes) {
-        if (pos[n.id] || !inWin(n.chain)) continue;
+        if (pos[n.id] || !placeable(n, false)) continue;
         const nb = n.links.map((l) => { const lk = topo.links[l]; return pos[lk.a === n.id ? lk.b : lk.a]; }).filter((x): x is P => !!x);
         if (nb.length >= 2) pos[n.id] = { row: nb[0].row, x: (nb[0].x + nb[1].x) / 2, y: (nb[0].y + nb[1].y) / 2 };
       }

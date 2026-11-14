@@ -369,13 +369,30 @@ export class TrackView {
       const side = p.pool === undefined && p.face === (up ? 'N' : 'S');
       if (side && up) { y0 = top + L.upY - 30; y1 = top + L.upY - 9; }
       else if (side) { y0 = top + L.dnY + 9; y1 = top + L.dnY + 30; }
-      else if (topo.platforms.some((q) => q.station === p.station && q.pool !== undefined)) {
-        // 广兰路: island between the UP main and the middle track (upper face UP,
-        // lower face middle track)
-        const lane = top + L.upY + 0.7 * (L.dnY - L.upY);
-        const half = (top + L.upY + 9 + lane - 5) / 2;
-        if (p.pool !== undefined) { y0 = half; y1 = lane - 5; }
-        else { y0 = top + L.upY + 9; y1 = half; }
+      // a joining run's own face shares one island with the main's outer platform (嘉定新城):
+      // the main's face next to the main, the run's face next to its own track
+      const joined = side ? topo.platforms.find((q) => q.station === p.station && q.track === p.track && q.from !== undefined) : undefined;
+      const jp = joined && geom.pos[topo.links[joined.link].a];
+      if (jp) {
+        const [a, b] = up ? [jp.y + 5, top + L.upY - 9] : [top + L.dnY + 9, jp.y - 5];
+        const half = (a + b) / 2;
+        if ((p.from !== undefined) === up) { y0 = a; y1 = half; } else { y0 = half; y1 = b; }
+      }
+      if (!side) {
+        // a middle track with a platform face (广兰路, 真如, 南翔, 三林): an island on either side
+        // of it holds the main's face and, on the main its waiting passengers share, the middle
+        // track's face too
+        const mid = topo.platforms.find((q) => q.station === p.station && q.pool !== undefined);
+        const m = mid && geom.pos[topo.links[mid.link].a];
+        if (mid && m) {
+          const lane = m.y;
+          const shared = topo.platforms[mid.pool!].track;
+          const [a, b] = (p.pool !== undefined ? shared : p.track) === 'UP' ? [top + L.upY + 9, lane - 5] : [lane + 5, top + L.dnY - 9];
+          const half = (a + b) / 2;
+          if (p.pool === undefined && p.track !== shared) { y0 = a; y1 = b; }
+          else if ((p.pool !== undefined) === (shared === 'UP')) { y0 = half; y1 = b; }
+          else { y0 = a; y1 = half; }
+        }
       }
       const rect = new Graphics().rect(x0, y0, x1 - x0, y1 - y0).fill({ color: 0xffffff });
       rect.tint = stationOpened(p.station) ? C.platform : 0x454b50;
@@ -387,8 +404,9 @@ export class TrackView {
       const bar = new Graphics();
       this.platL.addChild(rect, bar);
       // an inner UP face has its track above, an inner DN (or middle-track) face below; a side platform the reverse
-      // (广兰路的中间线站台面不论属哪个方向，股道都在下方：站台门画在下沿，用户 2026-11-07)
-      this.platGfx.push({ rect, bar, x: x0, y: y0, w: x1 - x0, h: y1 - y0, edgeTop: p.pool !== undefined ? false : up !== side });
+      // (广兰路的中间线站台面不论属哪个方向，股道都在下方：站台门画在下沿，用户 2026-11-07；
+      //  中间线和下行共用岛式站台时（南翔）股道在上方)
+      this.platGfx.push({ rect, bar, x: x0, y: y0, w: x1 - x0, h: y1 - y0, edgeTop: p.pool !== undefined ? topo.platforms[p.pool].track === 'DN' : jp && p.from !== undefined ? up : up !== side });
     }
 
     // station names, transfer chips, km posts

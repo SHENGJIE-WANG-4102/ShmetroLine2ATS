@@ -15,13 +15,13 @@ import { LINE14_CORE } from '../line14/line14';
  */
 export const STATIONS: StationData[] = [
   // ---- 花桥支线（0～6），上海赛车场 joins 嘉定新城 ----
-  { id: 'HQ', name: '花桥', interM: null, transfers: ['苏州11'], dwell: 30, demand: 0.55 },
-  { id: 'GML', name: '光明路', interM: 1267, transfers: [], dwell: 20, demand: 0.45 },
+  { id: 'HQ', name: '花桥', interM: null, transfers: ['苏州11'], dwell: 30, demand: 0.55, sidePlatform: ['DN', 'UP'] },
+  { id: 'GML', name: '光明路', interM: 1267, transfers: [], dwell: 20, demand: 0.45, sidePlatform: ['DN', 'UP'] },
   { id: 'ZFL', name: '兆丰路', interM: 3300, transfers: [], dwell: 20, demand: 0.45 },
   { id: 'AT', name: '安亭', interM: 1128, transfers: [], dwell: 25, demand: 0.6 },
-  { id: 'SQC', name: '上海汽车城', interM: 1844, transfers: [], dwell: 20, demand: 0.4 },
-  { id: 'CJL', name: '昌吉东路', interM: 2286, transfers: [], dwell: 20, demand: 0.35 },
-  { id: 'SSC', name: '上海赛车场', interM: 5382.7, transfers: [], dwell: 25, demand: 0.35,
+  { id: 'SQC', name: '上海汽车城', interM: 1844, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
+  { id: 'CJL', name: '昌吉东路', interM: 2286, transfers: [], dwell: 20, demand: 0.35, sidePlatform: ['DN', 'UP'] },
+  { id: 'SSC', name: '上海赛车场', interM: 5382.7, transfers: [], dwell: 25, demand: 0.35, sidePlatform: ['DN', 'UP'],
     // 图上：花桥方向到达线 B 沿岛式西面到站南，在站南 X 以南并入中间（下行）
     // 正线（JDC 中心以南约 60 图面点）；去花桥的出发线 A 在站台北端从东侧
     // 上行正线分出、跨过下行正线向西。按站台半长 105 m 折算，DN 并线点取
@@ -29,38 +29,38 @@ export const STATIONS: StationData[] = [
     joins: { station: 'JDC', interM: 3118.3, DN: { at: 300, platform: true }, UP: { at: -160 } } },
 
   // ---- 主线（7～39），嘉定北→迪士尼 ----
-  { id: 'JDB', name: '嘉定北', interM: null, transfers: [], dwell: 30, demand: 0.55 },
+  { id: 'JDB', name: '嘉定北', interM: null, transfers: [], dwell: 30, demand: 0.55, sidePlatform: ['DN', 'UP'] },
   { id: 'JDX', name: '嘉定西', interM: 1944, transfers: [], dwell: 20, demand: 0.45 },
-  { id: 'BYL', name: '白银路', interM: 3919, transfers: [], dwell: 20, demand: 0.4 },
-  { id: 'JDC', name: '嘉定新城', interM: 1887, transfers: [], dwell: 25, demand: 0.55 },
-  { id: 'ML', name: '马陆', interM: 2896, transfers: [], dwell: 20, demand: 0.4 },
-  { id: 'CXL', name: '陈翔公路', interM: 3891, transfers: [], dwell: 20, demand: 0.35 },
-  { id: 'NX', name: '南翔', interM: 1955, transfers: [], dwell: 25, demand: 0.5 },
+  { id: 'BYL', name: '白银路', interM: 3919, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
+  { id: 'JDC', name: '嘉定新城', interM: 1887, transfers: [], dwell: 25, demand: 0.55, sidePlatform: ['DN', 'UP'] },
+  { id: 'ML', name: '马陆', interM: 2896, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
+  { id: 'CXL', name: '陈翔公路', interM: 3891, transfers: [], dwell: 20, demand: 0.35, sidePlatform: ['DN', 'UP'] },
+  { id: 'NX', name: '南翔', interM: 1955, transfers: [], dwell: 25, demand: 0.5, sidePlatform: ['UP'] },
   { id: 'TPX', name: '桃浦新村', interM: 3237, transfers: [], dwell: 20, demand: 0.45 },
   { id: 'WWL', name: '武威路', interM: 1637.4, transfers: [], dwell: 20, demand: 0.45 },
   { id: 'QLS', name: '祁连山路', interM: 1277.6, transfers: [], dwell: 20, demand: 0.45 },
   { id: 'LZY', name: '李子园', interM: 1380, transfers: [], dwell: 20, demand: 0.45 },
   { id: 'SXZ', name: '上海西站', interM: 1310, transfers: ['15'], dwell: 30, demand: 0.6 },
-  { id: 'ZR', name: '真如', interM: 1578.0, transfers: ['14'], dwell: 30, demand: 0.7 },
+  { id: 'ZR', name: '真如', interM: 1578.0, transfers: ['14'], dwell: 30, demand: 0.7, sidePlatform: ['DN'] },
   { id: 'FQL', name: '枫桥路', interM: 1119.0, transfers: [], dwell: 20, demand: 0.55 },
-  { id: 'CYL', name: '曹杨路', interM: 722, transfers: ['3', '4', '14'], dwell: 50, demand: 0.85 },
+  { id: 'CYL', name: '曹杨路', interM: 722, transfers: ['3', '4', '14'], dwell: 50, demand: 0.85, sidePlatform: ['DN', 'UP'] },
   { id: 'LDL', name: '隆德路', interM: 1012, transfers: ['13'], dwell: 25, demand: 0.65 },
   { id: 'JSL', name: '江苏路', interM: 1357, transfers: ['2'], dwell: 25, demand: 0.8 },
   { id: 'JTD', name: '交通大学', interM: 2654, transfers: ['10'], dwell: 25, demand: 0.8 },
   { id: 'XJH', name: '徐家汇', interM: 905, transfers: ['1', '9'], dwell: 35, demand: 1.0 },
   { id: 'YYG', name: '上海游泳馆', interM: 1764, transfers: [], dwell: 20, demand: 0.5 },
   { id: 'LH', name: '龙华', interM: 1466, transfers: ['12'], dwell: 25, demand: 0.6 },
-  { id: 'YJL', name: '云锦路', interM: 945, transfers: [], dwell: 20, demand: 0.5 },
+  { id: 'YJL', name: '云锦路', interM: 945, transfers: [], dwell: 20, demand: 0.5, sidePlatform: ['DN', 'UP'] },
   { id: 'LYL', name: '龙耀路', interM: 835, transfers: [], dwell: 20, demand: 0.5 },
   { id: 'DFY', name: '东方体育中心', interM: 2263, transfers: ['6', '8'], dwell: 30, demand: 0.7 },
   { id: 'SL', name: '三林', interM: 3516, transfers: [], dwell: 25, demand: 0.55 },
   { id: 'SLD', name: '三林东', interM: 1126, transfers: [], dwell: 20, demand: 0.45 },
-  { id: 'PSL', name: '浦三路', interM: 1613, transfers: [], dwell: 20, demand: 0.4 },
+  { id: 'PSL', name: '浦三路', interM: 1613, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
   { id: 'KHL', name: '康恒路', interM: 1405, transfers: [], dwell: 20, demand: 0.35 },
   { id: 'YQ', name: '御桥', interM: 1816, transfers: ['18'], dwell: 25, demand: 0.6 },
   { id: 'LSH', name: '罗山路', interM: 2509, transfers: [], dwell: 25, demand: 0.55 },
-  { id: 'XYL', name: '秀沿路', interM: 1777, transfers: [], dwell: 20, demand: 0.4 },
-  { id: 'KXG', name: '康新公路', interM: 2321.4, transfers: [], dwell: 20, demand: 0.35 },
+  { id: 'XYL', name: '秀沿路', interM: 1777, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
+  { id: 'KXG', name: '康新公路', interM: 2321.4, transfers: [], dwell: 20, demand: 0.35, sidePlatform: ['DN', 'UP'] },
   { id: 'DSL', name: '迪士尼', interM: 5073.6, transfers: [], dwell: 30, demand: 0.5 },
 ];
 /** 英文名未做逐站实拍核对，留空；PIS 英文按站名缺省处理。 */
@@ -74,12 +74,12 @@ export const STATION_EN: Record<string, string> = {};
  * - pairs：迪士尼站东、罗山路站南两组双Y中间折返线；罗山路站北一组双Y中间线就是
  *   川杨河定修段的出入段线。
  * - sidings：马陆站西北上行外侧存车线（两端接上行）；南翔（暂代中间线，见注释）；
- *   东方体育中心两正线之间存车线；龙耀路短尽头线；城北路（只接下行）、赛车场（只接
- *   上行）两个车场的出入段线。
+ *   城北路（只接下行）、赛车场（只接上行）两个车场的出入段线。东方体育中心只有一座
+ *   岛式站台、龙耀路没有配线（用户 2026-11-14）。
  * - loops：安亭、浦三路、云锦路两端双Y的中间线；三林、真如带站台面的中间线。
  * - crossovers：安亭站东、上海赛车场站西和站东（站东那组在往嘉定新城的汇入咽喉里）、
- *   嘉定新城站南的 X；上海汽车城、马陆、祁连山路、康新公路的单渡线；东方体育中心
- *   东南端单渡线。
+ *   嘉定新城站南的 X；花桥站东、兆丰路两端、上海汽车城、马陆、祁连山路、康新公路的
+ *   单渡线。
  */
 const tails: TailDef[] = [
   // 花桥：站西两条尾轨就是两正线延长线，尾轨之间只有一组交叉渡线（图上单个 X）。
@@ -125,12 +125,6 @@ const sidings: SidingDef[] = [
   // 西北端外有车挡；离站台近的是它东南端的道岔，再往站台是一组单渡线（见
   // crossovers）。长度【假设】。
   { id: 'ML', name: '马陆存车线', station: 11, side: 'west', at: -330, length: 560, connect: 'UP', lane: 'outUP', turnback: false, link: { main: 'UP', at: 420 } },
-  // 东方体育中心：站西北两正线之间短存车线。东南端双Y接两正线；西北端
-  // 接上行正线（图上西北端那根是存车线自己的渡线，不是独立单渡线），
-  // 渡线外侧车挡。link 位置同南翔【假设】。
-  { id: 'DFY', name: '东方体育中心短存车线', station: 30, side: 'west', at: -260, length: 560, connect: 'both', turnback: false, link: { main: 'UP', at: 300 } },
-  // 龙耀路：站东一条短尽头线，从南侧下行正线向东北分出，尾端车挡。
-  { id: 'LYL', name: '龙耀路短尽头线', station: 29, side: 'east', at: 180, length: 200, connect: 'DN', turnback: false },
   // 城北路停车场：嘉定北站东（数据 west），在下行正线外侧。图上两条出入段线都只接下行正线：
   // 近处一条在站台东端和 X 之间分出，远处一条在 X 以东、正线车挡以西分出；两条线之间在段内
   // 还有一组剪刀。出段车走近处那条，直接到下行站台；上行到达的回段车过 X 后走远处那条【假设】
@@ -154,23 +148,23 @@ const loops: CoreLineData['LAYOUT']['loops'] = [
   { id: 'YJL', name: '云锦路中间存车线', station: 28, west: -210, east: 210 },
   // 三林：站内中间折返线，两座岛式站台夹中间线，两端各一组交叉渡线接两正线；
   // 这两组渡线已由 loop 的双Y生成，不再另列 crossovers。
-  { id: 'SL', name: '三林中间折返线', station: 31, west: -210, east: 210, platform: true },
+  { id: 'SL', name: '三林中间折返线', station: 31, west: -210, east: 210, platform: true, island: 'both' },
   // 真如：两正线之间一条中间线，两端各双Y接两正线，车挡在道岔外侧的短尽头；
   // 中间线有站台面（和上行正线共用一座岛式站台）。
 
   { id: 'ZR', name: '真如中间线', station: 19, west: -210, east: 210, platform: true },
 ];
 const crossovers: CrossoverDef[] = [
+  { station: 0, offset: 215, kind: '\\' },  // 花桥站东（站前）单渡线
+  { station: 2, offset: -215, kind: '/' },  // 兆丰路站西单渡线
+  { station: 2, offset: 215, kind: '/' },   // 兆丰路站东单渡线
   { station: 3, offset: 250, kind: 'X' },   // 安亭站东交叉渡线
   { station: 4, offset: 215, kind: '\\' },  // 上海汽车城站东单渡线
   { station: 6, offset: -280, kind: 'X' },  // 上海赛车场站西交叉渡线（夹在车辆段两条道岔之间）
   { station: 6, offset: 230, kind: 'X' },   // 上海赛车场站东交叉渡线
   { station: 11, offset: -200, kind: '\\' }, // 马陆站西北单渡线（上行端在西北、下行端靠站台）
-  // 上海赛车场站东交叉渡线（X）在往嘉定新城的汇入咽喉里，位于本段正线端部以外；
-  // 公共配线生成器只能在本段正线端部以内画渡线，LAYOUT.crossovers 放不下，见汇报【待定】。
   { station: 10, offset: 150, kind: 'X' },  // 嘉定新城站南交叉渡线（在支线并线点以北）
   { station: 16, offset: -215, kind: '/' }, // 祁连山路站西单渡线
-  { station: 30, offset: 200, kind: '\\' }, // 东方体育中心东南端单渡线
   { station: 38, offset: -215, kind: '\\' },// 康新公路站西单渡线
 ];
 const depots: DepotDef[] = [
@@ -255,7 +249,7 @@ export const LINE11_CORE: CoreLineData = {
   LAYOUT: {
     tails, pairs, sidings, loops, crossovers, depots,
     zones: [
-      { id: 'ZC1', name: 'ZC1 花桥—上海赛车场', fromStation: 0, toStation: 6 },
+      { id: 'ZC1', name: 'ZC1 花桥—嘉定新城', fromStation: 0, toStation: 6 }, // 含支线到嘉定新城的区间（用户 2026-11-14）
       { id: 'ZC2', name: 'ZC2 嘉定北—南翔', fromStation: 7, toStation: 13 },
       { id: 'ZC3', name: 'ZC3 桃浦新村—龙华', fromStation: 14, toStation: 27 },
       { id: 'ZC4', name: 'ZC4 云锦路—迪士尼', fromStation: 28, toStation: 39 },

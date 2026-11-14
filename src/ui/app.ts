@@ -69,7 +69,7 @@ function overviewParams(topo: Topology, vw: number, vh: number, zone = -1): Geom
     chainFrom: a, chainTo: b, rows, width, marginL: 150, marginR: 150, rowH, top: 0,
     upY: 200 + off, midY: 240 + off, dnY: 280 + off,
     depotDy: { q: 50, z: 66, j1: 80, j2: 94, gate: 108 + off }, detail: false, padBottom: fits ? 0 : PAD, padTop: fits ? 0 : PAD,
-    ...(z ? { lengthScale: true, nodeMargin: 300 } : {}),
+    ...(z ? { lengthScale: true, nodeMargin: 300, marginMainsOnly: true } : {}),
   };
 }
 

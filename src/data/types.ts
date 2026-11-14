@@ -92,6 +92,10 @@ export interface LoopDef {
     west: number;
     east: number;
     platform?: boolean;
+    /** With `platform`: the main whose island the middle-track face shares (default UP, 广兰路);
+     * 'both' when an island lies on each side of the middle track (三林). Its waiting passengers
+     * are those of that main's face (UP for 'both'). */
+    island?: 'UP' | 'DN' | 'both';
     /** Permit a protected pull-out and reversal for entry from either main platform. */
     localEntryShunt?: boolean;
 }
