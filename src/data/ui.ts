@@ -30,4 +30,6 @@ export interface LineUiData {
   stationNameLines: Record<string, [string, string]>;
   transferColors: Record<string, number>;
   overviewWidth: number;
+  /** whole-line overview drawn on this many rows (default: whichever count gives the largest zoom) */
+  overviewRows?: number;
 }

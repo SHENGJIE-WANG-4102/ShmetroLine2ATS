@@ -46,12 +46,15 @@ function defaultScale(): number {
  * Overview geometry for a viewport: wrap the line over the number of rows
  * that lets the whole line be seen at the largest zoom (1 = full size).
  */
-function overviewParams(topo: Topology, vw: number, vh: number, zone = -1): GeomParams {
+/** drawnWidth: the width the drawing actually came out at (rows stretched to their platforms and
+ * tracks), for a fixed row count to fit its rows' height to the zoom that width allows */
+function overviewParams(topo: Topology, vw: number, vh: number, zone = -1, drawnWidth?: number): GeomParams {
   const [lo, hi] = lineWindow(topo);
   // one ZC area (D188): its own stretch of line, twice the overview's room, intervals to length
   const z = topo.zones[zone];
   const a = z ? Math.max(lo, z.chainFrom) : lo, b = z ? Math.min(hi, z.chainTo) : hi;
   const NEED = LINE.ui.overviewWidth * (z ? 0.5 : 1); // world width the whole line needs for readable station names
+  const fixed = z ? undefined : LINE.ui.overviewRows;
   const BASE = 500; // minimum row height
   const PAD = 80; // room for the first row's windows / last row's names when zoomed out
   let rows = 1;
@@ -60,10 +63,19 @@ function overviewParams(topo: Topology, vw: number, vh: number, zone = -1): Geom
     const z = Math.min(1, vw / Math.max(vw, NEED / n), n * BASE <= vh ? 1 : (vh - 2 * PAD) / (n * BASE));
     if (z > best + 1e-3) { best = z; rows = n; }
   }
-  const width = Math.max(Math.round(vw), Math.ceil(NEED / rows));
   // spare height goes into the rows (more room for the label bands around the tracks)
-  const fits = rows * BASE <= vh;
-  const rowH = Math.min(BASE + 160, Math.floor(fits ? vh / rows : (vh - 2 * PAD) / (rows * best)));
+  let fits = rows * BASE <= vh;
+  let rowH = Math.min(BASE + 160, Math.floor(fits ? vh / rows : (vh - 2 * PAD) / (rows * best)));
+  if (fixed) {
+    // a line drawn on a fixed number of rows: rows packed closer (FIXED_BASE), and the rows share
+    // the whole height at the zoom the width or that height allows, nothing left above or below
+    const FIXED_BASE = 380;
+    rows = fixed;
+    best = Math.min(1, vw / Math.max(vw, drawnWidth ?? NEED / rows), vh / (rows * FIXED_BASE));
+    rowH = Math.floor(vh / (rows * best));
+    fits = true;
+  }
+  const width = Math.max(Math.round(vw), Math.ceil(NEED / rows));
   const off = Math.round((rowH - BASE) / 2);
   return {
     chainFrom: a, chainTo: b, rows, width, marginL: 150, marginR: 150, rowH, top: 0,
@@ -247,7 +259,12 @@ export class App {
   private buildOverview(p: GeomParams, key: string) {
     const old = this.overview;
     const follow = old?.follow ?? -1;
-    const geom = new Geometry(this.topo, p);
+    let geom = new Geometry(this.topo, p);
+    // a fixed row count fills the height at the zoom the drawn width really allows
+    if (LINE.ui.overviewRows && !p.lengthScale) {
+      const fitted = overviewParams(this.topo, this.R.view.w, this.R.view.h, -1, geom.width);
+      if (fitted.rowH !== p.rowH) { p = fitted; geom = new Geometry(this.topo, p); }
+    }
     const handlers: ViewHandlers = {
       device: (sel) => this.store.select(sel),
       station: (st) => this.store.select({ kind: 'station', id: st }),

@@ -30,4 +30,5 @@ export const LINE11_UI: LineUiData = {
   },
   pisRouteBadges: {},
   overviewWidth: 9000, // 【假设】ATS 概览画布尺寸，仅布局用途
+  overviewRows: 4, // 用户决定（2026-11-14）：全线总览画成 4 排
 };
