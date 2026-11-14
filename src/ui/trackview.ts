@@ -296,6 +296,21 @@ export class TrackView {
     const detail = this.mode === 'detail';
     const L = this.L;
 
+    // a run that joins another: where its own stretch ends, and where it comes in at that station
+    if (!detail) for (const st of this.topo.stations) {
+      if (!st.joins) continue;
+      const to = this.topo.stations[st.joins.station].name;
+      const last = this.topo.links[st.joins.ways.DN.at(-1)!];
+      const end = geom.linkSegs(last.id).at(-1);
+      const far = geom.pos[last.b];
+      const lab = (s: string, x: number, y: number) => {
+        const t = this.mkText(s, 20, C.line);
+        this.addStatic({ t, kind: 'cont', prio: 50, wx: x, wy: y, cands: [{ dx: 0, dy: -12 }], w: textWidth(s, 20), h: 24, minZoom: 0 });
+      };
+      if (end) lab(`接${to}`, end.x2 + 12, geom.rows[end.row].top + L.midY);
+      if (far) lab(`接${st.name}`, far.x - textWidth(`接${st.name}`, 20) - 12, far.y + 26);
+    }
+
     // background (click clears selection)
     const bg = new Graphics().rect(0, 0, geom.width, geom.height).fill({ color: C.bg, alpha: 0.001 });
     bg.eventMode = 'static';

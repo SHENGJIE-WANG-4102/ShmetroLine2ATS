@@ -198,13 +198,13 @@ export class Geometry {
     // main tracks
     for (const n of topo.nodes) {
       if (!inWin(n.chain)) continue;
-      const main = n.links.map((l) => topo.links[l]).find(isMain);
+      const main = n.links.map((l) => topo.links[l]).find((l) => isMain(l) && !(l.jump && l.b === n.id));
       if (main) pos[n.id] = at(n.chain, main.track === 'UP' ? p.upY : p.dnY);
     }
     // sidings, on the lane the topology gave them (fraction of the UP→DN gap)
     for (const n of topo.nodes) {
       if (pos[n.id] || !inWin(n.chain)) continue;
-      if (!n.links.some((l) => topo.links[l].track === 'SID')) continue;
+      if (!n.links.some((l) => topo.links[l].track === 'SID' || topo.links[l].jump)) continue;
       const d = n.pos[0];
       const f = d ? (d.y - topo.layout.rowTop[d.row] - topo.layout.upY) / (topo.layout.dnY - topo.layout.upY) : 0.5;
       pos[n.id] = at(n.chain, p.upY + f * (p.dnY - p.upY));
@@ -245,8 +245,9 @@ export class Geometry {
     const a = this.pos[l.a];
     const b = this.pos[l.b];
     if (!a || !b) return [];
-    if (a.row === b.row) return [{ row: a.row, x1: a.x, y1: a.y, x2: b.x, y2: b.y }];
-    // wraps (main links only): split at each row boundary
+    if (a.row === b.row && !l.jump) return [{ row: a.row, x1: a.x, y1: a.y, x2: b.x, y2: b.y }];
+    // wraps (main links only): split at each row boundary; a joining run's last piece is drawn
+    // along its own stretch of chainage and not across to the station it joins
     const out: { row: number; x1: number; y1: number; x2: number; y2: number }[] = [];
     const y = a.y - this.rows[a.row].top;
     let c0 = Math.min(l.chainA, l.chainB);
@@ -269,7 +270,7 @@ export class Geometry {
     const b = this.pos[l.b];
     if (!a || !b) return null;
     const t = Math.min(1, Math.max(0, off / l.len));
-    if (a.row === b.row) {
+    if (a.row === b.row && !l.jump) {
       let x = a.x + (b.x - a.x) * t;
       const platform = topo.platforms[l.platform];
       if (platform) {
@@ -299,7 +300,7 @@ export class Geometry {
     const a = this.pos[l.a];
     const b = this.pos[l.b];
     if (!a || !b) return [];
-    if (a.row === b.row) {
+    if (a.row === b.row && !l.jump) {
       const p1 = this.linkPoint(lid, from)!;
       const p2 = this.linkPoint(lid, to)!;
       return [{ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y }];

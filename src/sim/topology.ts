@@ -103,6 +103,9 @@ export interface TLink {
   limit: number; // km/h
   zone: number;
   platform: number; // -1 if none
+  /** the last plain piece of a joining run: its chainage runs on along the run's own stretch,
+   * while its `b` end stands at the station the run joins */
+  jump?: true;
   /** Paper-specific conversion-track direction; other links remain bidirectional. */
   depotFlow?: 'in' | 'out';
 }
@@ -923,6 +926,7 @@ export function buildTopology(): Topology {
     for (let k = 1; k <= n; k++) {
       const to = k === n ? far : newNode('joint', from.chain + plainLen * k / n);
       const l = newLink(last.id, to.id, plainLen / n, jb.t, normal, from.chain + plainLen * (k - 1) / n, from.chain + plainLen * k / n);
+      if (k === n) l.jump = true;
       jb.plain.push(l.id);
       last = to;
     }
@@ -1941,6 +1945,11 @@ export function buildTopology(): Topology {
     });
   }
   for (const lb of loops) placeLane([...lb.ends, ...lb.middle], laneY(lb.def.platform ? 'midDN' : 'mid'));
+  // a joining run: along its own stretch on the main's lane, then outside the main it meets
+  for (const jb of joins) {
+    for (const lid of jb.plain) if (nodes[links[lid].a].pos.length === 0) nodes[links[lid].a].pos = posFor(nodes[links[lid].a].chain, jb.t === 'UP' ? g.upY : g.dnY);
+    placeLane([jb.platLink ?? jb.leg!], laneY(jb.t === 'UP' ? 'outUP' : 'outDN'));
+  }
   for (const n of nodes) {
     if (n.pos.length || n.links.length !== 2 || !n.links.every((lid) => links[lid].track === 'CON')) continue;
     const ends = n.links.map((lid) => nodes[links[lid].a === n.id ? links[lid].b : links[lid].a]);
