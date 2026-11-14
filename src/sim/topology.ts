@@ -19,7 +19,7 @@ import {
   type CrossoverKind, type SidingLane, type LeadDef,
 } from '../data/current';
 
-import { ahead } from './topologyOrder';
+import { ahead, nextStations } from './topologyOrder';
 import { SIGNAL_MARGIN } from './safetyLimits';
 export { ahead, between, directionToward, nextStations, stationPath } from './topologyOrder';
 
@@ -826,6 +826,14 @@ export function buildTopology(): Topology {
   // feature-side signal positions become hard boundaries (they already are switch bounds)
   // equipped stations: any feature within 1.2 km of the station centre
   const equipped = chains.map((c, i) => features.some((f) => f.station === i || f.pts.some((p) => Math.abs(p.ch - c) < 1200)));
+
+  // a joining run's mains run on past the switches beyond its last station (a crossover in the
+  // throat before the join); those lie in the chainage gap after the run, where no other run is
+  for (const t of ['DN', 'UP'] as const) for (const e of mainPts[t]) if (e.kind === 'end' && e.join) {
+    const last = chains[runLast(e.run!)];
+    const next = Math.min(...mainPts[t].filter((p) => p.kind === 'end' && p.run === e.run! + 1).map((p) => p.ch));
+    for (const p of mainPts[t]) if (p.kind === 'switch' && p.ch > last && p.ch < next) e.ch = Math.max(e.ch, p.ch + SW_HALF + JOIN_STUB);
+  }
 
   // plain-line subdivision and joints
   const sectionBounds: Record<'DN' | 'UP', number[]> = { DN: [], UP: [] };
@@ -1649,6 +1657,9 @@ export function buildTopology(): Topology {
           .sort((a, b) => a.len - b.len)[0];
         if (best) return { station: S, reverse, path: own.indexOf(best.ld) };
       }
+      // nothing runs on from the end of the line, or comes in from beyond it: there the other
+      // direction's way stands in
+      if (!nextStations(exit ? t : t === 'DN' ? 'UP' : 'DN', S, STATIONS.length).length) return portal(t === 'DN' ? 'UP' : 'DN', exit);
       throw new Error(`${dp.name}: no ${exit ? 'exit' : 'entry'} path for ${t} at ${STATIONS[S].name}`);
     };
     depots.push({

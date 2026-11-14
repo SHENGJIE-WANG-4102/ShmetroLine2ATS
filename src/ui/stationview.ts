@@ -18,7 +18,7 @@ import type { Container } from 'pixi.js';
 import { h, clear } from './dom';
 import type { Store, Selection } from './store';
 import type { Topology } from '../sim/topology';
-import { Geometry, stationWindow } from './geometry';
+import { Geometry, depotBelow, stationWindow } from './geometry';
 import { TrackView } from './trackview';
 import { confirmAndSend, toast } from './confirm';
 import { SEC, SW, type Snapshot } from '../sim/model';
@@ -107,7 +107,8 @@ export class StationView {
     this.stSel.value = String(st);
     const [a, b] = stationWindow(this.topo, st);
     const geom = new Geometry(this.topo, {
-      chainFrom: a, chainTo: b, rows: 1, width: Math.max(1600, vw), marginL: 170, marginR: 170, rowH: 760, top: 0,
+      chainFrom: a, chainTo: b, rows: 1, width: Math.max(1600, vw), marginL: 170, marginR: 170, top: 0,
+      rowH: this.topo.depots.some((d) => d.station === st && depotBelow(this.topo, d)) ? 900 : 760,
       upY: 360, midY: 440, dnY: 520, depotDy: { q: 60, z: 95, j1: 125, j2: 150, gate: 200 }, detail: true, nodeMargin: 300,
     });
     const old = this.view;

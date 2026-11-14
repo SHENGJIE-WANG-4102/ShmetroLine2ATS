@@ -687,9 +687,10 @@ export class TrackView {
       const w = detail ? 520 : 420;
       const hgt = detail ? 150 : 86;
       const x0 = gp.x - w / 2;
-      const y0 = detail ? gp.y - hgt - 6 : top + 6;
+      const below = gp.y > top + L.dnY;
+      const y0 = below ? gp.y + 6 : detail ? gp.y - hgt - 6 : top + 6;
       const box = new Graphics().roundRect(x0, y0, w, hgt, 4).fill({ color: 0x0a1520 }).stroke({ width: 1.5, color: 0x34506b });
-      box.moveTo(gp.x, gp.y).lineTo(gp.x, y0 + hgt).stroke({ width: 4, color: C.trackFreeSide });
+      box.moveTo(gp.x, gp.y).lineTo(gp.x, below ? y0 : y0 + hgt).stroke({ width: 4, color: C.trackFreeSide });
       box.eventMode = 'static';
       box.cursor = 'pointer';
       box.on('pointertap', (e: FederatedPointerEvent) => { e.stopPropagation(); if (!this.dragMoved) this.h.depot(i); });

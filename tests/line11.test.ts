@@ -81,6 +81,52 @@ describe('line 11 branch, layout and plan', () => {
     expect(reaches(platform(station('JDB'), 'DN'), platform(DSL, 'DN'))).toBe(true);
   });
 
+  it('joins the 嘉定北 yard to the DN main only, one lead on each side of the crossover', () => {
+    const JDB = station('JDB'), at = topo.stations[JDB].chain;
+    const yard = topo.depots.find(depot => depot.station === JDB)!;
+    // walk the lead's connector from its stub to the switch on the main
+    const leads = yard.transferPaths.map(path => {
+      const stub = topo.links[path.stub];
+      let node = topo.nodes[stub.a === path.throat ? stub.b : stub.a], link = path.stub;
+      while (node.kind !== 'switch') {
+        link = node.links.find(l => l !== link)!;
+        node = topo.nodes[topo.links[link].a === node.id ? topo.links[link].b : topo.links[link].a];
+      }
+      return { flow: path.flow, track: node.links.map(l => topo.links[l].track), chain: node.chain - at };
+    });
+    expect(leads.every(lead => lead.track.includes('DN') && !lead.track.includes('UP'))).toBe(true);
+    const cross = topo.nodes.filter(node => node.kind === 'switch' && Math.abs(node.chain - at) < 800 && node.links.some(l => topo.links[l].track === 'X')).map(node => node.chain - at);
+    const out = leads.find(lead => lead.flow === 'out')!, into = leads.find(lead => lead.flow === 'in')!;
+    // beyond the platform end, tail-ward: platform, exit lead, crossover, entry lead
+    expect(out.chain).toBeLessThan(-105);
+    expect(out.chain).toBeGreaterThan(Math.max(...cross));
+    expect(into.chain).toBeLessThan(Math.min(...cross));
+    // trains leave straight onto the DN platform; arrivals on the UP main go in without changing ends
+    expect(yard.portals.exit.DN).toMatchObject({ reverse: false });
+    expect(yard.portals.entry.UP).toMatchObject({ reverse: false });
+  });
+
+  it('keeps 上海赛车场 crossovers on both sides of the platform, the east one before the join', () => {
+    const SSC = station('SSC'), at = topo.stations[SSC].chain;
+    const cross = (t: string) => topo.nodes.filter(node => node.kind === 'switch' && Math.abs(node.chain - at) < 600
+      && node.links.some(l => topo.links[l].track === t) && node.links.some(l => topo.links[l].track === 'X')).map(node => node.chain - at);
+    for (const t of ['DN', 'UP']) {
+      expect(cross(t).some(ch => ch < 0)).toBe(true);
+      expect(cross(t).some(ch => ch > 0)).toBe(true);
+    }
+    // the depot leads leave the UP main only
+    const yard = topo.depots.find(depot => depot.station === SSC)!;
+    for (const path of yard.transferPaths) {
+      const stub = topo.links[path.stub];
+      let node = topo.nodes[stub.a === path.throat ? stub.b : stub.a], link = path.stub;
+      while (node.kind !== 'switch') {
+        link = node.links.find(l => l !== link)!;
+        node = topo.nodes[topo.links[link].a === node.id ? topo.links[link].b : topo.links[link].a];
+      }
+      expect(node.links.map(l => topo.links[l].track)).toContain('UP');
+    }
+  });
+
   it('runs UP from 嘉定新城 to either branch', () => {
     const JDC = station('JDC');
     expect(reaches(platform(JDC, 'UP'), platform(station('JDB'), 'UP'))).toBe(true);

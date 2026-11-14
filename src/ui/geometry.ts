@@ -209,8 +209,9 @@ export class Geometry {
       const f = d ? (d.y - topo.layout.rowTop[d.row] - topo.layout.upY) / (topo.layout.dnY - topo.layout.upY) : 0.5;
       pos[n.id] = at(n.chain, p.upY + f * (p.dnY - p.upY));
     }
-    // depot transfer tracks: from the end of each lead (on its lane) up over
-    // the UP main to the yard gate, leads of one depot side by side
+    // depot transfer tracks: from the end of each lead (on its lane) to the yard gate, leads of one
+    // depot side by side. The yard is drawn above the UP main; in a station drawing a yard whose
+    // leads leave the DN main on its outer side is drawn below it, as it lies
     for (const d of topo.depots) {
       d.transferPaths.forEach((path, k) => {
         const T = topo.nodes[path.throat];
@@ -219,9 +220,10 @@ export class Geometry {
         const top = this.rows[row].top;
         const s = Math.sign(topo.nodes[path.gate].chain - T.chain) || 1;
         const x = this.chainX(T.chain, row) + s * (10 + 18 * k);
-        pos[path.gate] = { row, x, y: top + p.upY - p.depotDy.gate };
-        pos[topo.links[path.links[2]].a] = { row, x, y: top + p.upY - p.depotDy.j2 };
-        pos[topo.links[path.links[1]].a] = { row, x, y: top + p.upY - p.depotDy.j1 };
+        const y = (dy: number) => top + (p.detail && depotBelow(topo, d) ? p.dnY + dy : p.upY - dy);
+        pos[path.gate] = { row, x, y: y(p.depotDy.gate) };
+        pos[topo.links[path.links[2]].a] = { row, x, y: y(p.depotDy.j2) };
+        pos[topo.links[path.links[1]].a] = { row, x, y: y(p.depotDy.j1) };
       });
     }
     // the rest (diagonal halves: crossovers, connectors, depot legs) sit between their neighbours
@@ -464,6 +466,14 @@ export function stationWindow(topo: Topology, st: number): [number, number] {
     lo = Math.min(lo, c - 120); hi = Math.max(hi, c + 120);
   }
   return [lo, hi];
+}
+
+/** Do the depot's leads all leave on the outer side of the DN main? */
+export function depotBelow(topo: Topology, d: Topology['depots'][number]): boolean {
+  return d.transferPaths.every((path) => {
+    const at = topo.nodes[path.throat].pos[0];
+    return !!at && at.y - topo.layout.rowTop[at.row] > topo.layout.dnY;
+  });
 }
 
 /** whole-line chain window */
