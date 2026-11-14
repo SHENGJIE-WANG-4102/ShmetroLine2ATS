@@ -45,10 +45,23 @@ export interface CrossoverDef {
 export interface LeadDef {
     depot: string;
     flow?: 'in' | 'out';
-    /** The lead runs on past the yard's points into a 牵出线 this long (m) to a buffer; the yard
-     * joins it facing back towards the main, so a train changes ends at the 牵出线's end on its way
-     * in and on its way out (嘉定北). */
-    shunt?: number;
+    /** With the depot's DepotDef.shunts: the 牵出线 (0 nearer the main) whose yard track this lead's
+     * moves come from or go to (default: the lead's order among the depot's leads). */
+    yardLine?: 0 | 1;
+}
+/** Two parallel 牵出线 off a yard's throat, out to buffers (嘉定北 城北路停车场). The depot's leads
+ * end on line 0 (the one nearer the main), joining it towards the buffers; a move in or out runs to
+ * a 牵出线's end, changes ends there and runs back into the yard or down a lead. Offsets are from
+ * the depot station's centre. */
+export interface ShuntGroupDef {
+    /** where the lines' yard tracks start (the yard lies on the far side of it from the buffers) */
+    yard: number;
+    /** the buffers */
+    end: number;
+    /** drawing lanes of line 0 and line 1 */
+    lanes: [SidingLane, SidingLane];
+    /** crossovers between the lines: 'X' a scissors; a single one names the line whose turnout lies nearer the yard */
+    crossovers: ({ at: number; kind: 'X' } | { at: number; kind: 'single'; nearYard: 0 | 1 })[];
 }
 export interface SidingDef {
     purpose?: 'interline';
@@ -67,8 +80,8 @@ export interface SidingDef {
         at: number;
     };
 }
-/** farUP / farDN: a second lane outside outUP / outDN, for two tracks side by side out there */
-export type SidingLane = 'mid' | 'midUP' | 'midDN' | 'outUP' | 'outDN' | 'farUP' | 'farDN';
+/** farUP / farDN, deepUP / deepDN: further lanes outside outUP / outDN, for tracks side by side out there */
+export type SidingLane = 'mid' | 'midUP' | 'midDN' | 'outUP' | 'outDN' | 'farUP' | 'farDN' | 'deepUP' | 'deepDN';
 export interface PairStubDef {
     link?: { main: 'UP' | 'DN'; at: number };
     id: string;
@@ -134,6 +147,7 @@ export interface DepotDef {
     capacity: number;
     exitTime: number;
     source: string;
+    shunts?: ShuntGroupDef;
 }
 export interface FixedRun {
     from: string;

@@ -258,8 +258,9 @@ export interface TDepot {
   /** leads into the yard: transfer track t0, t1, t2 (t2 ends at the gate), the
    *  joint where the lead's stub ends, and the depot exit signal (-1 on an entry-only lead) */
   transferPaths: { gate: number; links: number[]; throat: number; flow: 'in' | 'out' | 'shared'; exitSignal: number; /** the lead's stub link (a turnback berth may lie on it) */ stub: number;
-    /** a 牵出线 lead (LeadDef.shunt): where moves in and out stop and change ends */
-    shuntBerth?: number;
+    /** a lead into 牵出线 (DepotDef.shunts): where moves in and out stop and change ends, its own
+     * yard track's line first */
+    shuntBerths?: number[];
     /** Outbound work reuses the physical door-test stop ahead of the exit signal. */
     exitWorkBerth?: number;
   }[];
@@ -502,8 +503,9 @@ interface LeadOut {
   /** transfer track t0, t1, t2 */
   links: number[];
   stub: number;
-  /** the 牵出线 beyond the yard's points where moves change ends (LeadDef.shunt) */
-  shunt?: number;
+  /** with DepotDef.shunts: the depot's 牵出线 group (shuntGroups), and the line whose yard track it uses */
+  group?: number;
+  yardLine?: 0 | 1;
   /** chainage of the lead's main-line turnout(s) */
   mainCh: number;
   station: number;
@@ -975,6 +977,21 @@ export function buildTopology(): Topology {
    * holds the berth; with a `link` turnout the stub is split around it.
    */
   const leads: LeadOut[] = [];
+  /** a transfer track from `from` running `s`-wards into yard `di`: t0 → j1 → t1 → j2 → t2 → gate */
+  const yardTrack = (from: TNode, s: Dir, di: number, flow: LeadDef['flow']) => {
+    const j1 = newNode('joint', from.chain + s * 20);
+    const j2 = newNode('joint', from.chain + s * 35);
+    const gate = newNode('end', from.chain + s * 45);
+    gate.endKind = 'depot'; gate.depot = di;
+    const t0 = newLink(from.id, j1.id, SW_HALF + 10, 'DEP', 0, from.chain, j1.chain);
+    const t1 = newLink(j1.id, j2.id, 220, 'DEP', 0, j1.chain, j2.chain);
+    const t2 = newLink(j2.id, gate.id, 220, 'DEP', 0, j2.chain, gate.chain);
+    for (const l of [t0, t1, t2]) {
+      l.limit = TURNOUT_SPEEDS.depot;
+      if (flow) l.depotFlow = flow;
+    }
+    return { j1: j1.id, gate: gate.id, links: [t0.id, t1.id, t2.id] };
+  };
   const buildStub = (bnd: TNode, s: Dir, length: number, station: number, lead: LeadDef | undefined, mainCh: number,
     k?: SidingBuild['k']): number => {
     const endCh = bnd.chain + s * length;
@@ -1005,41 +1022,18 @@ export function buildTopology(): Topology {
     // depot lead: stub → throat T → t0 → j1 → t1 → j2 → t2 → gate
     const di = LAYOUT.depots.findIndex((x) => x.id === lead.depot);
     if (di < 0) throw new Error(`unknown depot ${lead.depot}`);
-    const T = newNode(lead.shunt ? 'switch' : 'joint', endCh);
+    // into 牵出线 (DepotDef.shunts): the lead ends at its turnout on line 0; the lines and their
+    // yard tracks are laid once all the depot's leads exist (shuntGroups)
+    const grouped = LAYOUT.depots[di].shunts !== undefined;
+    const T = newNode(grouped ? 'switch' : 'joint', endCh);
     const ls = newLink(from.id, T.id, Math.abs(endCh - from.chain), 'SID', 0, from.chain, endCh);
     ls.limit = TURNOUT_SPEEDS.siding;
-    // with a 牵出线 the yard track leaves the lead's end backwards (towards the main), and the
-    // lead runs on into the 牵出线: T's toe faces it, normal back along the stub, reverse to the yard
-    const back: Dir = lead.shunt ? -s as Dir : s;
-    let shunt: number | undefined;
-    if (lead.shunt) {
-      const sw = newSwitch('siding', station);
-      T.sw = sw.id; sw.nodes.push(T.id);
-      const J = newNode('joint', endCh + s * SW_HALF);
-      const B = newNode('end', endCh + s * lead.shunt);
-      B.endKind = 'buffer';
-      const sp = newLink(T.id, J.id, SW_HALF, 'SID', 0, T.chain, J.chain);
-      const sh = newLink(J.id, B.id, lead.shunt - SW_HALF, 'SID', 0, J.chain, B.chain);
-      sp.limit = sh.limit = TURNOUT_SPEEDS.siding;
-      T.toe = sp.id; T.normal = ls.id;
-      // a move stops 15 m short of the buffer, changes ends, and leaves past the exit signal at J
-      sidingBerthInfo.push({ name: `${LAYOUT.depots.find((x) => x.id === lead.depot)!.name}牵出线`, station, turnback: false,
-        link: sh.id, offset: sh.len - 15, dir: 1, exitNode: J.id, exitLink: sp.id });
-      shunt = sh.id;
+    if (grouped) {
+      leads.push({ depot: di, flow: lead.flow ?? 'shared', throat: T.id, j1: -1, gate: -1, links: [], stub: ls.id, mainCh, station, s, group: -1, yardLine: lead.yardLine });
+      return ls.id;
     }
-    const j1 = newNode('joint', endCh + back * 20);
-    const j2 = newNode('joint', endCh + back * 35);
-    const gate = newNode('end', endCh + back * 45);
-    gate.endKind = 'depot'; gate.depot = di;
-    const t0 = newLink(T.id, j1.id, SW_HALF + 10, 'DEP', 0, T.chain, j1.chain);
-    if (lead.shunt) T.reverse = t0.id;
-    const t1 = newLink(j1.id, j2.id, 220, 'DEP', 0, j1.chain, j2.chain);
-    const t2 = newLink(j2.id, gate.id, 220, 'DEP', 0, j2.chain, gate.chain);
-    for (const l of [t0, t1, t2]) {
-      l.limit = TURNOUT_SPEEDS.depot;
-      if (lead.flow) l.depotFlow = lead.flow;
-    }
-    leads.push({ depot: di, flow: lead.flow ?? 'shared', throat: T.id, j1: j1.id, gate: gate.id, links: [t0.id, t1.id, t2.id], stub: ls.id, shunt, mainCh, station, s });
+    const { j1, gate, links: yard } = yardTrack(T, s, di, lead.flow);
+    leads.push({ depot: di, flow: lead.flow ?? 'shared', throat: T.id, j1, gate, links: yard, stub: ls.id, mainCh, station, s });
     return ls.id;
   };
   for (const sb of sidings) {
@@ -1117,6 +1111,83 @@ export function buildTopology(): Topology {
       sidingBerthInfo.push({ name: st.name, station: pb.def.station, turnback: st.turnback ?? true, link: ls.id, offset: ls.len - 15, dir: 1, exitNode: bnd.id, exitLink: lt.id, bidirectional: !!far, turnbackDistance: st.turnbackDistance });
     });
   }
+
+  // 牵出线 groups (DepotDef.shunts): two lines from the yard's tracks out to buffers, the leads'
+  // turnouts on line 0, crossovers between the lines. Each line runs yard → buffer (links a → b).
+  interface ShuntGroup { depot: number; lines: { yard: number; exit: number; out: number; links: number[] }[]; diagonals: number[][] }
+  const shuntGroups: ShuntGroup[] = [];
+  LAYOUT.depots.forEach((dp, di) => {
+    const def = dp.shunts;
+    if (!def) return;
+    const own = leads.filter((ld) => ld.depot === di);
+    if (!own.length) throw new Error(`${dp.name}: 牵出线 without a lead`);
+    const c = chains[dp.station], s = Math.sign(def.end - def.yard) as Dir;
+    const sw = (ch: number, id?: number) => {
+      const n = newNode('switch', ch);
+      n.sw = id ?? newSwitch('siding', dp.station).id;
+      switches[n.sw].nodes.push(n.id);
+      return n;
+    };
+    // per line: its turnouts, each with its diverging link
+    const points: { node: TNode; div: number }[][] = [[], []];
+    for (const ld of own) {
+      const T = nodes[ld.throat];
+      T.sw = newSwitch('siding', dp.station).id;
+      switches[T.sw].nodes.push(T.id);
+      points[0].push({ node: T, div: ld.stub });
+    }
+    const diagonals: number[][] = [];
+    for (const xo of def.crossovers) {
+      const nears = xo.kind === 'X' ? [0, 1] as const : [xo.nearYard];
+      const diag: number[] = [];
+      for (const near of nears) {
+        // the turnout on line `near` lies nearer the yard, the other's nearer the buffers
+        const a = sw(c + xo.at - s * XO_HALF);
+        const b = sw(c + xo.at + s * XO_HALF, a.sw);
+        const l = newLink(a.id, b.id, 2 * XO_HALF + 1, 'SID', 0, a.chain, b.chain);
+        l.limit = TURNOUT_SPEEDS.siding;
+        points[near].push({ node: a, div: l.id });
+        points[1 - near].push({ node: b, div: l.id });
+        diag.push(l.id);
+      }
+      diagonals.push(diag);
+    }
+    const group: ShuntGroup = { depot: di, lines: [], diagonals };
+    for (const k of [0, 1]) {
+      const pts = points[k].sort((x, y) => s * (x.node.chain - y.node.chain));
+      const Y = newNode('joint', c + def.yard);
+      const J = newNode('joint', (pts.length ? pts[pts.length - 1].node.chain : c + def.yard) + s * SW_HALF);
+      const B = newNode('end', c + def.end);
+      B.endKind = 'buffer';
+      const seq = [Y, ...pts.map((p) => p.node), J, B];
+      const line: number[] = [];
+      for (let i = 1; i < seq.length; i++) {
+        const l = newLink(seq[i - 1].id, seq[i].id, Math.abs(seq[i].chain - seq[i - 1].chain), 'SID', 0, seq[i - 1].chain, seq[i].chain);
+        l.limit = TURNOUT_SPEEDS.siding;
+        line.push(l.id);
+      }
+      // a turnout's toe faces away from where its diverging track goes
+      pts.forEach((p, i) => {
+        const div = links[p.div], other = nodes[div.a === p.node.id ? div.b : div.a];
+        const toYard = s * (other.chain - p.node.chain) < 0;
+        p.node.toe = toYard ? line[i + 1] : line[i];
+        p.node.normal = toYard ? line[i] : line[i + 1];
+        p.node.reverse = p.div;
+      });
+      // a move stops 15 m short of the buffer, changes ends, and leaves past the exit signal at J
+      const out = line[line.length - 1];
+      sidingBerthInfo.push({ name: `${dp.name}牵出线${k + 1}`, station: dp.station, turnback: false,
+        link: out, offset: links[out].len - 15, dir: 1, exitNode: J.id, exitLink: line[line.length - 2] });
+      group.lines.push({ yard: Y.id, exit: J.id, out, links: line });
+    }
+    // each lead's moves use one line's yard track
+    own.forEach((ld, i) => {
+      const k = ld.yardLine ?? Math.min(i, 1);
+      const yard = yardTrack(nodes[group.lines[k].yard], -s as Dir, di, ld.flow === 'shared' ? undefined : ld.flow);
+      ld.j1 = yard.j1; ld.gate = yard.gate; ld.links = yard.links; ld.group = shuntGroups.length; ld.yardLine = k as 0 | 1;
+    });
+    shuntGroups.push(group);
+  });
 
   // loops: yw → bw → [platform] → be → ye, each Y joined to both mains
   for (const lb of loops) {
@@ -1315,11 +1386,17 @@ export function buildTopology(): Topology {
   }
   // depot transfer tracks: one section per link
   for (const ld of leads) for (const lid of ld.links) moveTo(lid, newSection('depot', 'DEP', links[lid].chainA).id);
-  // a 牵出线 (LeadDef.shunt): its turnout piece a switch section, the rest a siding section
-  for (const ld of leads) if (ld.shunt !== undefined) {
-    const T = nodes[ld.throat];
-    moveTo(T.toe!, newSection('switch', 'SID', T.chain).id);
-    moveTo(ld.shunt, newSection('siding', 'SID', links[ld.shunt].chainB).id);
+  // 牵出线 groups: each piece of line a section of its own (a switch section where it touches a
+  // turnout); a crossover's diagonals one section (a scissors' two cross each other)
+  for (const g of shuntGroups) {
+    for (const line of g.lines) for (const lid of line.links) {
+      const l = links[lid], sw = nodes[l.a].kind === 'switch' || nodes[l.b].kind === 'switch';
+      moveTo(lid, newSection(sw ? 'switch' : 'siding', 'SID', (l.chainA + l.chainB) / 2).id);
+    }
+    for (const diag of g.diagonals) {
+      const sec = newSection('switch', 'SID', links[diag[0]].chainA).id;
+      for (const lid of diag) moveTo(lid, sec);
+    }
   }
   // remove empty sections (from re-assignment) by compaction
   {
@@ -1514,11 +1591,11 @@ export function buildTopology(): Topology {
     // entry signal where the stub track ends (a turnback berth lies short of it)
     if (ld.flow !== 'in') addSignal(ld.j1, ld.links[0], 'depot');
     // (a 牵出线 lead: the move into the yard starts from the 牵出线's exit signal)
-    if (ld.flow !== 'out' && ld.shunt === undefined) addSignal(ld.throat, ld.links[0], 'home');
-    // a 牵出线: its entry signal stands at the joint past the yard's points (moves in from the
-    // main and out of the yard both pass it), so no route from the main runs on to its buffer
-    if (ld.shunt !== undefined) addSignal(links[ld.shunt].a, ld.shunt, 'home');
+    if (ld.flow !== 'out' && ld.group === undefined) addSignal(ld.throat, ld.links[0], 'home');
   }
+  // a 牵出线's entry signal stands past its last turnout (moves in from the main and out of the
+  // yard both pass it), so no route from the main runs on to its buffer
+  for (const g of shuntGroups) for (const line of g.lines) addSignal(line.exit, line.out, 'home');
 
   // ------------------------------------------------------------------ berths
   const berths: TBerth[] = [];
@@ -1693,11 +1770,11 @@ export function buildTopology(): Topology {
       // one running straight onto the main, not across the diamond
       for (const reverse of [false, true]) {
         const want: Dir = (reverse ? -n : n) as Dir;
-        // with a 牵出线 a move changes ends at its end: out from there, in as far as there
-        const shuntOut = (ld: LeadOut) => links[nodes[ld.throat].toe!].id;
+        // with 牵出线 a move changes ends at their end: out from its lead's turnout, in as far as there
+        const outs = (ld: LeadOut) => ld.group === undefined ? [] : shuntGroups[ld.group].lines.map((line) => line.out);
         const len = (ld: LeadOut) => exit
-          ? reachLen(ld.shunt === undefined ? ld.links[1] : shuntOut(ld), -1, 4000, (l, d) => l === plat && d === want)
-          : reachLen(plat, want, 4000, (l, d) => ld.shunt === undefined ? l === ld.links[2] && d === 1 : l === ld.shunt && d === 1);
+          ? reachLen(ld.group === undefined ? ld.links[1] : nodes[ld.throat].toe!, -1, 4000, (l, d) => l === plat && d === want)
+          : reachLen(plat, want, 4000, (l, d) => ld.group === undefined ? l === ld.links[2] && d === 1 : outs(ld).includes(l) && d === 1);
         const best = (exit ? exits : entries).map((ld) => ({ ld, len: len(ld) })).filter((x) => x.len < Infinity)
           .sort((a, b) => a.len - b.len)[0];
         if (best) return { station: S, reverse, path: own.indexOf(best.ld) };
@@ -1711,7 +1788,10 @@ export function buildTopology(): Topology {
       id, key: dp.id, name: dp.name, short: dp.short, station: dp.station, gateNode: inL.gate,
       gateLink: inL.links[2], outGateNode: outL.gate, outGateLink: outL.links[2],
       transferPaths: own.map((ld) => ({ gate: ld.gate, links: ld.links, throat: ld.throat, flow: ld.flow, stub: ld.stub,
-        ...(ld.shunt === undefined ? {} : { shuntBerth: berths.find((b) => b.link === ld.shunt && b.dir === 1)!.id }),
+        ...(ld.group === undefined ? {} : { shuntBerths: shuntGroups[ld.group].lines
+          .map((line, k) => ({ k, berth: berths.find((b) => b.link === line.out && b.dir === 1)!.id }))
+          .sort((a, b) => Number(a.k !== ld.yardLine) - Number(b.k !== ld.yardLine))
+          .map((x) => x.berth) }),
         exitSignal: ld.flow === 'in' ? -1 : signalByEntry.get(sigEntryKey(ld.j1, ld.links[0]))! })),
       berth, entryBerths, exitSignal: signalByEntry.get(sigEntryKey(outL.j1, outL.links[0]))!,
       work: dp.work, capacity: dp.capacity, stablingTracks: dp.stablingTracks, exitTime: dp.exitTime,
@@ -1982,12 +2062,19 @@ export function buildTopology(): Topology {
       case 'outDN': return g.dnY + gap * 0.3;
       case 'farUP': return g.upY - gap * 0.55;
       case 'farDN': return g.dnY + gap * 0.55;
+      case 'deepUP': return g.upY - gap * 0.8;
+      case 'deepDN': return g.dnY + gap * 0.8;
       default: return g.midY;
     }
   };
   const placeLane = (lids: number[], y: number) => {
     for (const lid of lids) for (const nid of [links[lid].a, links[lid].b]) if (nodes[nid].pos.length === 0) nodes[nid].pos = posFor(nodes[nid].chain, y);
   };
+  // 牵出线 groups on their lanes (the leads' turnouts on line 0 with them), before the leads' stubs
+  for (const gr of shuntGroups) {
+    const def = LAYOUT.depots[gr.depot].shunts!;
+    gr.lines.forEach((line, k) => placeLane(line.links, laneY(def.lanes[k])));
+  }
   for (const sb of sidings) {
     const y = laneY(sb.def.lane);
     if (sb.k) placeLane(sb.k.links!, y);
@@ -2016,11 +2103,6 @@ export function buildTopology(): Topology {
     const ends = n.links.map((lid) => nodes[links[lid].a === n.id ? links[lid].b : links[lid].a]);
     if (ends.some((m) => !m.pos.length)) continue;
     n.pos = posFor(n.chain, (ends[0].pos[0].y + ends[1].pos[0].y) / 2 - g.rowTop[ends[0].pos[0].row]);
-  }
-  // a 牵出线 runs straight on from its lead, on the lead's lane
-  for (const ld of leads) {
-    const T = nodes[ld.throat];
-    if (ld.shunt !== undefined && T.pos.length) placeLane([T.toe!, ld.shunt], T.pos[0].y - g.rowTop[T.pos[0].row]);
   }
   // depot transfer tracks climb from the end of their lead over the UP main to the yard
   for (const ld of leads) {

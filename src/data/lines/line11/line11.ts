@@ -122,8 +122,10 @@ const sidings: SidingDef[] = [
   // 近处一条在站台东端和 X 之间分出，远处一条在 X 以东、正线车挡以西分出；两条线之间在段内
   // 还有一组剪刀。出段车走近处那条，直接到下行站台；上行到达的回段车过 X 后走远处那条【假设】
   // （图上分不出哪条出、哪条入，按进路最顺的走法定）。
-  { id: 'CBL1', name: '城北路停车场出段线', station: 7, side: 'west', at: -190, length: 450, connect: 'DN', lane: 'farDN', turnback: false, lead: { depot: 'CBL', flow: 'out', shunt: 400 } },
-  { id: 'CBL2', name: '城北路停车场入段线', station: 7, side: 'west', at: -540, length: 450, connect: 'DN', lane: 'outDN', turnback: false, lead: { depot: 'CBL', flow: 'in', shunt: 300 } },
+  // 城北路停车场两条出入段线都斜接到靠正线那条牵出线上（DepotDef.shunts，用户 2026-11-14 给图）：
+  // 站台端那条先接、X 以西那条后接，出入库都在牵出线尽头换端。长度按配线图比例【假设】。
+  { id: 'CBL1', name: '城北路停车场出段线', station: 7, side: 'west', at: -190, length: 410, connect: 'DN', lane: 'outDN', turnback: false, lead: { depot: 'CBL', flow: 'out', yardLine: 1 } },
+  { id: 'CBL2', name: '城北路停车场入段线', station: 7, side: 'west', at: -540, length: 210, connect: 'DN', lane: 'outDN', turnback: false, lead: { depot: 'CBL', flow: 'in', yardLine: 0 } },
   // 赛车场车辆段：图上两条出入段线都只接北侧上行正线，分别在站西 X 的两侧接入；
   // 两条线之间在段内还有一组剪刀。两处道岔都朝东开：远处一条（X 以西）出段车往东
   // 过 X 换到下行，直接进下行站台，下行来的回段车在站台换端后过 X 也只能进这条；
@@ -165,7 +167,9 @@ const crossovers: CrossoverDef[] = [
 ];
 const depots: DepotDef[] = [
   { id: 'CBL', name: '城北路停车场', short: '城北路', station: 7, stablingTracks: 4, capacity: 24, exitTime: 240,
-    work: { daily: true, monthly: true, overhaul: false }, source: 'pdf-peixian：嘉定北站东北 24(6A)，4股道；图上两条出入段线都只接北侧下行正线，两处道岔分在站台东端 X 两侧（一处约在站台东缘、一处在 X 以东），两条线之间在段内还有剪刀（L11-09 用户确认即资料里的嘉定停车场）。数据按图只接北侧下行；去花桥方向的进出段由车场门户按反向进路处理' },
+    work: { daily: true, monthly: true, overhaul: false }, source: 'pdf-peixian：嘉定北站东北 24(6A)，4股道；图上两条出入段线都只接北侧下行正线，两处道岔分在站台东端 X 两侧（一处约在站台东缘、一处在 X 以东），两条线之间在段内还有剪刀（L11-09 用户确认即资料里的嘉定停车场）。数据按图只接北侧下行；去花桥方向的进出段由车场门户按反向进路处理',
+    // 两条牵出线从车场伸到车挡（比正线尾轨更远），间有一组单渡线和一组交叉渡线（用户 2026-11-14 给图）。位置按配线图比例【假设】
+    shunts: { yard: -400, end: -1160, lanes: ['farDN', 'deepDN'], crossovers: [{ at: -680, kind: 'single', nearYard: 0 }, { at: -850, kind: 'X' }] } },
   { id: 'SSC', name: '赛车场车辆段', short: '赛车场', station: 6, stablingTracks: 4, capacity: 24, exitTime: 240,
     work: { daily: true, monthly: true, overhaul: true }, source: 'pdf-peixian：上海赛车场站西北 24(6A)，4股道；图上两条出入段线都只接北侧上行正线，分别在站西 X 两侧的两处道岔接入，两条线之间在段内还有剪刀；出段去迪士尼时东侧那条要经站东汇入咽喉的 X 换到下行，西侧那条经站西 X。数据里因站东 X 放不下、车场门户找不到 DN 出段前向进路，暂写双Y，见待定' },
   { id: 'CYL', name: '川杨河定修段', short: '川杨河', station: 36, stablingTracks: 4, capacity: 52, exitTime: 240,

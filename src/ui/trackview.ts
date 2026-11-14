@@ -704,24 +704,36 @@ export class TrackView {
       const top = geom.rows[gp.row].top;
       const w = detail ? 520 : 420;
       const hgt = detail ? 150 : 86;
-      const x0 = gp.x - w / 2;
+      let x0 = gp.x - w / 2;
       const below = gp.y > top + L.dnY;
-      const y0 = below ? gp.y + 6 : detail ? gp.y - hgt - 6 : top + 6;
-      const box = new Graphics().roundRect(x0, y0, w, hgt, 4).fill({ color: 0x0a1520 }).stroke({ width: 1.5, color: 0x34506b });
-      box.moveTo(gp.x, gp.y).lineTo(gp.x, below ? y0 : y0 + hgt).stroke({ width: 4, color: C.trackFreeSide });
+      let y0 = below ? gp.y + 6 : detail ? gp.y - hgt - 6 : top + 6;
+      // yard tracks fed from the side along the 牵出线 lanes (geometry: shuntLead): the box starts
+      // at the gates and spans their lanes
+      const sideGates = detail ? d.transferPaths.map((path) => [geom.pos[path.gate], geom.pos[topo.links[path.links[0]].a]] as const) : [];
+      const side = sideGates.length > 0 && sideGates.every(([g, t]) => g && t && Math.abs(g.y - t.y) < 1);
+      let hgtUsed = hgt;
+      if (side) {
+        const xs = sideGates.map(([g]) => g!.x), ys = sideGates.map(([g]) => g!.y);
+        const toYard = Math.sign(sideGates[0][0]!.x - sideGates[0][1]!.x) || 1;
+        x0 = toYard > 0 ? Math.max(...xs) : Math.min(...xs) - w;
+        y0 = Math.min(...ys) - 18;
+        hgtUsed = Math.max(hgt, Math.max(...ys) - Math.min(...ys) + 36);
+      }
+      const box = new Graphics().roundRect(x0, y0, w, hgtUsed, 4).fill({ color: 0x0a1520 }).stroke({ width: 1.5, color: 0x34506b });
+      if (!side) box.moveTo(gp.x, gp.y).lineTo(gp.x, below ? y0 : y0 + hgt).stroke({ width: 4, color: C.trackFreeSide });
       box.eventMode = 'static';
       box.cursor = 'pointer';
       box.on('pointertap', (e: FederatedPointerEvent) => { e.stopPropagation(); if (!this.dragMoved) this.h.depot(i); });
       const veh = new Graphics();
       this.yardL.addChild(box, veh);
-      this.yardGfx.push({ depot: i, box, veh, x: x0, y: y0, w, h: hgt, key: '' });
+      this.yardGfx.push({ depot: i, box, veh, x: x0, y: y0, w, h: hgtUsed, key: '' });
       const t = this.mkText(d.name, 24, 0xd6e0ea);
       t.eventMode = 'static';
       t.cursor = 'pointer';
       t.on('pointertap', (e: FederatedPointerEvent) => { e.stopPropagation(); if (!this.dragMoved) this.h.depot(i); });
       this.addStatic({ t, kind: 'depot', prio: 90, wx: x0, wy: y0, w: textWidth(d.name, 24), h: 28, minZoom: 0, cands: [{ dx: 10, dy: 3 }] });
       // the yard box and the junction throat are obstacles for train windows
-      this.obstacles.push({ x: x0, y: y0, w, h: hgt });
+      this.obstacles.push({ x: x0, y: y0, w, h: hgtUsed });
       const legs = d.transferPaths.flatMap((path) => path.links.flatMap((l) => [topo.links[l].a, topo.links[l].b])).map((n) => geom.pos[n]).filter((q): q is P => !!q);
       if (legs.length) {
         const xs = legs.map((q) => q.x);

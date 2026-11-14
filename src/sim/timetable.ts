@@ -1696,7 +1696,7 @@ export function depotStartTime(ctx: Pick<PlanContext, 'topo'>, depot: number, fi
   const work = OPERATIONS.depotLeadWork?.[topo.depots[depot].key]?.exitS ?? 0;
   const portal = topo.depots[depot].portals.exit[dir];
   const travel = 95 + dist / 13 + 25 + work + (portal.reverse ? PORTAL_REVERSE : 0)
-    + (topo.depots[depot].transferPaths[portal.path].shuntBerth !== undefined ? SHUNT_REVERSE : 0);
+    + (topo.depots[depot].transferPaths[portal.path].shuntBerths?.length ? SHUNT_REVERSE : 0);
   return Math.round(refTime - travel - (first.stops[0].stop ? 75 : 30));
 }
 
@@ -2672,7 +2672,7 @@ function tailTasks(topo: Topology, plan: Plan, block: Block, trip: Trip, tasks: 
  * direction stops there and changes ends before the trip starts. */
 function portalExitTasks(topo: Topology, depot: number, trip: Trip, tasks: Task[]) {
   const p = topo.depots[depot].portals.exit[trip.dir];
-  shuntTasks(topo.depots[depot].transferPaths[p.path].shuntBerth, topo.depots[depot].station, tasks);
+  shuntTasks(topo.depots[depot].transferPaths[p.path].shuntBerths, topo.depots[depot].station, tasks);
   if (!p.reverse) return;
   const plat = topo.stations[p.station].platforms[trip.dir];
   const travel = trip.dir === 'DN' ? 1 : -1;
@@ -2717,14 +2717,15 @@ export function depotTasks(topo: Topology, depot: number, dir: TrackDir, tasks: 
     candidates.sort((a,b) => Number(b.index === p.path) - Number(a.index === p.path));
     addWork(candidates.map(c => c.berth));
   }
-  shuntTasks(yard.transferPaths[p.path].shuntBerth, yard.station, tasks);
+  shuntTasks(yard.transferPaths[p.path].shuntBerths, yard.station, tasks);
   tasks.push({ k: 'depot', depot, berth: yard.entryBerths[p.path] });
 }
 
-/** A 牵出线 lead (LeadDef.shunt): the move runs to the 牵出线's end and changes ends there. */
-function shuntTasks(berth: number | undefined, station: number, tasks: Task[]) {
-  if (berth === undefined) return;
-  tasks.push({ k: 'reverse', berths: [berth], chosen: berth, station, minTime: 40 });
+/** A lead into 牵出线 (DepotDef.shunts): the move runs to a 牵出线's end (its own yard track's
+ * first, the other when that one is taken) and changes ends there. */
+function shuntTasks(berths: number[] | undefined, station: number, tasks: Task[]) {
+  if (!berths?.length) return;
+  tasks.push({ k: 'reverse', berths: [...berths], chosen: berths[0], station, minTime: 40 });
 }
 
 /** The fixed entry work place on a depot lead (its inward siding berth). */
@@ -2747,7 +2748,7 @@ export function depotLeadTasks(topo: Topology, depot: number, stub: number): Tas
     tasks.push({ k:'stop', berth:berth.id, station:yard.station, trip:-1, arr:null, dep:null,
       doors:false, revenue:false, minDwell:work.entryS, note:'入段固定作业', depotWork:{kind:'in',depot,berths:[berth.id]} });
   }
-  shuntTasks(yard.transferPaths[index].shuntBerth, yard.station, tasks);
+  shuntTasks(yard.transferPaths[index].shuntBerths, yard.station, tasks);
   tasks.push({ k: 'depot', depot, berth: yard.entryBerths[index] });
   return tasks;
 }

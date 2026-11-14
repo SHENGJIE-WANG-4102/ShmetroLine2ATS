@@ -215,6 +215,32 @@ export class Geometry {
       const f = d ? (d.y - topo.layout.rowTop[d.row] - topo.layout.upY) / (topo.layout.dnY - topo.layout.upY) : 0.5;
       pos[n.id] = at(n.chain, p.upY + f * (p.dnY - p.upY));
     }
+    // leads into 牵出线 (DepotDef.shunts), in a station drawing (嘉定北): the 牵出线 run from the
+    // yard's edge out to their buffers on their lanes; a lead comes off the main onto the lane next
+    // to it and crosses down to its turnout on the 牵出线 from SHUNT_JOG short of it, first running
+    // along that lane when it leaves the main further towards the yard
+    const SHUNT_JOG = 120;
+    const shuntLead = (path: Topology['depots'][number]['transferPaths'][number]) => !!p.detail && !!path.shuntBerths?.length;
+    for (const d of topo.depots) for (const path of d.transferPaths) {
+      const T = topo.nodes[path.throat], at0 = pos[T.id];
+      if (!shuntLead(path) || !at0) continue;
+      const stub = topo.links[path.stub], start = stub.a === T.id ? stub.b : stub.a;
+      const startCh = topo.nodes[start].chain, toStart = Math.sign(startCh - T.chain) || 1;
+      const top = this.rows[at0.row].top, gap = p.dnY - p.upY;
+      const nearY = at0.y > top + p.dnY ? p.dnY + 0.3 * gap : p.upY - 0.3 * gap;
+      const jogCh = T.chain + toStart * SHUNT_JOG;
+      pos[start] = at(toStart * (startCh - jogCh) > 0 ? jogCh : startCh, nearY);
+      // the connector's inner points lie on that lane at their own chainage
+      let node = start, link = path.stub;
+      for (;;) {
+        const next = topo.nodes[node].links.find((l) => l !== link && topo.links[l].track === 'CON');
+        if (next === undefined) break;
+        link = next;
+        node = topo.links[next].a === node ? topo.links[next].b : topo.links[next].a;
+        if (topo.nodes[node].kind === 'switch') break;
+        pos[node] = at(topo.nodes[node].chain, nearY);
+      }
+    }
     // depot transfer tracks: from the end of each lead (on its lane) to the yard gate, leads of one
     // depot side by side. The yard is drawn above the UP main; in a station drawing a yard whose
     // leads leave the DN main on its outer side is drawn below it, as it lies
@@ -225,6 +251,14 @@ export class Geometry {
         const row = this.chainRow(T.chain);
         const top = this.rows[row].top;
         const s = Math.sign(topo.nodes[path.gate].chain - T.chain) || 1;
+        const from = pos[topo.links[path.links[0]].a];
+        if (shuntLead(path) && from) {
+          // on along the 牵出线's lane into the side of the yard
+          pos[topo.links[path.links[1]].a] = { row, x: from.x + s * 12, y: from.y };
+          pos[topo.links[path.links[2]].a] = { row, x: from.x + s * 24, y: from.y };
+          pos[path.gate] = { row, x: from.x + s * 36, y: from.y };
+          return;
+        }
         const x = this.chainX(T.chain, row) + s * (10 + 18 * k);
         const y = (dy: number) => top + (p.detail && depotBelow(topo, d) ? p.dnY + dy : p.upY - dy);
         pos[path.gate] = { row, x, y: y(p.depotDy.gate) };

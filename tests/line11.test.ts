@@ -22,13 +22,13 @@ describe('line 11 branch, layout and plan', () => {
 
   const station = (id: string) => STATIONS.findIndex(s => s.id === id);
   /** can a train get from one link to another by routes, running forward */
-  const reaches = (from: number, to: number): boolean => {
+  const reaches = (from: number, to: number, wrongWay = false): boolean => {
     const seen = new Set<number>(), queue: TRoute[] = topo.routes.filter(route => route.steps.some(step => step.link === from));
     while (queue.length) {
       const route = queue.pop()!;
       if (seen.has(route.id)) continue;
       seen.add(route.id);
-      if (route.wrongDir) continue;
+      if (route.wrongDir && !wrongWay) continue;
       if (route.steps.some(step => step.link === to)) return true;
       if (route.end >= 0) queue.push(...topo.signals[route.end].routes.map(id => topo.routes[id]));
     }
@@ -106,23 +106,34 @@ describe('line 11 branch, layout and plan', () => {
     expect(yard.portals.entry.UP).toMatchObject({ reverse: false });
   });
 
-  it('turns 嘉定北 yard moves at the end of a 牵出线, out and in', async () => {
+  it('turns 嘉定北 yard moves at the end of either 牵出线, out and in', async () => {
     const { depotTasks } = await import('../src/sim/timetable');
     const yard = topo.depots.findIndex(depot => depot.station === station('JDB'));
     const { transferPaths, portals } = topo.depots[yard];
-    // each lead runs on past the yard's points into its own 牵出线 to a buffer
+    const ends = (berths: number[]) => berths.map(b => topo.berths[b]);
     for (const path of transferPaths) {
-      expect(path.shuntBerth).toBeDefined();
-      const berth = topo.berths[path.shuntBerth!];
-      expect(topo.nodes[topo.links[berth.link].b].kind).toBe('end');
-      expect(berth.offset).toBeGreaterThan(200);
+      // both 牵出线 serve every lead, its own yard track's first; each ends at a buffer
+      expect(path.shuntBerths).toHaveLength(2);
+      for (const berth of ends(path.shuntBerths!)) expect(topo.nodes[topo.links[berth.link].b].kind).toBe('end');
+      // the lead ends at a turnout on line 0, the nearer 牵出线
+      expect(topo.nodes[path.throat].kind).toBe('switch');
+      expect(path.shuntBerths!.some(b => topo.links[topo.nodes[path.throat].toe!].id !== topo.berths[b].link)).toBe(true);
     }
-    // in: the train changes ends on the in-lead's 牵出线, then backs into the yard
-    const into = portals.entry.UP!;
+    // both lines run out further than the mains' tails, to the same buffer chainage
+    const [a, b] = ends(transferPaths[0].shuntBerths!).map(berth => topo.nodes[topo.links[berth.link].b].chain);
+    expect(a).toBe(b);
+    // a move can reach either 牵出线 from either lead, and the yard's way in from either 牵出线
+    for (const path of transferPaths) for (const berth of ends(path.shuntBerths!)) {
+      // (the entry lead is entered running against the DN main's direction, off the crossover)
+      expect(reaches(path.stub, berth.link, true)).toBe(true);
+      const back = topo.nodes[topo.links[berth.link].a].links.find(l => l !== berth.link)!;
+      for (const other of transferPaths.filter(p => p.flow !== 'out')) expect(reaches(back, other.links[2])).toBe(true);
+    }
+    // in: the train changes ends on a 牵出线, then backs into the yard
     const tasks: import('../src/sim/model').Task[] = [];
     depotTasks(topo, yard, 'UP', tasks);
     expect(tasks.slice(-2).map(task => task.k)).toEqual(['reverse', 'depot']);
-    expect(tasks.at(-2)).toMatchObject({ berths: [transferPaths[into.path].shuntBerth] });
+    expect(tasks.at(-2)).toMatchObject({ berths: transferPaths[portals.entry.UP!.path].shuntBerths });
   });
 
   it('keeps 上海赛车场 crossovers on both sides of the platform, the east one before the join', () => {
