@@ -4,7 +4,7 @@ export type PisStyle = 'landscape' | 'column' | 'banner';
 /** Per-line presentation data; no simulation rules belong here. */
 export interface LineUiData {
   /** Renderers describe the screen hardware, independently of operating mode. */
-  dmiStyle?: 'navyDial' | 'statusGrid';
+  dmiStyle?: 'navyDial' | 'statusGrid' | 'tealPanel';
   pisStyle?: PisStyle;
   /** banner route map: transfer circles left / right of each station's pill, as photographed */
   pisRouteBadges?: Record<string, [string[], string[]]>;

@@ -15,10 +15,12 @@ import { PERF } from '../sim/dynamics';
 import { FONT_CN, fmtTime } from './theme';
 import { LINE } from '../data/current';
 import { drawStatusGrid, statusGridAlarmAt } from './dmiStatusGrid';
+import { drawTeal, tealAlarmAt } from './dmiTeal';
 
 const STYLES = {
   navyDial: { brand: 'CASCO', draw: null, alarmAt: null },
   statusGrid: { brand: '', draw: drawStatusGrid, alarmAt: statusGridAlarmAt },
+  tealPanel: { brand: '', draw: drawTeal, alarmAt: tealAlarmAt },
 } as const;
 const STYLE = STYLES[LINE.ui.dmiStyle ?? 'navyDial'];
 

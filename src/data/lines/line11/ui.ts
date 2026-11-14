@@ -1,10 +1,11 @@
 import type { LineUiData } from '../../ui';
 import { LINE14_UI } from '../line14/ui';
 
-/** 11号线界面文案。【假设】没有逐站 DMI/PIS 实拍，屏型、告警字样和设备处置文案沿用
- * 14 号线同一套通用模板；只把线路名、颜色、换乘信息换成 11 号线的。见汇报“继承的占位”。 */
+/** 11号线界面文案。DMI 按 11A02 实拍（青绿底，tealPanel）；站台 PIS 用 2 号线普通站台的横屏
+ * （用户决定 2026-11-14）。告警字样和设备处置文案仍沿用 14 号线通用模板【假设】。 */
 export const LINE11_UI: LineUiData = {
   ...LINE14_UI,
+  dmiStyle: 'tealPanel', pisStyle: 'landscape',
   documentTitle: '上海轨道交通11号线 ATS 中央监视',
   bootTitle: '上海轨道交通11号线 · ATS 中央监视',
   desktopTitle: '上海轨道交通11号线 ATS 模拟器',

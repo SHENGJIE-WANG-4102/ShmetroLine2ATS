@@ -2847,7 +2847,8 @@ export function frontTurnClear(ctx: PlanContext, trips: readonly Pick<Trip, 'id'
  * may a train stand in it over [from, to) among the others in `occ`? */
 export function tailOrderClear(topo: Topology, st: number, occ: { from: number; to: number; block?: number }[], from: number, to: number, own?: number): boolean {
   if (topo.stations[st].turnbackBerths.length !== 1) return true;
-  return occ.every(o => o.block === own || !(o.from < from && o.to > to + .01) && !(o.from > from && o.to < to - .01));
+  // an entry with no block (a duty-planner hold) is never the caller's own
+  return occ.every(o => own !== undefined && o.block === own || !(o.from < from && o.to > to + .01) && !(o.from > from && o.to < to - .01));
 }
 
 /** time a train held on a line end's arrival platform needs to move on

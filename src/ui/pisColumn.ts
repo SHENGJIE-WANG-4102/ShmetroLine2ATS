@@ -4,11 +4,11 @@ import './pisColumn.css';
 import { LINE, STATIONS, STATION_EN, SIMULATION, stationOpened } from '../data/current';
 import type { PisData, TrackDir } from '../sim/model';
 import { formatPisCountdown, selectPisFirstLast } from '../sim/pis';
-import { stationRange, downstreamTerminal } from '../sim/topology';
+import { sharedRunAhead, downstreamTerminal } from '../sim/topology';
 
 /** Only passenger stations, in travel order. The last page is allowed fewer than five. */
 export function columnRoutePages(station: number, track: TrackDir): number[][] {
-  const route = stationRange(track, station, downstreamTerminal(track)).filter(stationOpened);
+  const route = sharedRunAhead(track, station).filter(stationOpened);
   return Array.from({ length: Math.ceil(route.length / 5) }, (_, i) => route.slice(i * 5, i * 5 + 5));
 }
 

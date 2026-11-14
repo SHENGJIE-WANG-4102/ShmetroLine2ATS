@@ -19,7 +19,7 @@ import { renderColumnPis } from './pisColumn';
 import { renderBannerPis } from './pisBanner';
 import { advancePisCycle, formatPisCountdown, selectPisFirstLast, PIS_TIMING, type PisCycleState, type PisFirstLast } from '../sim/pis';
 import metroLogo from './assets/metro-logo.png';
-import { stationRange, downstreamTerminal } from '../sim/topology';
+import { sharedRunAhead, terminalsAhead } from '../sim/topology';
 import { lineBadge } from './branding';
 
 const ORD = ['1st', '2nd', '3rd'];
@@ -258,9 +258,11 @@ function fillLoad(bd: Board) {
 
 function build(station: number, track: TrackDir): Board {
   const s = STATIONS[station];
-  const towards = DIRECTIONS[track].towards;
+  // a branch platform names its own terminus; elsewhere the direction's towards
+  const ends = terminalsAhead(track, station);
+  const towards = ends.length === terminalsAhead(track).length ? DIRECTIONS[track].towards : ends.map(end => STATIONS[end].name).join('/');
   // the stations still ahead in this direction
-  const ahead = stationRange(track, station, downstreamTerminal(track)).slice(0, 7);
+  const ahead = sharedRunAhead(track, station).slice(0, 7);
   const strip = h('div', { class: 'pm-strip' }, ...ahead.map((i, n) => h('div', { class: `pm-stop${n === 0 ? ' here' : ''}` },
     h('i'), h('span', {}, STATIONS[i].name))));
   const load = h('div', { class: 'pm-load' });

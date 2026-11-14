@@ -454,6 +454,15 @@ export interface DmiData {
   maDist: number;
   /** calendar date of the current sim time, YYYY/MM/DD ('' when unknown) */
   date: string;
+  /** next lower speed restriction ahead: its speed (km/h) and distance (m), -1 when none in the scan */
+  nextLimitKmh?: number;
+  limitDist?: number;
+  /** distance (m) to the next signal ahead, -1 when none */
+  signalDist?: number;
+  /** the platform the head stands at is held (扣车) */
+  stationHold?: boolean;
+  /** the next station is to be passed (跳停) */
+  skipNext?: boolean;
 }
 
 export interface StopScore { t: number; station: number; err: number; score: number; note: string }

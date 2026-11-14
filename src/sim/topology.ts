@@ -2217,6 +2217,22 @@ export function downstreamTerminal(direction: 'DN' | 'UP'): number {
   return orderedStations(direction).at(-1)!;
 }
 
+/** The termini reached running `direction` from `from` (the line's ends that way when omitted):
+ * one on a plain line or a branch, one per branch while the line still fans out ahead. */
+export function terminalsAhead(direction: 'DN' | 'UP', from?: number): number[] {
+  return STATIONS.map((_, station) => station).filter(station => (from === undefined || station === from || ahead(direction, from, station))
+    && nextStations(direction, station, STATIONS.length).length === 0);
+}
+
+/** `from` and the stations ahead of it that every train running `direction` passes: to the
+ * terminus on a plain line or a branch, to where the line fans out on a shared run. */
+export function sharedRunAhead(direction: 'DN' | 'UP', from: number): number[] {
+  const ends = terminalsAhead(direction, from);
+  return STATIONS.map((_, station) => station)
+    .filter(station => (station === from || ahead(direction, from, station)) && ends.every(end => end === station || ahead(direction, station, end)))
+    .sort((a, b) => ahead(direction, a, b) ? -1 : ahead(direction, b, a) ? 1 : 0);
+}
+
 /** Inclusive forward station range; a reversed range contains no stations. */
 export function stationRange(direction: 'DN' | 'UP', from: number, to: number): number[] {
   if (from !== to && !ahead(direction, from, to)) return [];

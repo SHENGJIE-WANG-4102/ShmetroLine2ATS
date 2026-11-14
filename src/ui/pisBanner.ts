@@ -9,7 +9,7 @@ import './pisBanner.css';
 import { LINE, STATIONS, STATION_EN, stationOpened } from '../data/current';
 import type { PisData, TrackDir } from '../sim/model';
 import { formatPisCountdown, selectPisFirstLast } from '../sim/pis';
-import { stationRange, downstreamTerminal } from '../sim/topology';
+import { sharedRunAhead, downstreamTerminal } from '../sim/topology';
 
 /** stops shown at once in the route window, as photographed */
 const ROUTE_SLOTS = 5;
@@ -21,7 +21,7 @@ const en = (station: number | undefined) => station === undefined ? '' : STATION
 
 /** Stops still ahead, nearest first. 【假设】循环从下一站起、到终点站进入窗口顶部后从头再滚，实拍未录到循环点。 */
 export function bannerRouteStops(station: number, track: TrackDir): number[] {
-  return stationRange(track, station, downstreamTerminal(track)).filter(i => i !== station && stationOpened(i));
+  return sharedRunAhead(track, station).filter(i => i !== station && stationOpened(i));
 }
 
 /** which side of the pill each transfer circle sits on (photographed per station; otherwise alternating) */

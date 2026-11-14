@@ -189,6 +189,12 @@ const RUN_PAIRS: [string, string][] = [
 /** 运行图依据：官方首末班与分时段间隔，见 reference/line11/official-timetable.md。 */
 const H = (h: number, m = 0) => h * 3600 + m * 60;
 
+/** 南翔、真如中间线停车的窗口（驻站热备 from–to；need 不用）【假设】。晚间 21 点前回段：
+ * 之后夜间回段车要在南翔中间线折返。 */
+const OFF_PEAK_STORAGE = {
+  weekday: [{ from: H(9, 45), need: H(17), to: H(17) }, { from: H(19, 45), need: H(21), to: H(21) }],
+  weekend: [{ from: H(6, 30), need: H(21, 30), to: H(21, 30) }],
+};
 export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   ...LINE14_CORE.OPERATIONS,
   // 11号线是 6A、司机驾驶（ATO），不继承14号线的 UTO 作业表。
@@ -204,7 +210,7 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   lastBigWestboundArrival: H(24, 0),
   peakCoreHeadway: 120, // 官方 南翔—三林 早高峰往三林 平均2分
   minTurnback: { HQ: 240, JDB: 240, DSL: 300, NX: 240, SL: 300, LSH: 240, AT: 240 }, // 【假设】按尾轨/中间线作业加余量
-  longWaitPlatformStations: ['NX'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）
+  longWaitPlatformStations: ['NX', 'ZR'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）；真如中间线站台平峰停车
   platformTurnClear: {},
   // 回段：图上城北路只接嘉定北下行正线，数据照图写；赛车场只接上行正线，但因站东 X 放不下，
   // 数据里的出入段线暂写双Y（见 LAYOUT.sidings 注释和汇报【待定】）。川杨河接哪条正线看不清，按两正线【假设】。
@@ -218,10 +224,14 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
     { depot: 'CYL', dir: 'DN', station: 'LSH', service: { terminal: 'DSL', intervalMultiplier: 1 } },
     { depot: 'CYL', dir: 'UP', station: 'LSH', service: { terminal: 'DSL', intervalMultiplier: 1 } },
   ],
-  // 用户口述：南翔、真如都有存车/备车。过夜/热备先不写死列数，避免凭空造车；
-  // 见汇报【待定】。
   overnightStabling: [],
-  hotStandby: [],
+  // 用户决定（2026-11-14）：南翔、真如中间线除高峰期都停一列车。按驻站热备排：平峰前从
+  // 赛车场车辆段（备选城北路）开过去，高峰前回段。窗口钟点按 simulation 的高峰时段留
+  // 15–30 分钟余量【假设】；双休日没有高峰，整个日间都停。
+  hotStandby: (['NX', 'ZR'] as const).map(station => ({
+    station, track: 'turnback' as const, berth: 0, depot: 'SSC', incoming: 'DN' as const,
+    alternatives: [{ depot: 'CBL', incoming: 'DN' as const }], windows: OFF_PEAK_STORAGE,
+  })),
   platformPassKmh: 45,
   platformStopKmh: Infinity,
   depotDoorTests: { CBL: { beforeSignal: 5 }, SSC: { beforeSignal: 5 }, CYL: { beforeSignal: 5 } }, // 【假设】未建库内试验线

@@ -6,7 +6,7 @@
 import type { Sim } from './engine';
 import type { DmiData, DmiMsg, Level, Mode, Train, StopTask, Trip } from './model';
 import { LINE, STATIONS, fleetEntry } from '../data/current';
-import { stopError } from './movement';
+import { stopError, scanAhead, goalBerth } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
 import { effectiveStops, serviceEnd, turnbackAt } from './timetable';
 import { signalAheadFrom, platformSide, dwellDepartureAt } from './ats';
@@ -155,7 +155,28 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     vEbi: tr.vEbi,
     maDist: Number.isFinite(tr.maDist) ? tr.maDist : -1,
     date: calendarDate(sim.config.date, sim.t),
+    ...limitAhead(sim, tr),
+    signalDist: tr.nextSignal >= 0 && Number.isFinite(tr.nextSignalDist) ? tr.nextSignalDist : -1,
+    stationHold: pi >= 0 && sim.plat[pi].hold,
+    skipNext: nextStop(tr) >= 0 && tr.skipStations.has(nextStop(tr)),
   };
+}
+
+/** The nearest lower speed restriction in the train's scan ahead (display only: the scan has no
+ * side effects on the train). */
+function limitAhead(sim: Sim, tr: Train): { nextLimitKmh: number; limitDist: number } {
+  const ahead = scanAhead(sim, tr, goalBerth(tr));
+  let limitDist = -1, nextLimitKmh = -1;
+  for (let i = 0; i < ahead.constraints.length; i += 2) {
+    const distance = ahead.constraints[i], speed = ahead.constraints[i + 1] * 3.6;
+    if (distance >= 0 && speed < ahead.vBody * 3.6 - 0.1 && (limitDist < 0 || distance < limitDist)) { limitDist = distance; nextLimitKmh = speed; }
+  }
+  return { nextLimitKmh, limitDist };
+}
+/** the station of the train's next passenger stop, -1 when none */
+function nextStop(tr: Train): number {
+  const stop = tr.tasks.find((t): t is StopTask => t.k === 'stop' && t.doors);
+  return stop ? stop.station : -1;
 }
 
 /** 用户实拍（2026-11-02）：本站门开好以后（之后关门也算）才显示站台门状态、DEP、

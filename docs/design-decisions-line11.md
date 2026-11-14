@@ -173,3 +173,19 @@
   - 11 号线：两种日型排图 0 问题（626/64、433/36）。工作日全天运行探针 0 违例，458 趟载客车次全部跑完；靠正线那条牵出线有 34 列车用过，外侧那条 20 列。
   - 2 号线、14 号线：运行图哈希不变。
 - 动了公共文件：`src/data/types.ts`、`src/sim/topology.ts`、`src/sim/timetable.ts`、`src/ui/geometry.ts`、`src/ui/trackview.ts`、`src/ui/app.ts`、`src/data/ui.ts`。
+
+## L11-16 11 号线 DMI、站台 PIS 换成 11 号线/2 号线样式；南翔、真如平峰停车（2026-11-14）
+
+- DMI（用户决定）：按 11A02（1168 车）两张实拍做青绿底屏 `dmiStyle: 'tealPanel'`（`src/ui/dmiTeal.ts`），屏面布局参照用户本机另一个 11 号线项目的 DMI，只搬了画面，没搬别的逻辑。
+  - 顶栏模式/停靠/停站/出发；0–120 速度表盘（105 起红弧）；下一个限速、下一个信号机两条对数距离尺；列车门/站台门；下一站/终点站/扣车/跳停；WSP/ATP/ATO/定位/EB；两行信息各配一个「确认」键。
+  - 列表、English、司机车三个键只画不响应：实拍没拍到它们打开的画面。
+  - 模式字样：DTO/AM 显示 ATO（实拍正常运营显示 ATO）；CM、RM 的字样没拍到，沿用 CM/RM【假设】。
+  - DMI 数据加了几项只给界面用的字段：下一个限速及距离、下一个信号机距离、本站扣车、下一站跳停（`DmiData`，`computeDmi` 里算，扫描前方不改列车状态）。
+- 站台 PIS（用户决定）：换成 2 号线普通站台的横屏（`pisStyle: 'landscape'`）。
+  - Y 形线上站点条按支线走：支线站只画本支线往前的站，开往写本支线终点；共线段画到分岔站为止（`terminalsAhead`、`sharedRunAhead`）。直线线路结果不变。
+- 南翔、真如中间线平峰停车（用户决定：除高峰期都放上车）：按驻站热备排，各一列，从赛车场车辆段出车（备选城北路），窗口结束回段。
+  - 工作日 09:45–17:00、19:45–21:00；双休日 06:30–21:30【假设】。晚间 21 点前回段，因为 21 点以后夜间回段车要在南翔中间线折返。
+  - 真如中间线站台登记为可站台长候班（`longWaitPlatformStations`）。
+- 顺手修（公共代码）：`tailOrderClear` 在排图阶段被调用时不传 `own`，登记表里的占用也不带 `block`，`undefined === undefined` 让每条都算成「自己的」，单折返线先到后发检查从来没生效。南翔热备因此和 21:26 的折返重叠，校验报 TAIL_ORDER。现在只有给了 `own` 才跳过自己的占用。
+- 验证：11 号线两种日型排图 0 问题（634/64、437/38），四段停车都排上了；2 号线、14 号线运行图哈希不变。
+- 动了公共文件：`src/data/ui.ts`、`src/sim/model.ts`、`src/sim/dmi.ts`、`src/sim/topology.ts`、`src/sim/timetable.ts`、`src/ui/dmi.ts`、`src/ui/drivingMode.ts`、`src/ui/pisview.ts`、`src/ui/pisColumn.ts`、`src/ui/pisBanner.ts`；新增 `src/ui/dmiTeal.ts`。
