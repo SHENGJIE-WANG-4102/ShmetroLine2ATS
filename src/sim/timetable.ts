@@ -28,7 +28,8 @@ export interface Template {
   id: string;
   name: string;
   desc: string;
-  pattern: ('big' | 'small')[];
+  /** per slot: 'big', 'small', or a route named in the line's `terminals.routes` */
+  pattern: string[];
   /** headway between successive trains at the reference station (s) */
   headway: number;
   /** Directional service frequency, from the line's published headway table. */
@@ -619,8 +620,9 @@ export function layoutService(ctx: PlanContext) {
   const trips: ServiceRequest[] = [];
   const issues: PlanIssue[] = [];
   const nS = topo.stations.length;
-  const W = 0;
-  const E = nS - 1;
+  const [W, E] = SIMULATION.timetable.terminals.trunk?.map(stationIndex) ?? [0, nS - 1];
+  /** a pattern entry that names a route of the line's data: its ends, DN-ward */
+  const namedRoute = (kind: string) => SIMULATION.timetable.terminals.routes?.[kind]?.map(stationIndex);
   const DN_REF = stationIndex(SIMULATION.timetable.reference?.DN) >= 0 ? stationIndex(SIMULATION.timetable.reference?.DN) : CORE_W;
   const UP_REF = stationIndex(SIMULATION.timetable.reference?.UP) >= 0 ? stationIndex(SIMULATION.timetable.reference?.UP) : CORE_E;
 
@@ -762,7 +764,12 @@ export function layoutService(ctx: PlanContext) {
       // section still has one departure every 5 minutes (D73).
       if (tpl.openingAlternation && t < OPENING.outerAlternation) kind = idx % 2 === 0 ? 'big' : 'small';
       if (guard === 0) kind = 'big'; // preserve the published PXL 05:25 opener
-      if (kind === 'big' || kind === 'late') {
+      const route = namedRoute(kind);
+      if (route) {
+        const stops = atReference('DN', route[0], route[1], DN_REF, t);
+        if (!precedesLast('DN', stops)) break;
+        addTrip('DN', 'big', route[0], route[1], stops, true);
+      } else if (kind === 'big' || kind === 'late') {
         const to = E;
         const stops = guard === 0 ? firstCurves.DN : atReference('DN', W, to, DN_REF, t);
         if (!precedesLast('DN', stops)) break;
@@ -866,6 +873,12 @@ export function layoutService(ctx: PlanContext) {
       // The explicit 06:00 airport train occupies its full path. During
       // morning build-up do not insert another departure within 90 seconds.
       if (Math.abs(t - firstThrough) < 120) { idx++; t = nextSlot(t, 'UP'); continue; }
+      const route = namedRoute(kind);
+      if (route) {
+        const stops = atReference('UP', route[1], route[0], UP_REF, t);
+        if (!precedesLast('UP', stops)) break;
+        addTrip('UP', 'big', route[1], route[0], stops, true);
+      }
       if (kind === 'big') {
         const stops = atReference('UP', E, W, UP_REF, t);
         if (!precedesLast('UP', stops)) break;
@@ -2361,9 +2374,12 @@ export function turnbackAt(topo: Topology, station: number, arrDir: TrackDir): T
   return null;
 }
 
-export function platformBerth(topo: Topology, station: number, dir: TrackDir): number {
+/** `from`: the station the train comes from. Where a joining run has a platform face of its own,
+ * its trains stop there and not at the face of the main they then meet. */
+export function platformBerth(topo: Topology, station: number, dir: TrackDir, from?: number): number {
   const s = topo.stations[station];
-  const p = dir === 'DN' ? s.platforms.DN : s.platforms.UP;
+  const p = (from === undefined ? undefined : topo.platforms.find(x => x.station === station && x.track === dir && x.from === from)?.id)
+    ?? (dir === 'DN' ? s.platforms.DN : s.platforms.UP);
   const travel = dir === 'DN' ? 1 : -1;
   return topo.berths.find((b) => b.platform === p && b.dir === travel)!.id;
 }
@@ -2732,7 +2748,7 @@ export function tripTasks(topo: Topology, trip: Trip, tasks: Task[], fromDepot: 
     if (!s.stop) continue;
     const isFirst = i === 0;
     tasks.push({
-      k: 'stop', berth: platformBerth(topo, s.st, trip.dir), station: s.st, trip: trip.id, stopIndex: i,
+      k: 'stop', berth: platformBerth(topo, s.st, trip.dir, trip.stops[i - 1]?.st), station: s.st, trip: trip.id, stopIndex: i,
       arr: isFirst && !fromDepot ? null : s.arr, dep: i === trip.stops.length - 1 ? null : s.dep,
       doors: trip.revenue, revenue: trip.revenue, ...(s.noBoard ? { noBoard: true } : {}),
     });

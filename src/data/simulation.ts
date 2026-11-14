@@ -56,6 +56,11 @@ export interface TimetableData {
   outerBandMargin: number;
   overlays: OverlayPreset[];
   terminals: {
+    /** the whole route (大交路), DN-ward; unset: the first and last station of the list */
+    trunk?: [string, string];
+    /** further through routes a template's pattern may name, DN-ward (a branch's whole route,
+     * a second short route); each must pass the reference stations */
+    routes?: Record<string, [string, string]>;
     core: [string, string]; insertOrigin?: string; overflowWithdrawal?: string; circulate: string[];
     /** the eastern line end balances its cars with the core by short and extended
      * service routes (截短/延伸交路, timetable.ts layoutService); unset: off */
