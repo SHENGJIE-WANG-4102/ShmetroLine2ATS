@@ -55,7 +55,7 @@ export const STATIONS: StationData[] = [
   { id: 'DFY', name: '东方体育中心', interM: 2263, transfers: ['6', '8'], dwell: 30, demand: 0.7 },
   { id: 'SL', name: '三林', interM: 3516, transfers: [], dwell: 25, demand: 0.55 },
   { id: 'SLD', name: '三林东', interM: 1126, transfers: [], dwell: 20, demand: 0.45 },
-  { id: 'PSL', name: '浦三路', interM: 1613, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
+  { id: 'PSR', name: '浦三路', interM: 1613, transfers: [], dwell: 20, demand: 0.4, sidePlatform: ['DN', 'UP'] },
   { id: 'KHL', name: '康恒路', interM: 1405, transfers: [], dwell: 20, demand: 0.35 },
   { id: 'YQ', name: '御桥', interM: 1816, transfers: ['18'], dwell: 25, demand: 0.6 },
   { id: 'LSH', name: '罗山路', interM: 2509, transfers: [], dwell: 25, demand: 0.55 },
@@ -137,7 +137,7 @@ const loops: CoreLineData['LAYOUT']['loops'] = [
   // 车挡在两端道岔外侧的短尽头。
   { id: 'AT', name: '安亭中间存车线', station: 3, west: -420, east: -160 },
   // 浦三路、云锦路：站内两正线之间中间线，两端双Y接两正线，两端短车挡。
-  { id: 'PSL', name: '浦三路中间存车线', station: 33, west: -210, east: 210 },
+  { id: 'PSR', name: '浦三路中间存车线', station: 33, west: -210, east: 210 },
   { id: 'YJL', name: '云锦路中间存车线', station: 28, west: -210, east: 210 },
   // 三林：站内中间折返线，两座岛式站台夹中间线，两端各一组交叉渡线接两正线；
   // 这两组渡线已由 loop 的双Y生成，不再另列 crossovers。
@@ -178,7 +178,7 @@ const RUN_PAIRS: [string, string][] = [
   ['JDB', 'JDX'], ['JDX', 'BYL'], ['BYL', 'JDC'], ['JDC', 'ML'], ['ML', 'CXL'], ['CXL', 'NX'], ['NX', 'TPX'],
   ['TPX', 'WWL'], ['WWL', 'QLS'], ['QLS', 'LZY'], ['LZY', 'SXZ'], ['SXZ', 'ZR'], ['ZR', 'FQL'], ['FQL', 'CYL'],
   ['CYL', 'LDL'], ['LDL', 'JSL'], ['JSL', 'JTD'], ['JTD', 'XJH'], ['XJH', 'YYG'], ['YYG', 'LH'], ['LH', 'YJL'],
-  ['YJL', 'LYL'], ['LYL', 'DFY'], ['DFY', 'SL'], ['SL', 'SLD'], ['SLD', 'PSL'], ['PSL', 'KHL'], ['KHL', 'YQ'],
+  ['YJL', 'LYL'], ['LYL', 'DFY'], ['DFY', 'SL'], ['SL', 'SLD'], ['SLD', 'PSR'], ['PSR', 'KHL'], ['KHL', 'YQ'],
   ['YQ', 'LSH'], ['LSH', 'XYL'], ['XYL', 'KXG'], ['KXG', 'DSL'],
 ];
 

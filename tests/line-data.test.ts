@@ -19,7 +19,7 @@ describe('line data boundary', () => {
     expect(getGroup('2').lineIds).toEqual(['2']);
     expect(getLine('2', getGroup('2'))).toBe(LINE_2);
     expect(scopedId('2', 'trip', '1')).not.toEqual(scopedId('test', 'trip', '1'));
-    expect(visibleLineGroups().map(g => g.id)).toEqual(['2']);
+    expect(visibleLineGroups().map(g => g.id)).toEqual(['2', '14', '11']);
     expect(visibleLineGroups(true).map(g => g.id)).toContain('test');
     expect(() => getGroup('missing')).toThrow('未知线路组');
   });
