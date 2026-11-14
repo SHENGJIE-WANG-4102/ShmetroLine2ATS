@@ -1,4 +1,5 @@
 import { LINE_2 } from './lines/line2';
+import { LINE_11 } from './lines/line11';
 import { LINE_14 } from './lines/line14';
 import { TEST_LINE } from './lines/test';
 import { TEST_BRANCH_LINE } from './lines/testbranch';
@@ -7,7 +8,7 @@ import type { LineData, LineGroup, ScopedId } from './types';
 function singleLineGroup(line: LineData, developmentOnly = false): LineGroup {
   return { id: line.id, name: line.core.LINE_INFO.shortName, lines: [line], lineIds: [line.id], developmentOnly };
 }
-export const LINE_GROUPS: readonly LineGroup[] = [singleLineGroup(LINE_2), singleLineGroup(TEST_LINE, true), singleLineGroup(TEST_BRANCH_LINE, true), singleLineGroup(LINE_14, true)];
+export const LINE_GROUPS: readonly LineGroup[] = [singleLineGroup(LINE_2), singleLineGroup(TEST_LINE, true), singleLineGroup(TEST_BRANCH_LINE, true), singleLineGroup(LINE_14, true), singleLineGroup(LINE_11, true)];
 
 export function getGroup(id: string): LineGroup {
   const group = LINE_GROUPS.find(candidate => candidate.id === id);
