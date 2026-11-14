@@ -189,3 +189,8 @@
 - 顺手修（公共代码）：`tailOrderClear` 在排图阶段被调用时不传 `own`，登记表里的占用也不带 `block`，`undefined === undefined` 让每条都算成「自己的」，单折返线先到后发检查从来没生效。南翔热备因此和 21:26 的折返重叠，校验报 TAIL_ORDER。现在只有给了 `own` 才跳过自己的占用。
 - 验证：11 号线两种日型排图 0 问题（634/64、437/38），四段停车都排上了；2 号线、14 号线运行图哈希不变。
 - 动了公共文件：`src/data/ui.ts`、`src/sim/model.ts`、`src/sim/dmi.ts`、`src/sim/topology.ts`、`src/sim/timetable.ts`、`src/ui/dmi.ts`、`src/ui/drivingMode.ts`、`src/ui/pisview.ts`、`src/ui/pisColumn.ts`、`src/ui/pisBanner.ts`；新增 `src/ui/dmiTeal.ts`。
+
+## L11-17 11 号线英文站名（用户决定，2026-11-14）
+
+- 40 站英文站名写进 `STATION_EN`，用上海地铁官方译名，按英文维基 Line 11 (Shanghai Metro) 站表逐个核对。原来是空表，PIS「开往 To」、车站名牌下面都没有英文。
+- 特殊写法：上海汽车城 Shanghai Automobile City、上海赛车场 Shanghai Circuit、嘉定新城 Jiading Xincheng、上海西站 Shanghai West Railway Station、交通大学 Jiao Tong University、上海游泳馆 Shanghai Swimming Center、东方体育中心 Oriental Sports Center、迪士尼 Disney Resort。

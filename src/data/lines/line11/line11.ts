@@ -64,7 +64,49 @@ export const STATIONS: StationData[] = [
   { id: 'DSL', name: '迪士尼', interM: 5073.6, transfers: [], dwell: 30, demand: 0.5 },
 ];
 /** 英文名未做逐站实拍核对，留空；PIS 英文按站名缺省处理。 */
-export const STATION_EN: Record<string, string> = {};
+/** 英文站名：上海地铁官方译名，按英文维基 Line 11 (Shanghai Metro) 站表核对（2026-11-14）。 */
+export const STATION_EN: Record<string, string> = {
+  HQ: "Huaqiao",
+  GML: "Guangming Road",
+  ZFL: "Zhaofeng Road",
+  AT: "Anting",
+  SQC: "Shanghai Automobile City",
+  CJL: "East Changji Road",
+  SSC: "Shanghai Circuit",
+  JDB: "North Jiading",
+  JDX: "West Jiading",
+  BYL: "Baiyin Road",
+  JDC: "Jiading Xincheng",
+  ML: "Malu",
+  CXL: "Chenxiang Highway",
+  NX: "Nanxiang",
+  TPX: "Taopu Xincun",
+  WWL: "Wuwei Road",
+  QLS: "Qilianshan Road",
+  LZY: "Liziyuan",
+  SXZ: "Shanghai West Railway Station",
+  ZR: "Zhenru",
+  FQL: "Fengqiao Road",
+  CYL: "Caoyang Road",
+  LDL: "Longde Road",
+  JSL: "Jiangsu Road",
+  JTD: "Jiao Tong University",
+  XJH: "Xujiahui",
+  YYG: "Shanghai Swimming Center",
+  LH: "Longhua",
+  YJL: "Yunjin Road",
+  LYL: "Longyao Road",
+  DFY: "Oriental Sports Center",
+  SL: "Sanlin",
+  SLD: "East Sanlin",
+  PSR: "Pusan Road",
+  KHL: "Kangheng Road",
+  YQ: "Yuqiao",
+  LSH: "Luoshan Road",
+  XYL: "Xiuyan Road",
+  KXG: "Kangxin Highway",
+  DSL: "Disney Resort",
+};
 
 /** 配线：以 reference/上海轨道交通全网配线V2025.26.2.pdf 原图逐站核对（2026-11-14 第二次读图）。
  * 图上不按比例，米数仍是【假设】；对的是哪一端、哪条正线、道岔朝向和先后次序。
