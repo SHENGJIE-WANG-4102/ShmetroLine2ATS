@@ -176,7 +176,7 @@ describe('line 11 branch, layout and plan', () => {
     expect(reaches(platform(station('HQ'), 'UP'), platform(station('JDB'), 'UP'))).toBe(false);
   });
 
-  for (const dayType of ['weekday', 'weekend'] as const) it(`${dayType}: lays out both branches and the short routes without plan issues`, () => {
+  for (const dayType of ['weekday', 'weekend'] as const) it(`${dayType}: lays out both branches and the short routes without plan issues`, async () => {
     const sim = new Sim({ dayType, dateLabel: '11号线', startTime: 14400, seed: 7 });
     const paths = (dir: 'DN' | 'UP') => {
       const count = new Map<string, number>();
@@ -204,5 +204,34 @@ describe('line 11 branch, layout and plan', () => {
     }
     expect(sim.plan.fleetPeak).toBeLessThanOrEqual(82);
     expect(validatePlan(sim.planCtx, sim.plan, true, false, { checkWaiting: true })).toEqual([]);
+
+    // L11-04 / L11-18: four patrols, after the night's possessions, each the first train over its
+    // tracks, then working the first departure where it waits
+    const { POSSESSIONS } = await import('../src/data/current');
+    const patrols = sim.plan.blocks.filter(block => sim.plan.trips[block.trips[0]].patrol);
+    expect(patrols.map(block => block.trips.filter(id => sim.plan.trips[id].patrol)
+      .map(id => STATIONS[sim.plan.trips[id].from].id).concat(STATIONS[sim.plan.trips[block.trips.find(id => !sim.plan.trips[id].patrol)!].from].id)).sort())
+      .toEqual([['JDB', 'DSL'], ['LSH', 'DSL', 'JDB'], ['SSC', 'HQ'], ['SSC', 'JDC']].sort());
+    for (const block of patrols) {
+      expect(block.start.kind).toBe('depot');
+      const legs = block.trips.map(id => sim.plan.trips[id]).filter(trip => trip.patrol);
+      expect(legs[0].stops[0].dep).toBeGreaterThanOrEqual(POSSESSIONS.morningUntil);
+      for (const leg of legs) for (const stop of leg.stops) for (const other of sim.plan.trips)
+        if (other.revenue && !other.cancelled && other.dir === leg.dir) for (const call of other.stops)
+          if (call.st === stop.st) expect(call.dep).toBeGreaterThan(stop.dep);
+      const served = sim.plan.trips[block.trips.find(id => !sim.plan.trips[id].patrol)!];
+      expect(served.revenue).toBe(true);
+      expect(sim.plan.trips.filter(trip => trip.revenue && !trip.cancelled && trip.from === served.from && trip.dir === served.dir)
+        .every(trip => trip.stops[0].dep >= served.stops[0].dep)).toBe(true);
+    }
+    // 三林 keeps the last morning short-route car until it goes up to 南翔 for the evening peak
+    const stored = sim.plan.trips.filter(trip => trip.standby && trip.to === station('SL'));
+    expect(stored).toHaveLength(dayType === 'weekday' ? 1 : 0);
+    for (const trip of stored) {
+      const block = sim.plan.blocks[trip.block], next = sim.plan.trips[block.trips[block.trips.indexOf(trip.id) + 1]];
+      expect(trip.stops.at(-1)!.arr).toBeLessThan(10.5 * 3600);
+      expect([STATIONS[next.from].id, STATIONS[next.to].id, next.revenue]).toEqual(['SL', 'NX', false]);
+      expect(next.stops[0].dep).toBeGreaterThanOrEqual(16.5 * 3600);
+    }
   });
 });

@@ -334,6 +334,10 @@ export interface CoreLineData {
         windows?: Partial<Record<'weekday' | 'weekend', { from: number; need: number; to: number }[]>>;
         /** Late trains at this terminal take the next ready departure in arrival order (D148). */
         firstReady?: boolean;
+        /** A stored spare with no yard source: the last train to arrive here in a window (from
+         * `from`, before `need`) stays; from `need` it runs empty to this station and works the
+         * first departure there. */
+        serves?: string;
     }[];
     /** Preferred rear turnback track by station id (berth name); others are alternatives. */
     mainTurnback?: Record<string, string>;

@@ -70,6 +70,10 @@ export interface TimetableData {
   firstOrigins: { dir: TrackDir; from: string; to: string; dep: number }[];
   openingGuards: { station: string; dir: TrackDir; until: number }[];
   closingDepotMoves: { station: string; dir: TrackDir; depot: string }[];
+  /** Pre-service track patrols (巡道车): out of `depot` before the first trains, empty and
+   * passing every station along `via` (changing ends at each inner station), then waiting at
+   * the last one for the first departure there, which the car then works. */
+  patrols?: { depot: string; via: string[] }[];
 }
 
 export type TrainWindow = { from: string; to: string; fromOffset?: number; toOffset?: number };

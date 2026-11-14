@@ -503,6 +503,39 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     }
     return reason;
   };
+  /** A stored spare (hotStandby place with `serves`): the last train arriving at the place in the
+   * window (after the place's own last departure then, when there is one) stays there; from
+   * `need` it runs empty to `serves` and works the first departure there it can make. */
+  const storedSpare = (place: { station: number; serves: number }, window: { from: number; need: number }): string | undefined => {
+    const P = place.station, S = place.serves;
+    const lastOut = Math.max(-Infinity, ...services.filter(t => !t.cancelled && t.from === P && dep(t) < window.need).map(dep));
+    const arrivals = services.filter(t => !t.cancelled && t.to === P && t.next === undefined && !endOf.has(t.id)
+      && arr(t) >= window.from && arr(t) < window.need).sort((a, b) => Number(arr(b) > lastOut) - Number(arr(a) > lastOut) || arr(b) - arr(a));
+    const a = arrivals[0];
+    if (!a) return '到达车';
+    const dir = toward(P, S), turnX = a.dir !== dir;
+    if (turnX && !turnbackAt(topo, P, a.dir)) return '折返';
+    const departures = services.filter(t => !t.cancelled && t.from === S && t.prev === undefined && !startOf.has(t.id) && dep(t) >= window.need)
+      .sort((x, y) => dep(x) - dep(y));
+    for (const d of departures.slice(0, 12)) {
+      const turnP = dir !== d.dir;
+      if (turnP && !turnbackAt(topo, S, dir)) continue;
+      const latest = dep(d) - (turnP ? minTurn(S) : throughMin(S, d.dir, dep(d)));
+      const move = fitBefore(dir, P, S, window.need, latest, turnP ? undefined : d.stops, stops => T('outer', outerQuiet(stops))
+        && T('safeP', safe(asTrip(dir, P, S, stops), d)) && T('waitP', dep(d) - stops.at(-1)!.arr <= waitLimit(S, turnP, stops.at(-1)!.arr))
+        && T('placeX', reserve(P, arr(a), stops[0].dep, false))
+        && (!turnP || T('placeP', reserve(S, stops.at(-1)!.arr, dep(d), false))
+          && T('frontP', frontTurnClear(ctx, live(), { dir, to: S, stops }, dep(d), new Set([d.id])))));
+      if (!move) continue;
+      reserve(P, arr(a), move.stops[0].dep);
+      if (turnP) reserve(S, move.stops.at(-1)!.arr, dep(d));
+      const trip = addMove(dir, P, S, move.stops, false);
+      a.standby = true;
+      link(a, trip); link(trip, d);
+      return undefined;
+    }
+    return `去${STATIONS[S].name}接车`;
+  };
   /** the latest move from→P running `dir` that brings a car for departure `d` there (turning at P when
    * `dir` is not d's): its wait, the car's berth and, turning, P's turnback and front route; `fits`: the rest */
   const fitInto = (dir: TrackDir, from: number, P: number, d: GenTrip, fits: (stops: PlanStop[]) => boolean) => {
@@ -773,7 +806,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     E, lineEnd, factor, arr, dep, live, services, leavingFrom, lineEndStand, throughMin, waitLimit, openers, index, slot, lastService, POSITIONING,
     addMove, startOf, endOf, link, places, standbyPlaces, reserve, yards, asTrip, safe, moveStops, outerQuiet, exitClear, entryClear,
     exits, inbound, outbound, addExit, addInbound, dropInbound, fitBefore, fitAfter, toward, depotDir, position, lowest, canDraw, canTake,
-    feed, distanceTo, idleYard, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter, leadMoves, stationedStandby,
+    feed, distanceTo, idleYard, dropHeld, releasable, homeBy, join, seedBase, unseed, clearAfter, leadMoves, stationedStandby, storedSpare,
     get redirecting() { return redirecting; }, set redirecting(v: typeof redirecting) { redirecting = v; },
     get viaCore() { return viaCore; }, set viaCore(v: boolean) { viaCore = v; },
     get early() { return early; }, set early(v: boolean) { early = v; },

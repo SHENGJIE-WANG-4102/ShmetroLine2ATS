@@ -810,7 +810,7 @@ export class Sim {
         platSide: t0?.k === 'stop' && this.topo.berths[t0.berth].platform >= 0 && (tr.phase === 'dwell' || (tr.stopDist >= 0 && tr.stopDist < 400)) ? platformSide(this, tr, this.topo.berths[t0.berth].platform) : '',
         inService: tr.inService, hot: hotMark(tr), chain: this.trainChain(tr),
         maReason: tr.maReason, maDist: tr.maDist, vPermit: tr.vPermit, nextSig: tr.nextSignal,
-        task: t0 ? describeTask(this, t0) : '—', kind: tr.tripId >= 0 ? this.plan.trips[tr.tripId].kind : '',
+        task: t0 ? `${tr.tripId >= 0 && this.plan.trips[tr.tripId]?.patrol ? '巡道 ' : ''}${describeTask(this, t0)}` : '—', kind: tr.tripId >= 0 ? this.plan.trips[tr.tripId].kind : '',
         rm: tr.mode === 'RM',
         vTarget: tr.vTarget, tgtV: tr.tgtV, tgtD: Number.isFinite(tr.tgtD) ? tr.tgtD : -1, tgtReason: tr.tgtReason,
         vRecommended: tr.manual && tr.mode === 'CM' ? tr.vRecommended ?? 0 : undefined,

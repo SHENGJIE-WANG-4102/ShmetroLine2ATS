@@ -44,9 +44,21 @@ const service = (): ServiceData => ({
  * 嘉定新城 06:36、罗山路 05:20/05:25 往花桥/嘉定北。花桥 05:37 由早间过渡的
  * 第二班产生（不是另加一趟）；这里只补罗山路 05:20 往嘉定北这一趟。
  * 其余起点在车场出车/中途折返上没有来源，或两趟只差 5 分钟会追尾，逐条写在
- * 汇报【待定】。官方表里还有“往安亭”末班和 4 趟巡道车，现字段也表达不了。 */
+ * 汇报【待定】。官方表里还有“往安亭”末班，现字段表达不了；4 趟巡道车见下面 patrols。 */
 const firstOrigins: SimulationData['timetable']['firstOrigins'] = [
   { dir: 'UP', from: 'LSH', to: 'JDB', dep: H(5, 20) },  // 罗山路首班往嘉定北
+  // 用户决定（2026-11-14）：嘉定新城 05:45 往迪士尼是始发，由在嘉定新城站台等待的巡道车担当
+  { dir: 'DN', from: 'JDC', to: 'DSL', dep: H(5, 45) },
+];
+
+/** 用户决定（2026-11-14，L11-04）：首班前 4 趟巡道车，跑完在终点等，接那里的第一趟发车。
+ * 花桥支线两趟从赛车场车辆段出：一趟到花桥折返线等，一趟到嘉定新城站台等（出车车场
+ * 【假设】）；主线：嘉定北→迪士尼到折返线等，罗山路→迪士尼→嘉定北到折返线等。 */
+const patrols: SimulationData['timetable']['patrols'] = [
+  { depot: 'SSC', via: ['SSC', 'HQ'] },
+  { depot: 'SSC', via: ['SSC', 'JDC'] },
+  { depot: 'CBL', via: ['JDB', 'DSL'] },
+  { depot: 'CYL', via: ['LSH', 'DSL', 'JDB'] },
 ];
 
 export const LINE11_SIMULATION: SimulationData = {
@@ -108,7 +120,7 @@ export const LINE11_SIMULATION: SimulationData = {
       capacity: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 3, DSL: 3 },
       maxPresent: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 3, DSL: 3 },
     },
-    firstOrigins,
+    firstOrigins, patrols,
     openingGuards: [], closingDepotMoves: [],
   },
 };

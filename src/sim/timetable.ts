@@ -261,16 +261,19 @@ export function officialTimingPoints(dir: TrackDir, from: number, to: number, or
   const points = new Map<number, number>();
   const sts = stationPath(from, to);
   const row = (st: number) => FIRST_LAST.find(r => r.station === STATIONS[st]?.name);
+  // a declared first origin (timetable.firstOrigins) owns its column's minutes from its station on
+  const declared = (st: number, clock: string | undefined) => !!clock && SIMULATION.timetable.firstOrigins.some(o => o.dir === dir
+    && STATIONS[st]?.id === o.from && Math.abs(o.dep - officialClock(clock)) < 60);
   for (const [key, d] of FIRST_LAST_COLUMNS) {
     if (d !== dir) continue;
     const own = row(from)?.[key];
     if (!own || Math.abs(officialClock(own) - originDep) >= 60) continue;
-    if (nextStations(dir === 'DN' ? 'UP' : 'DN', from, STATIONS.length).some(st => { const upstream = row(st)?.[key]; return upstream && officialClock(upstream) <= officialClock(own); })) continue;
+    if (!declared(from, own) && nextStations(dir === 'DN' ? 'UP' : 'DN', from, STATIONS.length).some(st => { const upstream = row(st)?.[key]; return upstream && officialClock(upstream) <= officialClock(own); })) continue;
     if (last && key.startsWith('last')) last.train = true;
     let prev = -Infinity;
     for (const st of sts) {
       const v = row(st)?.[key];
-      if (!v || officialClock(v) < prev) break;
+      if (!v || officialClock(v) < prev || st !== from && declared(st, v)) break;
       prev = officialClock(v);
       points.set(st, prev);
     }
@@ -919,7 +922,22 @@ export function layoutService(ctx: PlanContext) {
   // are the 龙阳路 and 广兰路 first trains passing.)
   for (const origin of SIMULATION.timetable.firstOrigins) {
     const { dir } = origin, from = stationIndex(origin.from), to = stationIndex(origin.to);
-    firstService.push(addTrip(dir, 'ins', from, to, buildStops(ctx, dir, from, to, origin.dep, true, factorAt), true));
+    const opener = addTrip(dir, 'ins', from, to, buildStops(ctx, dir, from, to, origin.dep, true, factorAt), true);
+    firstService.push(opener);
+    // 用户决定（2026-11-14）：an earlier train running through the origin station that would
+    // reach it before the origin has left by a headway stands at the station before it, and
+    // runs on from there that much later, a headway behind it at every station they share
+    for (const t of trips) {
+      if (t === opener || t.dir !== dir || t.from === from) continue;
+      const k = t.stops.findIndex(p => p.st === from);
+      if (k <= 0 || t.stops[k].dep <= origin.dep - MIN_HEADWAY || t.stops[k].arr >= origin.dep + MIN_HEADWAY) continue;
+      const delay = Math.max(origin.dep + MIN_HEADWAY - t.stops[k].arr, ...t.stops.slice(k).map(p => {
+        const o = opener.stops.find(q => q.st === p.st);
+        return o ? o.dep + MIN_HEADWAY - p.dep : 0;
+      }));
+      t.stops[k - 1].dep += delay;
+      for (const p of t.stops.slice(k)) { p.arr += delay; p.dep += delay; }
+    }
   }
 
   {
@@ -1166,6 +1184,7 @@ export interface ServiceRequest {
   standby?: boolean;
   locked?: boolean;
   stableBerth?: number;
+  patrol?: boolean;
 }
 /** A proposed vehicle connection may wait only at an actual safe berth. */
 export function connectionChoice(topo: Topology, dayType: Plan['dayType'], a: Trip, d: Trip, candidates?: readonly number[]) {
@@ -1341,13 +1360,79 @@ export function restorePlans(stored: readonly StoredPlan[]) {
 function buildPlan(ctx: PlanContext): Plan {
   const { requests, periods, firstService: published, issues: layoutIssues } = layoutService(ctx);
   const fixedDraft = CARRY_MOVES ? draftFixedPassengerSupply(ctx, requests, published, ctx.fixedRuns ?? FIXED_LATE_TRAINS) : {pairs: [], anchors: [], starts:new Map<number,number>(), issues: []};
-  return buildPoolPlan(ctx, requests, periods, published, layoutIssues, fixedDraft, new Map(fixedDraft.starts));
+  const patrols = draftPatrols(ctx, requests);
+  return buildPoolPlan(ctx, requests, periods, published, [...layoutIssues, ...patrols.issues], fixedDraft,
+    new Map([...fixedDraft.starts, ...patrols.starts]), patrols.chains);
+}
+
+/** Pre-service track patrols (SIMULATION.timetable.patrols, 巡道车): each runs empty out of its
+ * depot along its stations, as late as lets it still take the first departure at its last
+ * station and run ahead of every passenger train on each track it covers, then works that
+ * departure. A patrol that cannot run so is reported, not dropped silently. */
+function draftPatrols(ctx: PlanContext, requests: ServiceRequest[]) {
+  const { topo } = ctx;
+  const starts = new Map<number, number>(), chains: number[][] = [], issues: PlanIssue[] = [];
+  const served = new Set<number>(), index = new DepIndex(requests);
+  const factor = (t: number) => dwellFactorAt(ctx.dayType, t);
+  const fmt = (t: number) => `${String(Math.floor(t / 3600)).padStart(2, '0')}:${String(Math.floor(t / 60) % 60).padStart(2, '0')}`;
+  for (const patrol of SIMULATION.timetable.patrols ?? []) {
+    const via = patrol.via.map(stationIndex), end = via.at(-1)!, depot = depotIndex(topo, patrol.depot);
+    const name = patrol.via.map(id => STATIONS[stationIndex(id)]?.name ?? id).join('→');
+    const legs = via.slice(1).map((to, k) => ({ from: via[k], to, dir: (ahead('DN', via[k], to) ? 'DN' : 'UP') as TrackDir }));
+    const serve = requests.filter(r => r.from === end && r.revenue && !served.has(r.id)).sort((a, b) => a.stops[0].dep - b.stops[0].dep)[0];
+    const fail = (t: number, why: string) => issues.push({ severity: 'error', code: 'UNASSIGNED', t, text: `巡道车 ${name}：${why}` });
+    if (depot < 0 || via.some(st => st < 0) || !legs.length || legs.some(leg => leg.from === leg.to || stationPath(leg.from, leg.to).length < 2)) { fail(OPENING.dayStart, '车场或车站写错'); continue; }
+    if (exitStation(topo, depot, legs[0].dir) !== via[0]) { fail(OPENING.dayStart, `${topo.depots[depot].name}${legs[0].dir === 'DN' ? '下行' : '上行'}出车不在${STATIONS[via[0]].name}`); continue; }
+    if (!serve) { fail(OPENING.dayStart, `${STATIONS[end].name}没有可接的发车`); continue; }
+    // the first train it works leaves at the official first-train minute there when one is near
+    const clock = FIRST_LAST.find(r => r.station === STATIONS[end].name)?.[serve.dir === 'DN' ? 'firstE' : 'firstW'];
+    if (clock && officialClock(clock) !== serve.stops[0].dep && Math.abs(officialClock(clock) - serve.stops[0].dep) <= 300) {
+      const stops = buildStops(ctx, serve.dir, serve.from, serve.to, officialClock(clock), true, factor);
+      if (new DepIndex(requests.filter(r => r !== serve)).clear(stops, serve.dir)) serve.stops = stops;
+    }
+    const turn = legs.at(-1)!.dir !== serve.dir;
+    if (turn && !turnbackAt(topo, end, legs.at(-1)!.dir)) { fail(serve.stops[0].dep, `${STATIONS[end].name}不能折返`); continue; }
+    for (const leg of legs.slice(0, -1)) if (!turnbackAt(topo, leg.to, leg.dir)) fail(serve.stops[0].dep, `${STATIONS[leg.to].name}不能折返`);
+    const latest = serve.stops[0].dep - (turn ? minTurn(end) : MIN_HEADWAY);
+    const lay = (start: number) => {
+      let t = start;
+      return legs.map((leg, k) => {
+        const stops = buildStops(ctx, leg.dir, leg.from, leg.to, t, false, factor);
+        t = stops.at(-1)!.arr + (k + 1 < legs.length ? minTurn(leg.to) : 0);
+        return stops;
+      });
+    };
+    // ahead of every passenger train over each track it covers, by a headway
+    const first = (stops: PlanStop[], dir: TrackDir) => stops.every(p => requests.every(r => r.dir !== dir || r.patrol
+      || r.stops.every(q => q.st !== p.st || q.dep >= p.dep + MIN_HEADWAY)));
+    let start = latest - (lay(latest).at(-1)!.at(-1)!.arr - latest), laid: PlanStop[][] | undefined;
+    // after the night's possessions end: a patrol is the first train over the track
+    const earliest = Math.max(OPENING.dayStart, POSSESSIONS.morningUntil);
+    for (; start >= earliest; start -= 10) {
+      const candidate = lay(start);
+      if (candidate.at(-1)!.at(-1)!.arr > latest) continue;
+      if (candidate.every((stops, k) => index.clear(stops, legs[k].dir) && first(stops, legs[k].dir))) { laid = candidate; break; }
+    }
+    if (!laid) { fail(serve.stops[0].dep, `${fmt(earliest)} 施工结束以后排不出赶在首班前、接 ${fmt(serve.stops[0].dep)} 发车的时隙`); continue; }
+    const chain = laid.map((stops, k) => {
+      const leg = legs[k];
+      const trip: ServiceRequest = { id: requests.length, dir: leg.dir, kind: 'empty', from: leg.from, to: leg.to, stops, revenue: false, locked: true, patrol: true };
+      requests.push(trip); index.add(trip);
+      return trip.id;
+    });
+    starts.set(chain[0], depot);
+    // the first departure it works keeps its minute (it is no longer free to move)
+    serve.locked = true;
+    served.add(serve.id);
+    chains.push([...chain, serve.id]);
+  }
+  return { starts, chains, issues };
 }
 
 /** D178: the day duty from the terminal pools (duty/planner.ts). */
 function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], periods: Period[], published: ReadonlySet<number>, layoutIssues: PlanIssue[],
   fixedDraft: { pairs: [number, number, number, number, (number | undefined)?][]; anchors: number[]; issues: PlanIssue[] },
-  reservedStarts: Map<number, number>): Plan {
+  reservedStarts: Map<number, number>, patrols: readonly number[][] = []): Plan {
   const W = 0;
   const locked = new Set(requests.filter(r => r.locked || published.has(r.id) || isPublishedOrigin(ctx, r)).map(r => r.id));
   const anchors = new Set([...published, ...fixedDraft.anchors, ...locked]);
@@ -1358,7 +1443,9 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
     for (const request of requests) {
       const trip = addTo(drafts, request.dir, request.kind, request.from, request.to, request.stops.map(stop => ({ ...stop })), request.revenue, request.overlay);
       if (request.standby) trip.standby = true;
+      if (request.patrol) trip.patrol = true;
     }
+    for (const chain of patrols) for (let k = 0; k + 1 < chain.length; k++) { drafts[chain[k]].next = chain[k + 1]; drafts[chain[k + 1]].prev = chain[k]; }
     const fixedEnds = new Map<number, number>();
     for (const [a, b, c, depot, returning] of fixedDraft.pairs) {
       if (a >= 0) { drafts[a].next = b; drafts[b].prev = a; }
@@ -2556,6 +2643,12 @@ export function blockTasks(topo: Topology, plan: Plan, block: Block, fromTrip = 
     const before = previous && effectiveTrip(previous);
     const dep = tasks.slice(first).find((t): t is StopTask => t.k === 'stop');
     if (before?.standby && dep) dep.standby = true;
+    // running on in its own direction from where the last trip ended, it leaves from the platform
+    // it came in at (a branch's own platform at a junction station)
+    if (before && dep && before.dir === trip.dir && before.to === trip.from && dep.station === trip.from && dep.stopIndex === 0) {
+      const came = before.stops.at(-2)?.st;
+      if (came !== undefined) dep.berth = platformBerth(topo, trip.from, trip.dir, came);
+    }
     const nextRaw = ids.slice(k + 1).map(i => plan.trips[i]).find(t => !t.cancelled);
     const next = nextRaw && effectiveTrip(nextRaw);
     // 终到清客（D188）: the passengers leave unless the train runs on with them
@@ -2566,7 +2659,9 @@ export function blockTasks(topo: Topology, plan: Plan, block: Block, fromTrip = 
     }
     if (next) {
       if (next.dir !== trip.dir) {
-        const hot = trip.standby && hotStandbyPlaces(topo).find(p => p.station === trip.to && p.depot);
+        // a spare kept on a platform track (a station's middle track) sets down and changes ends
+        // on it like any train turning there; one in a storage track backs in from the platform
+        const hot = trip.standby && hotStandbyPlaces(topo).find(p => p.station === trip.to && p.depot && topo.berths[p.berth]?.kind !== 'platform');
         const berth = hot && storageArrivalBerth(topo, hot.berth, trip.dir);
         if (berth !== undefined && berth !== false) {
           tasks.push({ k: 'reverse', berths: [berth], chosen: berth, station: trip.to, minTime: 40 });

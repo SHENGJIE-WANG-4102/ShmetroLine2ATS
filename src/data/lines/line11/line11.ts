@@ -252,7 +252,7 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   lastBigWestboundArrival: H(24, 0),
   peakCoreHeadway: 120, // 官方 南翔—三林 早高峰往三林 平均2分
   minTurnback: { HQ: 240, JDB: 240, DSL: 300, NX: 240, SL: 300, LSH: 240, AT: 240 }, // 【假设】按尾轨/中间线作业加余量
-  longWaitPlatformStations: ['NX', 'ZR'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）；真如中间线站台平峰停车
+  longWaitPlatformStations: ['NX'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）
   platformTurnClear: {},
   // 回段：图上城北路只接嘉定北下行正线，数据照图写；赛车场只接上行正线，但因站东 X 放不下，
   // 数据里的出入段线暂写双Y（见 LAYOUT.sidings 注释和汇报【待定】）。川杨河接哪条正线看不清，按两正线【假设】。
@@ -270,10 +270,17 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   // 用户决定（2026-11-14）：南翔、真如中间线除高峰期都停一列车。按驻站热备排：平峰前从
   // 赛车场车辆段（备选城北路）开过去，高峰前回段。窗口钟点按 simulation 的高峰时段留
   // 15–30 分钟余量【假设】；双休日没有高峰，整个日间都停。
-  hotStandby: (['NX', 'ZR'] as const).map(station => ({
-    station, track: 'turnback' as const, berth: 0, depot: 'SSC', incoming: 'DN' as const,
-    alternatives: [{ depot: 'CBL', incoming: 'DN' as const }], windows: OFF_PEAK_STORAGE,
-  })),
+  hotStandby: [
+    ...(['NX', 'ZR'] as const).map(station => ({
+      station, track: 'turnback' as const, berth: 0, depot: 'SSC', incoming: 'DN' as const,
+      alternatives: [{ depot: 'CBL', incoming: 'DN' as const }], windows: OFF_PEAK_STORAGE,
+    })),
+    // 用户决定（2026-11-14）：三林中间折返线停早高峰跑完的南翔—三林小交路车，停到晚高峰上线。
+    // 三林晚上没有始发，它在中间线换端停着，16:30 起空车上行到南翔，接晚高峰南翔—罗山路
+    // 小交路【假设：去南翔接】。工作日才有三林小交路。
+    { station: 'SL', track: 'turnback' as const, berth: 0, serves: 'NX',
+      windows: { weekday: [{ from: H(9), need: H(16, 30), to: H(17, 30) }], weekend: [] } },
+  ],
   platformPassKmh: 45,
   platformStopKmh: Infinity,
   depotDoorTests: { CBL: { beforeSignal: 5 }, SSC: { beforeSignal: 5 }, CYL: { beforeSignal: 5 } }, // 【假设】未建库内试验线
@@ -316,5 +323,7 @@ export const LINE11_CORE: CoreLineData = {
   EXPOSED: [],
   PROFILE_ANCHORS: { elevatedFrom: Infinity, groundFrom: Infinity },
   WEATHER_RULES: { wind: [], rain: { label: '暴雨', kmh: 80, elevatedOnly: true } },
-  POSSESSIONS: { candidates: [2, 5, 13, 19, 25, 31, 36], morningUntil: H(4, 30), nightFrom: H(24), nightTo: H(27) }, // 【假设】夜间施工窗与候选区段
+  // 【假设】夜间施工窗与候选区段。早上 04:00 结束：罗山路→迪士尼→嘉定北的巡道车（L11-04）要赶嘉定北
+  // 05:36 首班，约 04:15 就得出车，施工最晚这时已结束。
+  POSSESSIONS: { candidates: [2, 5, 13, 19, 25, 31, 36], morningUntil: H(4), nightFrom: H(24), nightTo: H(27) },
 };

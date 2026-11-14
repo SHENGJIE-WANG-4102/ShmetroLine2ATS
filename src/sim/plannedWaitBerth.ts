@@ -4,7 +4,7 @@ import { plannedDwell } from './calibration';
 import type { Plan, Task, Trip } from './model';
 import { walkRouteToBerth } from './routePath';
 import { buildRouteTable, type RouteTable } from './routeTable';
-import { departureBerthAfterReverse, dwellFactorAt, effectiveEnd, effectiveStops, minTurn, platformBerth } from './timetable';
+import { departureBerthAfterReverse, dwellFactorAt, effectiveEnd, effectiveStops, hotStandbyPlaces, minTurn, platformBerth } from './timetable';
 import { reversedBerthPoint, safeWaitingPoint, turnbackLeadBerth, type Dir, type RouteStep, type Topology, type TrackPoint } from './topology';
 
 type Path = { link: number; from: number; to: number }[];
@@ -77,7 +77,9 @@ export function plannedWaitBerth(topo: Topology, arrival: Trip, departure: Trip,
   actual?: { point: TrackPoint; incoming: RouteStep[]; length: number }) {
   const turning = arrival.dir !== departure.dir;
   const arrivalEnd = effectiveEnd(arrival);
-  const platformAllowed = arrivalEnd !== undefined && (OPERATIONS.longWaitPlatformStations ?? []).includes(STATIONS[arrivalEnd]?.id);
+  // a hot or stored spare stands at its own place (OPERATIONS.hotStandby), platform face or not
+  const platformAllowed = arrivalEnd !== undefined && ((OPERATIONS.longWaitPlatformStations ?? []).includes(STATIONS[arrivalEnd]?.id)
+    || !!arrival.standby && hotStandbyPlaces(topo).some(place => place.station === arrivalEnd));
   const approach = effectiveStops(arrival).slice(0, -1).reverse().find(s => s.stop);
   const ordered = preferred !== undefined && candidates.includes(preferred)
     ? [preferred, ...candidates.filter(b => b !== preferred)] : [...candidates];

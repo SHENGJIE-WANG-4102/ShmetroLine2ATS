@@ -63,6 +63,8 @@ export interface Trip {
   standby?: boolean;
   /** A dispatched storage spare runs without boarding until this first stop. */
   hotCallout?: { from: number; firstBoardable: number };
+  /** a pre-service track patrol (巡道车, SIMULATION.timetable.patrols) */
+  patrol?: boolean;
 }
 
 /** Cancel a trip with its specific reason. The first reason given is kept

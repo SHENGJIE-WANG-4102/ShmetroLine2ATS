@@ -94,6 +94,12 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   for (const [id, depot] of input.reservedStarts) startOf.set(id, { kind: 'depot', depot, time: 0 });
   for (const [id, depot] of input.fixedEnds) endOf.set(id, { kind: 'depot', depot });
   for (const [id, berth] of input.stableStarts) startOf.set(id, { kind: 'stable', station: topo.berths[berth].station, berth });
+  // stored spares (hotStandby places with `serves`) take their car and departure before the pools
+  for (const place of hotStandbyPlaces(topo)) if (place.serves && !place.depot) for (const window of standbyWindows(ctx.dayType, place)) {
+    const reason = mv.storedSpare({ station: place.station, serves: stationIndex(place.serves) }, window);
+    if (reason) issues.push({ severity: place.optional ? 'warn' : 'error', code: 'UNASSIGNED', t: window.from,
+      text: `${STATIONS[place.station].name}存车无可行${reason}时隙，未开行该存车运用` });
+  }
 
 
 
@@ -203,7 +209,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
    * departures can spare aside, from `from`; from `need` it takes the first
    * departure the other cars leave uncovered. */
   function hotStandby(T: number, cars: Car[], wants: Want[]) {
-    const place = hotStandbyPlaces(topo).find(p => p.station === T && !p.depot);
+    const place = hotStandbyPlaces(topo).find(p => p.station === T && !p.depot && !p.serves);
     if (!place) return;
     const turn = minTurn(T);
     const uncovered = (t: number, until: number, without?: Car) => {
