@@ -675,7 +675,8 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     }
     const dir = depotDir(X, depot);
     const en = entryStation(topo, depot, dir);
-    if (en === X || ahead(dir, en, X)) return false;
+    // (the entry must lie ahead: on a branched line a station off that way is not merely behind)
+    if (en === X || !ahead(dir, X, en)) return false;
     if (topo.depots[depot].portals.entry[dir].reverse && portalReversal(topo, depot, 'entry', dir, arr(a)) !== 'yes' && homeViaTurn(car, yard)) return true;
     // (no entry before the end of the morning peak: a turning car stands on until then)
     const probe = moveStops(dir, X, en, 0), run = probe ? probe.stops.at(-1)!.arr - probe.stops[0].dep : 0;

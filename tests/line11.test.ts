@@ -106,6 +106,25 @@ describe('line 11 branch, layout and plan', () => {
     expect(yard.portals.entry.UP).toMatchObject({ reverse: false });
   });
 
+  it('turns 嘉定北 yard moves at the end of a 牵出线, out and in', async () => {
+    const { depotTasks } = await import('../src/sim/timetable');
+    const yard = topo.depots.findIndex(depot => depot.station === station('JDB'));
+    const { transferPaths, portals } = topo.depots[yard];
+    // each lead runs on past the yard's points into its own 牵出线 to a buffer
+    for (const path of transferPaths) {
+      expect(path.shuntBerth).toBeDefined();
+      const berth = topo.berths[path.shuntBerth!];
+      expect(topo.nodes[topo.links[berth.link].b].kind).toBe('end');
+      expect(berth.offset).toBeGreaterThan(200);
+    }
+    // in: the train changes ends on the in-lead's 牵出线, then backs into the yard
+    const into = portals.entry.UP!;
+    const tasks: import('../src/sim/model').Task[] = [];
+    depotTasks(topo, yard, 'UP', tasks);
+    expect(tasks.slice(-2).map(task => task.k)).toEqual(['reverse', 'depot']);
+    expect(tasks.at(-2)).toMatchObject({ berths: [transferPaths[into.path].shuntBerth] });
+  });
+
   it('keeps 上海赛车场 crossovers on both sides of the platform, the east one before the join', () => {
     const SSC = station('SSC'), at = topo.stations[SSC].chain;
     const cross = (t: string) => topo.nodes.filter(node => node.kind === 'switch' && Math.abs(node.chain - at) < 600
@@ -125,6 +144,17 @@ describe('line 11 branch, layout and plan', () => {
       }
       expect(node.links.map(l => topo.links[l].track)).toContain('UP');
     }
+  });
+
+  it('turns 南翔 short routes on its middle track, platform on the DN side only', () => {
+    const NX = station('NX'), turns = topo.stations[NX].turnbackBerths;
+    expect(turns.length).toBeGreaterThan(0);
+    expect(turns.every(berth => topo.berths[berth].kind === 'platform' && topo.links[topo.berths[berth].link].platform >= 0)).toBe(true);
+    // the middle track shares the DN main's island: its face looks the other way
+    const loop = topo.platforms.filter(p => p.station === NX && turns.some(berth => topo.berths[berth].link === p.link));
+    const main = topo.platforms[topo.stations[NX].platforms.DN];
+    expect(loop.map(p => p.track)).toEqual(['DN']);
+    expect(loop[0].face).not.toBe(main.face);
   });
 
   it('runs UP from 嘉定新城 to either branch', () => {

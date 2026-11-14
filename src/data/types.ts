@@ -45,6 +45,10 @@ export interface CrossoverDef {
 export interface LeadDef {
     depot: string;
     flow?: 'in' | 'out';
+    /** The lead runs on past the yard's points into a 牵出线 this long (m) to a buffer; the yard
+     * joins it facing back towards the main, so a train changes ends at the 牵出线's end on its way
+     * in and on its way out (嘉定北). */
+    shunt?: number;
 }
 export interface SidingDef {
     purpose?: 'interline';
@@ -63,7 +67,8 @@ export interface SidingDef {
         at: number;
     };
 }
-export type SidingLane = 'mid' | 'midUP' | 'midDN' | 'outUP' | 'outDN';
+/** farUP / farDN: a second lane outside outUP / outDN, for two tracks side by side out there */
+export type SidingLane = 'mid' | 'midUP' | 'midDN' | 'outUP' | 'outDN' | 'farUP' | 'farDN';
 export interface PairStubDef {
     link?: { main: 'UP' | 'DN'; at: number };
     id: string;

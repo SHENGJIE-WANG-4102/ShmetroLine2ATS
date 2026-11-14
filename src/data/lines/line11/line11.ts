@@ -114,13 +114,6 @@ const pairs: PairDef[] = [
   ] },
 ];
 const sidings: SidingDef[] = [
-  // 南翔：图上是两正线之间一条带站台面的中间线（和下行正线共用岛式站台），两端各
-  // 双Y接两正线，两端道岔外短车挡，小交路上行到达后在中间线站台换端，没有另外的
-  // 存车线。【待公共代码支持】排图只会在小交路东端（三林）用中间线站台折返，西端
-  // 照图写成 loops（platform）后上行到达的车折返不了、都被放回车场，早高峰三林缺车
-  // 26 条报错。先保留站西一条存车线代替，照图的写法：
-  //   { id: 'NX', name: '南翔中间折返线', station: 13, west: -210, east: 210, platform: true }
-  { id: 'NX', name: '南翔存车线（代替中间线）', station: 13, side: 'west', at: -240, length: 560, connect: 'both', turnback: true },
   // 马陆：站西北（往嘉定新城一端）上行正线外侧一条存车线，两端都接上行正线，
   // 西北端外有车挡；离站台近的是它东南端的道岔，再往站台是一组单渡线（见
   // crossovers）。长度【假设】。
@@ -129,8 +122,8 @@ const sidings: SidingDef[] = [
   // 近处一条在站台东端和 X 之间分出，远处一条在 X 以东、正线车挡以西分出；两条线之间在段内
   // 还有一组剪刀。出段车走近处那条，直接到下行站台；上行到达的回段车过 X 后走远处那条【假设】
   // （图上分不出哪条出、哪条入，按进路最顺的走法定）。
-  { id: 'CBL1', name: '城北路停车场出段线', station: 7, side: 'west', at: -190, length: 450, connect: 'DN', lane: 'outDN', turnback: false, lead: { depot: 'CBL', flow: 'out' } },
-  { id: 'CBL2', name: '城北路停车场入段线', station: 7, side: 'west', at: -540, length: 450, connect: 'DN', lane: 'outDN', turnback: false, lead: { depot: 'CBL', flow: 'in' } },
+  { id: 'CBL1', name: '城北路停车场出段线', station: 7, side: 'west', at: -190, length: 450, connect: 'DN', lane: 'farDN', turnback: false, lead: { depot: 'CBL', flow: 'out', shunt: 400 } },
+  { id: 'CBL2', name: '城北路停车场入段线', station: 7, side: 'west', at: -540, length: 450, connect: 'DN', lane: 'outDN', turnback: false, lead: { depot: 'CBL', flow: 'in', shunt: 300 } },
   // 赛车场车辆段：图上两条出入段线都只接北侧上行正线，分别在站西 X 的两侧接入；
   // 两条线之间在段内还有一组剪刀。两处道岔都朝东开：远处一条（X 以西）出段车往东
   // 过 X 换到下行，直接进下行站台，下行来的回段车在站台换端后过 X 也只能进这条；
@@ -153,6 +146,9 @@ const loops: CoreLineData['LAYOUT']['loops'] = [
   // 中间线有站台面（和上行正线共用一座岛式站台）。
 
   { id: 'ZR', name: '真如中间线', station: 19, west: -210, east: 210, platform: true },
+  // 南翔：两正线之间一条带站台面的中间线，和下行正线共用岛式站台（上行是侧式站台），
+  // 两端各双Y接两正线，道岔外短车挡；南翔小交路上行到达后在中间线站台换端。
+  { id: 'NX', name: '南翔中间折返线', station: 13, west: -210, east: 210, platform: true, island: 'DN' },
 ];
 const crossovers: CrossoverDef[] = [
   { station: 0, offset: 215, kind: '\\' },  // 花桥站东（站前）单渡线
@@ -204,7 +200,7 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   lastBigWestboundArrival: H(24, 0),
   peakCoreHeadway: 120, // 官方 南翔—三林 早高峰往三林 平均2分
   minTurnback: { HQ: 240, JDB: 240, DSL: 300, NX: 240, SL: 300, LSH: 240, AT: 240 }, // 【假设】按尾轨/中间线作业加余量
-  longWaitPlatformStations: [],
+  longWaitPlatformStations: ['NX'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）
   platformTurnClear: {},
   // 回段：图上城北路只接嘉定北下行正线，数据照图写；赛车场只接上行正线，但因站东 X 放不下，
   // 数据里的出入段线暂写双Y（见 LAYOUT.sidings 注释和汇报【待定】）。川杨河接哪条正线看不清，按两正线【假设】。

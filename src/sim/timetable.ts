@@ -184,6 +184,8 @@ export function portalReversal(topo: Topology, depot: number, kind: 'exit' | 'en
 }
 /** extra time a depot move spends changing ends at its junction station (s) */
 const PORTAL_REVERSE = 90;
+/** 【假设】extra time a move over a 牵出线 lead spends running to its end and changing ends (s) */
+const SHUNT_REVERSE = 150;
 
 export function minTurn(st: number): number {
   const id = STATIONS[st].id;
@@ -1692,7 +1694,9 @@ export function depotStartTime(ctx: Pick<PlanContext, 'topo'>, depot: number, fi
   // (callers may pass bare stops: then the direction follows from their order)
   const dir: TrackDir = first.dir ?? (first.stops.length > 1 && first.stops[1].st < st0 ? 'UP' : 'DN');
   const work = OPERATIONS.depotLeadWork?.[topo.depots[depot].key]?.exitS ?? 0;
-  const travel = 95 + dist / 13 + 25 + work + (topo.depots[depot].portals.exit[dir].reverse ? PORTAL_REVERSE : 0);
+  const portal = topo.depots[depot].portals.exit[dir];
+  const travel = 95 + dist / 13 + 25 + work + (portal.reverse ? PORTAL_REVERSE : 0)
+    + (topo.depots[depot].transferPaths[portal.path].shuntBerth !== undefined ? SHUNT_REVERSE : 0);
   return Math.round(refTime - travel - (first.stops[0].stop ? 75 : 30));
 }
 
@@ -2668,6 +2672,7 @@ function tailTasks(topo: Topology, plan: Plan, block: Block, trip: Trip, tasks: 
  * direction stops there and changes ends before the trip starts. */
 function portalExitTasks(topo: Topology, depot: number, trip: Trip, tasks: Task[]) {
   const p = topo.depots[depot].portals.exit[trip.dir];
+  shuntTasks(topo.depots[depot].transferPaths[p.path].shuntBerth, topo.depots[depot].station, tasks);
   if (!p.reverse) return;
   const plat = topo.stations[p.station].platforms[trip.dir];
   const travel = trip.dir === 'DN' ? 1 : -1;
@@ -2712,7 +2717,14 @@ export function depotTasks(topo: Topology, depot: number, dir: TrackDir, tasks: 
     candidates.sort((a,b) => Number(b.index === p.path) - Number(a.index === p.path));
     addWork(candidates.map(c => c.berth));
   }
+  shuntTasks(yard.transferPaths[p.path].shuntBerth, yard.station, tasks);
   tasks.push({ k: 'depot', depot, berth: yard.entryBerths[p.path] });
+}
+
+/** A 牵出线 lead (LeadDef.shunt): the move runs to the 牵出线's end and changes ends there. */
+function shuntTasks(berth: number | undefined, station: number, tasks: Task[]) {
+  if (berth === undefined) return;
+  tasks.push({ k: 'reverse', berths: [berth], chosen: berth, station, minTime: 40 });
 }
 
 /** The fixed entry work place on a depot lead (its inward siding berth). */
@@ -2735,6 +2747,7 @@ export function depotLeadTasks(topo: Topology, depot: number, stub: number): Tas
     tasks.push({ k:'stop', berth:berth.id, station:yard.station, trip:-1, arr:null, dep:null,
       doors:false, revenue:false, minDwell:work.entryS, note:'入段固定作业', depotWork:{kind:'in',depot,berths:[berth.id]} });
   }
+  shuntTasks(yard.transferPaths[index].shuntBerth, yard.station, tasks);
   tasks.push({ k: 'depot', depot, berth: yard.entryBerths[index] });
   return tasks;
 }
@@ -2809,7 +2822,7 @@ export interface PlanIssue {
   conflictingTrip?: number;
   conflictingTrips?: number[];
   severity: 'error' | 'warn';
-  code: 'SERVICE_STRUCTURE' | 'TURN_SHORT' | 'TURN_UNAVAILABLE' | 'BLOCK_BREAK' | 'TERMINAL_FULL' | 'TAIL_ORDER' | 'FRONT_CONFLICT' | 'LAYOVER_LONG' | 'UNSAFE_WAIT' | 'DEPOT_CONFLICT' | 'HEADWAY' | 'FLEET' | 'TIME_ORDER' | 'UNASSIGNED' | 'STABLE_CONFLICT' | 'TURN_HEADWAY' | 'YARD_CAPACITY' | 'YARD_BALANCE' | 'POSSESSION';
+  code: 'SERVICE_STRUCTURE' | 'TURN_SHORT' | 'TURN_UNAVAILABLE' | 'BLOCK_BREAK' | 'TERMINAL_FULL' | 'TAIL_ORDER' | 'FRONT_CONFLICT' | 'LAYOVER_LONG' | 'UNSAFE_WAIT' | 'DEPOT_CONFLICT' | 'HEADWAY' | 'FLEET' | 'TIME_ORDER' | 'UNASSIGNED' | 'STABLE_CONFLICT' | 'TURN_HEADWAY' | 'YARD_CAPACITY' | 'YARD_BALANCE' | 'POSSESSION' | 'TRIP_DIRECTION';
   t: number;
   text: string;
 }
@@ -3047,6 +3060,13 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
   if (waiting) out.push(...waiting.issues);
   const name = (st: number) => STATIONS[st].name;
   const live = plan.trips.filter((t) => !t.cancelled);
+  // every trip runs one way only: each call lies ahead of the last (a branch is not reached by
+  // running on past the junction; that needs a change of ends, i.e. another trip)
+  for (const trip of live) {
+    const back = trip.stops.findIndex((s, k) => k > 0 && !ahead(trip.dir, trip.stops[k - 1].st, s.st));
+    if (back > 0) out.push({ severity: 'error', code: 'TRIP_DIRECTION', t: trip.stops[back].arr, blocks: [trip.block],
+      text: `${trip.no || trip.id} ${name(trip.from)}—${name(trip.to)} 在 ${name(trip.stops[back - 1].st)}—${name(trip.stops[back].st)} 不是${trip.dir === 'DN' ? '下行' : '上行'}方向` });
+  }
   const storage = storageOccupancy(topo, plan, waiting?.waits);
   for (let i = 0; i < storage.length; i++) for (let j = i + 1; j < storage.length; j++) {
     const a = storage[i], b = storage[j];

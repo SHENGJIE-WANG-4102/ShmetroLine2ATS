@@ -2383,7 +2383,7 @@ function leadReturnTasks(sim: Sim, tr: Train): Task[] | undefined {
   for (let depot = 0; depot < topo.depots.length; depot++) {
     const lead = depotLeadTasks(topo, depot, tr.link);
     if (!lead) continue;
-    const goal = lead[0].k === 'stop' || lead[0].k === 'depot' ? lead[0].berth : -1;
+    const goal = lead[0].k === 'stop' || lead[0].k === 'depot' ? lead[0].berth : lead[0].k === 'reverse' ? lead[0].chosen : -1;
     if (goal === undefined || goal < 0) continue;
     if (Number.isFinite(distanceToBerthFrom(sim, tr.link, tr.off, tr.dir, goal))) return lead;
     const turned = { link: tr.link, off: rear, dir: -tr.dir as Dir };
