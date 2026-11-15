@@ -182,9 +182,13 @@ export type TrainPhase =
 
 export type UtoAction = 'report' | 'key' | 'famOff' | 'brake' | 'confirm' | 'restoreReport' | 'neutral' | 'famOn';
 export interface UtoControlState {
-  target: 'CM' | 'RM' | 'DTO'; computer: boolean;
+  target: 'AM' | 'CM' | 'RM' | 'DTO'; computer: boolean;
   stage: 'doors' | UtoAction | 'manual' | 'reset'; until: number; detail: string;
-  reason?: 'signalLoss' | 'fault' | 'random' | 'overrun';
+  /** fault: full-automatic function failed (→ ATO); atoFault: ATO failed (→ ATPM);
+   * degrade: dispatcher or line-wide ATO fallback (→ ATO) */
+  reason?: 'signalLoss' | 'fault' | 'random' | 'overrun' | 'atoFault' | 'degrade';
+  /** terminals reached since a full-automatic fault (arrival time of the last one counted) */
+  terminals?: number; lastTerminal?: number;
   returnAt?: number; closeAt?: number; retreat?: boolean; resetSuccess?: boolean;
 }
 export interface UtoVehicleState {
@@ -237,6 +241,10 @@ export interface Train {
   /** why this train may not run DTO ('' = it may): under CBTC it runs ATO
    *  with the driver in the cab (AM) instead (DTO degraded, D52) */
   dtoInhibit: string;
+  /** why ATO cannot drive this train (unset = it can): the crew drives ATPM (CM) instead */
+  atoInhibit?: string;
+  /** come off at the next terminal stop (not a yard station on the way), for this reason */
+  withdrawAtTerminus?: string;
   /** section where CBTC became available again; the upgrade waits for the next section boundary (relocalisation) */
   relocSec: number;
   /** onboard position kept since a standing CBTC→TBTC degrade: upgrade without moving (D146) */
@@ -595,6 +603,7 @@ export type FaultKind =
   | 'trainComm'
   | 'trainUto'
   | 'trainDto'
+  | 'trainAto'
   | 'zcFail'
   | 'axle'
   | 'switch'
@@ -735,6 +744,8 @@ export interface TrainSnap {
   id: number;
   /** why DTO is not allowed for the train ('' = it is) */
   dto: string;
+  /** why ATO cannot drive the train (车载ATO功能故障), absent when it can */
+  ato?: string;
   vehicle: string;
   svc: string;
   trip: string;

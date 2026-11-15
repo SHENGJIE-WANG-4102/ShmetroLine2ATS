@@ -47,7 +47,7 @@ import { updateOnboard, setManual, cmdTrainLevel, cmdTrainDto, cmdLineAto, autho
 import { psdTick, psdOpen, setBypass, doorMotionTick } from './psd';
 import { updateHalts, HALT } from './halt';
 import { newIntegrity, checkSafety, checkLiveness, type IntegrityState } from './invariants';
-import { LINE_INFO, OPERATIONS, STATIONS, supportsSignalSystem, unattended } from '../data/current';
+import { LINE_INFO, OPERATIONS, STATIONS, supportsSignalSystem, unattended, LINE_ATO_FALLBACK } from '../data/current';
 import { assertScope, currentScope } from '../data/scope';
 import { validateCommand } from './commands';
 import { preparePlan } from './planning';
@@ -233,7 +233,7 @@ export class Sim {
     // and a holiday its own planned ones (holiday.ts)
     this.holiday = config.scenario ? null : holidayOf(config.date);
     const fixedRuns = config.scenario ? SCENARIOS.find((x) => x.id === config.scenario)?.fixedRuns : holidayFixedRuns(this.holiday);
-    this.atoLine = config.driveMode === 'ATO' && !unattended('doorClose');
+    this.atoLine = config.driveMode === 'ATO' && LINE_ATO_FALLBACK;
     this.planCtx = { topo: this.topo, rt: this.rt, dayType: config.dayType, ...(fixedRuns ? { fixedRuns } : {}),
       ...(config.depotStock ? { initialStock: config.depotStock.slice() } : {}) };
     this.plan = generatePlan(this.planCtx);
@@ -801,7 +801,7 @@ export class Sim {
       for (const b of tr.body) body.push(b.link, b.from, b.to);
       const t0 = tr.tasks[0];
       return {
-        id: tr.id, uto: tr.uto && {...tr.uto}, unattendedStatus: utoStatus(this,tr), dto: tr.dtoInhibit, vehicle: tr.vehicle, svc: tr.svc, trip: tr.tripNo, tripId: tr.tripId, vehicleNote: vehicleNote(tr), dest: tr.destText, link: tr.link, off: tr.off, dir: tr.dir,
+        id: tr.id, uto: tr.uto && {...tr.uto}, unattendedStatus: utoStatus(this,tr), dto: tr.dtoInhibit, ato: tr.atoInhibit, vehicle: tr.vehicle, svc: tr.svc, trip: tr.tripNo, tripId: tr.tripId, vehicleNote: vehicleNote(tr), dest: tr.destText, link: tr.link, off: tr.off, dir: tr.dir,
         body, v: tr.v, level: tr.level, comm: tr.comm, mode: tr.mode, eb: tr.eb, phase: tr.phase, delay: tr.delay,
         tbStage: tr.tbStage, depotStage: tr.depotStage,
         load: tr.load, hold: tr.hold, failed: tr.failed, doors: tr.doorsOpen, doorClosing: tr.doorMotion?.kind === 'closing', doorSide: tr.doorSide, doorsAwait: tr.doorsAwait,
@@ -917,7 +917,7 @@ export function describeCommand(sim: Sim, cmd: Command): string {
     case 'atoButton': return `${tn(cmd.train)} ATO启动${cmd.button.toUpperCase()}${cmd.down ? '按下' : '释放'}`;
     case 'reverser': return `${tn(cmd.train)} 换向器${cmd.position}`;
     case 'door': return `${tn(cmd.train)} ${cmd.side === 'L' ? '左' : '右'}侧车门`;
-    case 'lineAto': return cmd.on ? '全线转ATO运营（DTO兼容模式）' : '全线恢复DTO运营';
+    case 'lineAto': return unattended('doorClose') ? cmd.on ? '全线转ATO后备运营' : '全线恢复FAM运营' : cmd.on ? '全线转ATO运营（DTO兼容模式）' : '全线恢复DTO运营';
     case 'rescue': return `组织救援 ${tn(cmd.rescuer)}→${tn(cmd.failed)}`;
     case 'addTrain': return `加开列车 ${topo.depots[cmd.depot].short}`;
     case 'overlay': return '加开运行图';

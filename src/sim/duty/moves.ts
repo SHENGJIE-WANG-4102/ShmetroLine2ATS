@@ -373,13 +373,15 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     return null;
   };
   /** longest a car stands at `st` between two trips (turning or running on) */
-  const toward = (from: number, to: number): TrackDir => ahead('DN', from, to) ? 'DN' : 'UP';
+  /** the way from→to runs without changing ends; undefined when it cannot (another branch of a Y line) */
+  const toward = (from: number, to: number): TrackDir | undefined => ahead('DN', from, to) ? 'DN' : ahead('UP', from, to) ? 'UP' : undefined;
   const depotDir = (st: number, depot: number): TrackDir => topo.stations[st].chain < topo.depots[depot].junctionChain ? 'DN' : 'UP';
   /** run spare `car` from its station to `want`'s origin */
   const position = (car: Car, want: Want): GenTrip | undefined => {
     const X = car.station, P = want.station, a = car.trip, d = want.trip;
     if (X === P) return undefined;
     const dir = toward(X, P);
+    if (!dir) return undefined;
     const turnX = a.dir !== dir, turnP = dir !== d.dir;
     if (turnX && !turnbackAt(topo, X, a.dir) || turnP && !turnbackAt(topo, P, dir)) return undefined;
     const earliest = arr(a) + (turnX ? minTurn(X) : throughMin(X, a.dir, arr(a)));
@@ -513,7 +515,9 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       && arr(t) >= window.from && arr(t) < window.need).sort((a, b) => Number(arr(b) > lastOut) - Number(arr(a) > lastOut) || arr(b) - arr(a));
     const a = arrivals[0];
     if (!a) return '到达车';
-    const dir = toward(P, S), turnX = a.dir !== dir;
+    const dir = toward(P, S);
+    if (!dir) return `去${STATIONS[S].name}的路线`;
+    const turnX = a.dir !== dir;
     if (turnX && !turnbackAt(topo, P, a.dir)) return '折返';
     const departures = services.filter(t => !t.cancelled && t.from === S && t.prev === undefined && !startOf.has(t.id) && dep(t) >= window.need)
       .sort((x, y) => dep(x) - dep(y));
@@ -636,7 +640,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     const dir = depotDir(P, depot) === 'DN' ? 'UP' : 'DN';
     // (the car leaves the yard toward P: away from the junction)
     const from = exitStation(topo, depot, dir);
-    if (from === P || ahead(dir, P, from)) return false;
+    if (!ahead(dir, from, P)) return false;
     // its exit changes ends on the junction platform: turn beyond instead (OPERATIONS.portalReversal)
     if (topo.depots[depot].portals.exit[dir].reverse && portalReversal(topo, depot, 'exit', dir, dep(d)) !== 'yes' && feedViaTurn(yard, want)) return true;
     const move = fitInto(dir, from, P, d, stops => exitFits(yard, dir, stops)
@@ -676,6 +680,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       const earliest = Math.max(arr(a) + (a.dir === toward(X, yard.station) ? THROUGH_MIN : minTurn(X)), yard.after ?? -Infinity);
       if (X === yard.station) return false;
       const dir = toward(X, yard.station);
+      if (!dir) return false;
       const turnX = a.dir !== dir;
       if (turnX && !turnbackAt(topo, X, a.dir)) return false;
       const berth = storageArrivalBerth(topo, yard.berth, dir);

@@ -64,3 +64,4 @@ export const { OTHER_LAST_TRAINS } = LINE.lastTrains;
 
 /** Behaviour is selected by explicit capability, never by automation display labels. */
 export function unattended(task: keyof typeof LINE.unattended): boolean { return LINE.unattended[task]; }
+export const LINE_ATO_FALLBACK = LINE.lineAtoFallback;

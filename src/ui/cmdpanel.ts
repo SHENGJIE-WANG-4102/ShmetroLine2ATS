@@ -11,7 +11,7 @@ import { timePick } from './timepick';
 import { h, clear } from './dom';
 import type { Store } from './store';
 import { confirmAndSend, type CmdSpec } from './confirm';
-import { LINE, STATIONS, LINE_INFO, DIRECTIONS, OPERATIONS, supportsSignalSystem, unattended } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, DIRECTIONS, OPERATIONS, supportsSignalSystem, unattended, LINE_ATO_FALLBACK } from '../data/current';
 import { PERF } from '../sim/dynamics';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT, type TrackDir, type TrainSnap } from '../sim/model';
 import { turnbackAt, exitStation, effectiveEnd, OVERLAY_PRESETS } from '../sim/timetable';
@@ -418,7 +418,9 @@ export class CommandPanel {
       this.btn('恢复接续', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 故障恢复接续`, cmd: { c: 'recoverService', train: id }, detail: '仅在已完成车次的终点停站办理。取消已错过的完整往返车次，按原图接续同一终点的近期始发；无近期接续则保留计划，须另行人工调整。已完成车次和历史晚点保留。' }),
       this.btn('退出服务', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 退出服务，清客回段`, cmd: { c: 'withdraw', train: id }, detail: '列车在前方站清客后回最近车辆段/停车场，剩余计划车次取消。' }),
       this.btn('备车接替', { title: `为列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 投入热备/备车`, cmd: { c: 'standby', train: id }, detail: '列车晚点、后续车次将晚发时：优先由终点站热备车接替其在该站的始发车次（提前2–3分钟通知），本车到达后转为热备；无热备可用时由车辆段备车出段接替，本车跑完保留车次后回段。' }),
-      ...(unattended('doorClose') ? [] : [t0.dto
+      ...(!LINE_ATO_FALLBACK ? [] : unattended('doorClose') ? [t0.dto
+        ? this.btn('恢复FAM', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 恢复FAM`, cmd: { c: 'trainDto', train: id, on: true }, detail: `当前不能FAM：${t0.dto}。调度命令降级的可恢复；车载故障须先修复。随车人员在下一站停站时办理恢复FAM。` })
+        : this.btn('降级ATO', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 降级为ATO（随车人员驾驶）`, cmd: { c: 'trainDto', train: id, on: false }, detail: '仍为CBTC移动闭塞，随车人员在下一站停站时办理接管、转ATO驾驶；终点站折返由随车人员换端。' })] : [t0.dto
         ? this.btn('恢复DTO', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 恢复DTO`, cmd: { c: 'trainDto', train: id, on: true }, detail: `当前不能DTO：${t0.dto}。调度命令降级的可恢复；车载故障须先修复。列车在下一站停站时由AM转DTO。` })
         : this.btn('降级ATO', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 降级为ATO（司机驾驶室值守）`, cmd: { c: 'trainDto', train: id, on: false }, detail: '仍为CBTC级移动闭塞，司机在下一站停站时转AM：发车需司机按ATO启动按钮，折返时司机换端（多约45秒）。用于DTO相关设备故障、车内异常需司机值守等。' }, 'warn')]),
       this.btn('授权RM运行', { title: `授权列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 以RM模式运行`, cmd: { c: 'authRM', train: id }, critical: true, detail: `${OPERATIONS.uto?.crewLabel ?? '司机'}以≤${Math.round(PERF.vRM * 3.6)}km/h目视行车600m，可越过故障占用区段或关闭的信号（须确认进路正确、道岔位置正确）。` }),
@@ -459,8 +461,13 @@ export class CommandPanel {
       ));
     });
     this.el.append(h('div', { class: 'sect-title' }, `${[LINE.signalling.primary, ...LINE.signalling.fallback].join(' / ')} 系统切换`), zbox);
-    this.el.append(h('div', { class: 'sect-title' }, `运营驾驶模式：${snap.atoLine ? 'ATO（DTO兼容模式，司机驾驶）' : formatDrivingMode('DTO')}`));
-    if (!unattended('doorClose')) this.el.append(h('div', { class: 'cmdgrid' },
+    this.el.append(h('div', { class: 'sect-title' }, `运营驾驶模式：${snap.atoLine ? unattended('doorClose') ? `ATO后备（${OPERATIONS.uto?.crewLabel ?? '随车人员'}驾驶）` : 'ATO（DTO兼容模式，司机驾驶）' : formatDrivingMode('DTO')}`));
+    if (LINE_ATO_FALLBACK && unattended('doorClose')) this.el.append(h('div', { class: 'cmdgrid' },
+      snap.atoLine
+        ? this.btn('全线恢复FAM', { title: '全线恢复 FAM 运营', cmd: { c: 'lineAto', on: false }, critical: true, detail: '各列车在下一站停站时由随车人员办理恢复FAM（车载故障或单独降级的列车除外）。' })
+        : this.btn('全线转ATO后备', { title: '全线转 ATO 后备运营', cmd: { c: 'lineAto', on: true }, critical: true, detail: '仍为CBTC移动闭塞，各列车在下一站停站时由随车人员办理接管、转ATO驾驶；终点站折返由随车人员换端，发车需按ATO启动按钮。运行图不变，折返紧张时可能晚点。新运营日也可在“运营日设置”中直接选择ATO后备运营。' }, 'warn'),
+    ));
+    else if (LINE_ATO_FALLBACK) this.el.append(h('div', { class: 'cmdgrid' },
       snap.atoLine
         ? this.btn('全线恢复DTO', { title: '全线恢复 DTO 运营', cmd: { c: 'lineAto', on: false }, critical: true, detail: '各列车在下一站停站时由AM恢复DTO（车载DTO故障或单独降级的列车除外）。' })
         : this.btn('全线转ATO运营', { title: '全线转 ATO 运营（DTO兼容模式）', cmd: { c: 'lineAto', on: true }, critical: true, detail: '仍为CBTC移动闭塞，各列车在下一站停站时由司机转AM驾驶；终点站折返司机换端约多45秒、发车需司机按钮。运行图不变，终点站折返余量吸收换端时间；高峰折返紧张时可能晚点。新运营日也可在“运营日设置”中直接选择ATO运营。' }, 'warn'),

@@ -21,6 +21,7 @@ export const LINE_2: LineData = {
     logoText: '2',
   },
   unattended: { doorClose: false, turnback: false, wakeSleep: false, depotMoves: false },
+  lineAtoFallback: true,
   signalling: { primary: 'CBTC', fallback: ['TBTC'], onLoss: 'fallback' },
   automation: 'DTO',
   core, firstLast, lastTrains,

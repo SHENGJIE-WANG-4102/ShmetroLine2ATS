@@ -12,6 +12,7 @@ export const LINE_11: LineData = {
   id: '11',
   branding: { title: '上海轨道交通11号线', shortName: '11号线', color: LINE11_CORE.LINE_INFO.colorCss, badgeUrl: '', logoText: '11' },
   unattended: { doorClose: false, turnback: false, wakeSleep: false, depotMoves: false },
+  lineAtoFallback: false,
   signalling: { primary: 'CBTC', fallback: [], onLoss: 'restrictedManual' }, // 【假设】缺11号线信号后备逐项资料
   automation: 'ATO',
   core: LINE11_CORE,

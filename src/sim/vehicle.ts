@@ -132,15 +132,18 @@ export function vehicleTick(sim: Sim) {
     // station where it can leave for a yard, or at its terminus (用户决定 D150).
     // Routine withdrawal must not replace one side of an active rescue.
     // Keep the pending instruction; the fault procedures below still run.
-    if (tr.withdrawAtEnd && tr.phase === 'dwell' && tr.rescuing < 0 && tr.rescueBy < 0) {
+    // An onboard degradation (tr.withdrawAtTerminus) carries on to its terminal stop only.
+    if ((tr.withdrawAtEnd || tr.withdrawAtTerminus) && tr.phase === 'dwell' && tr.rescuing < 0 && tr.rescueBy < 0) {
       const t = tr.tasks[0];
       const dir = t?.k === 'stop' && t.trip >= 0 ? sim.plan.trips[t.trip].dir : undefined;
-      const yard = dir !== undefined && t?.k === 'stop' && sim.topo.depots.some((_, d) => entryStation(sim.topo, d, dir) === t.station);
+      const yard = tr.withdrawAtEnd && dir !== undefined && t?.k === 'stop' && sim.topo.depots.some((_, d) => entryStation(sim.topo, d, dir) === t.station);
       if (t?.k === 'stop' && t.trip >= 0 && (t.dep === null || yard)) {
-        const result = cmdWithdraw(sim, tr, '车辆故障：就近回段站下线');
+        const why = tr.withdrawAtEnd ? '车辆故障' : tr.withdrawAtTerminus!;
+        const result = cmdWithdraw(sim, tr, tr.withdrawAtEnd ? '车辆故障：就近回段站下线' : `${why}：终点站退出运营`);
         if (result.ok) {
           tr.withdrawAtEnd = false;
-          sim.log('I', '调度', `列车 ${trainLabel(tr)} 车辆故障，${STATIONS[t.station].name}下线回段`, { train: tr.id });
+          tr.withdrawAtTerminus = undefined;
+          sim.log('I', '调度', `列车 ${trainLabel(tr)} ${why}，${STATIONS[t.station].name}下线回段`, { train: tr.id });
         }
       }
     }

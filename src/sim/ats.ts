@@ -940,12 +940,13 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
       sim.clearAlarm(`turnback-departure-train-${tr.id}`);
     }
     if (tr.tbStage === 'depart') setTurnbackStage(sim, tr, 'none');
+    // back on the mark: the retreat is over here too (a depot work stop returns early below)
+    tr.retreat = undefined;
     if (task.depotWork) {
       tr.phase = 'dwell'; tr.phaseSince = sim.t; tr.arrivedAt = sim.t;
       tr.dwellUntil = tr.depReadyAt = sim.t + (task.minDwell ?? 0);
       return;
     }
-    tr.retreat = undefined;
     tr.randomOverrunM=undefined;tr.randomOverrunBerth=undefined;tr.atoStopBias=undefined;tr.atoStopBiasBerth=undefined;tr.utoDoorWarningAt=undefined;
     tr.departureDisplay = undefined;
     const duty = sim.plan.blocks[tr.block];
@@ -1454,6 +1455,8 @@ function manualArrival(sim: Sim, tr: Train, task: Task) {
   if (!tr.retreat) {
     tr.retreat = { distance: -err, authorised: -err <= 5 };
     if (-err > 5) atoOverrun(sim, tr, task, err);
+    // a simulated crew backs up on its own within 5 m, as a driver does (uto.ts utoRetreatEffort)
+    else if (tr.uto?.computer && tr.uto.stage === 'manual') tr.uto.retreat = true;
   }
   if (!tr.overrun && !tr.retreat.reported) {
     const permit = reversePermission(sim, tr);

@@ -81,7 +81,7 @@ export function validateCommand(sim: Sim, cmd: Command): string | null {
   if (cmd.c === 'fault') {
     if (!(cmd.kind in FAULT_LABELS)) return '无效故障类型';
     if (cmd.kind === 'surge' && cmd.param !== undefined && (cmd.param < 1 || cmd.param > SURGE_MAX)) return `客流倍数须在 1–${SURGE_MAX} 之间`;
-    if (['trainComm', 'trainUto', 'trainDto', 'trainFail', 'traction', 'door', 'brake', 'pecu'].includes(cmd.kind)) {
+    if (['trainComm', 'trainUto', 'trainDto', 'trainAto', 'trainFail', 'traction', 'door', 'brake', 'pecu'].includes(cmd.kind)) {
       if (!sim.trains.has(cmd.target)) return '列车不存在';
     } else {
       const n = cmd.kind === 'zcFail' ? sim.zoneState.length : cmd.kind === 'switch' ? sim.sw.length

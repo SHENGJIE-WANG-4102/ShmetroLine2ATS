@@ -2,7 +2,7 @@
 import type { Sim } from './engine';
 import type { Train, StopTask, UtoAction, UtoControlState } from './model';
 import { LINE, OPERATIONS, unattended } from '../data/current';
-import { cbtcAvailable, setMode, releaseForRestrictedManual } from './onboard';
+import { cbtcAvailable, setMode, releaseForRestrictedManual, dtoAllowed, setManual } from './onboard';
 import { platformSide } from './ats';
 import { stopError } from './movement';
 import { DOOR_CLOSE_S } from './calibration';
@@ -16,13 +16,16 @@ export function utoBusy(tr: Train): boolean { return !!tr.uto && tr.uto.stage !=
 /** A simulated attendant keeps the same manual cab and dispatch permissions as a player. */
 export function computerCrew(tr: Train): boolean { return tr.manual && tr.uto?.computer === true && tr.uto.stage === 'manual'; }
 const takeoverDay = (sim: Sim): string => sim.config.date ?? `seed:${sim.config.seed}`;
+const FAM_FAULT = '车载全自动功能故障';
+/** 用户决定（2026-11-15）：降级次序各线通用，FAM/DTO → ATO → ATPM。An attendant takes the cab
+ * by the same procedure for ATO (AM) as for ATPM (CM). */
 export function requestUtoControl(sim: Sim, tr: Train, mode: 'CM'|'RM'|'AM'|'AUTO', computer=false) {
   if (!unattended('doorClose') || !OPERATIONS.uto) return {ok:false,msg:'本线路没有无人驾驶接管流程'};
-  if (mode === 'AM') return {ok:false,msg:'随车人员请选择 ATPM 或 RM 接管'};
   if (tr.eb || tr.v >= .05 || tr.failed || tr.phase === 'stabled') return {ok:false,msg:'须在列车停稳后办理接管'};
   if (utoBusy(tr)) return {ok:false,msg:`正在${tr.uto!.detail}`};
+  if (mode === 'AM' && (!cbtcAvailable(sim,tr) || tr.atoInhibit)) return {ok:false,msg:`${tr.atoInhibit ?? 'CBTC 不可用'}，不能转 ATO`};
   if (mode === 'CM' && !cbtcAvailable(sim,tr)) return {ok:false,msg:'CBTC 不可用，不能转 ATPM'};
-  if (mode === 'AUTO' && (!cbtcAvailable(sim,tr) || tr.dtoInhibit)) return {ok:false,msg:'CBTC 或全自动功能未恢复，不能恢复 FAM'};
+  if (mode === 'AUTO' && (!cbtcAvailable(sim,tr) || tr.dtoInhibit || tr.atoInhibit || sim.atoLine)) return {ok:false,msg:sim.atoLine ? '全线ATO后备运营中，先恢复全线FAM' : 'CBTC 或全自动功能未恢复，不能恢复 FAM'};
   if (!computer && mode !== 'AUTO' && sim.trainList.some(o=>o!==tr&&!o.uto?.computer&&(o.manual||o.atoDriver||o.uto)))
     return {ok:false,msg:'已有其他列车被接管'};
   tr.uto = {target:mode==='AUTO'?'DTO':mode, computer, stage:'doors', until:sim.t, closeAt:tr.dwellUntil-DOOR_CLOSE_S, detail:'等待车门关闭并锁紧',
@@ -46,19 +49,23 @@ export function utoStep(sim:Sim,tr:Train,action:UtoAction) {
   sim.log('I','列车',`${tr.vehicle} ${crewLabel()}：${u.detail}`,{train:tr.id});
   return {ok:true,msg:u.detail};
 }
+const DRIVING: Record<'AM'|'CM'|'RM', string> = { AM: 'ATO', CM: 'ATPM', RM: 'RM' };
 function completeControl(sim:Sim,tr:Train,u:UtoControlState):boolean {
-  if (u.target==='CM'&&!cbtcAvailable(sim,tr)||u.target==='DTO'&&(!cbtcAvailable(sim,tr)||!!tr.dtoInhibit)) return false;
+  // ATO failed while the attendant was taking over for ATO: the same procedure ends in ATPM
+  if (u.target==='AM'&&tr.atoInhibit) u.target='CM';
+  if ((u.target==='CM'||u.target==='AM')&&!cbtcAvailable(sim,tr)||u.target==='DTO'&&(!cbtcAvailable(sim,tr)||!!tr.dtoInhibit||!!tr.atoInhibit||sim.atoLine)) return false;
   if (!setMode(sim,tr,u.target,'CBTC',`${crewLabel()}完成${u.target==='DTO'?'恢复 FAM':'接管'}`)) return false;
-  tr.manual=u.target!=='DTO';tr.atoDriver=false;tr.notch=0;tr.reverser=u.retreat?-1:1;
-  if (u.target==='DTO') {tr.uto=undefined;return true;}
-  u.stage='manual';u.detail=u.target==='CM'?'随车人员 ATPM 驾驶':'随车人员 RM 驾驶';
+  tr.manual=u.target==='CM'||u.target==='RM';tr.atoDriver=u.target==='AM'&&!u.computer;tr.notch=0;tr.reverser=u.retreat?-1:1;
+  tr.atoButtons={f:false,g:false};
+  if (u.target==='DTO') {tr.uto=undefined;if(tr.withdrawAtTerminus===FAM_FAULT)tr.withdrawAtTerminus=undefined;return true;}
+  u.stage='manual';u.detail=`随车人员 ${DRIVING[u.target]} 驾驶`;
   u.returnAt=sim.t+(OPERATIONS.uto?.manualDurationS??0);
   return true;
 }
 /** Same command sequence is used by the player and the simulated attendant. */
 export function utoTrainTick(sim:Sim,tr:Train):boolean {
   const rule=OPERATIONS.uto;
-  if (!unattended('doorClose')||!rule) return false;
+  if (!unattended('doorClose')||!rule) { crewTick(sim,tr); return false; }
   if(tr.eb&&!['comm','zc'].includes(tr.ebCause))return false;
   let u=tr.uto;
   const available=cbtcAvailable(sim,tr);
@@ -66,7 +73,12 @@ export function utoTrainTick(sim:Sim,tr:Train):boolean {
     if (LINE.signalling.onLoss==='restrictedManual'&&!available) {
       if(tr.eb&&!releaseForRestrictedManual(sim,tr).ok)return true;
       sim.command({c:'manual',train:tr.id,mode:'RM',computer:true},crewLabel());u=tr.uto;if(u)u.reason='signalLoss';
-    } else if(tr.dtoInhibit==='车载全自动功能故障') {sim.command({c:'manual',train:tr.id,mode:'CM',computer:true},crewLabel());u=tr.uto;if(u)u.reason='fault';}
+    } else if(tr.atoInhibit&&!tr.manual) {sim.command({c:'manual',train:tr.id,mode:'CM',computer:true},crewLabel());u=tr.uto;if(u)u.reason='atoFault';}
+    else if(tr.dtoInhibit===FAM_FAULT&&!tr.manual&&!tr.atoDriver&&tr.mode==='DTO') {sim.command({c:'manual',train:tr.id,mode:'AM',computer:true},crewLabel());u=tr.uto;if(u)u.reason='fault';}
+    // dispatcher or line-wide ATO fallback: the attendant takes the cab for ATO at a stop
+    else if(tr.mode==='DTO'&&!dtoAllowed(sim,tr)&&tr.phase==='dwell') {sim.command({c:'manual',train:tr.id,mode:'AM',computer:true},crewLabel());u=tr.uto;if(u)u.reason='degrade';}
+    // a train that began the day on the ATO fallback goes back to FAM at a stop once allowed
+    else if(tr.mode==='AM'&&!tr.manual&&!tr.atoDriver&&dtoAllowed(sim,tr)&&!tr.atoInhibit&&tr.phase==='dwell') {sim.command({c:'manual',train:tr.id,mode:'AUTO',computer:true},crewLabel());u=tr.uto;}
     else if(!tr.manual&&!tr.atoDriver&&tr.phase==='dwell'&&randomTakeoverDue(sim,tr)) {
       if(sim.command({c:'manual',train:tr.id,mode:'CM',computer:true},crewLabel()).ok){
         u=tr.uto;if(u)u.reason='random';
@@ -78,7 +90,9 @@ export function utoTrainTick(sim:Sim,tr:Train):boolean {
   if(u.stage!=='manual'&&u.stage!=='reset'&&!available&&u.target!=='RM'&&tr.v<.05) {
     u.target='RM';u.stage='doors';u.until=sim.t;u.reason='signalLoss';u.detail='CBTC 不可用，改办 RM 接管';
   }
-  if(u.target==='DTO'&&tr.dtoInhibit){u.target='CM';u.stage='manual';u.detail='全自动功能不可用，继续 ATPM 驾驶';return true;}
+  if(u.target==='DTO'&&(tr.dtoInhibit||tr.atoInhibit||sim.atoLine)&&u.stage!=='manual'&&u.stage!=='reset'){
+    const keep=tr.mode==='AM'&&!tr.atoInhibit?'AM':'CM';
+    u.target=keep;u.stage='manual';u.detail=`全自动功能不可用，继续 ${DRIVING[keep]} 驾驶`;return true;}
   if(u.stage==='reset') {
     if(sim.t<u.until)return true;
     if(u.resetSuccess) {
@@ -90,7 +104,17 @@ export function utoTrainTick(sim:Sim,tr:Train):boolean {
     return true;
   }
   if(u.stage==='manual') {
-    if(u.target==='CM'&&!available&&tr.v<.05) {
+    // ATO fails under the attendant's ATO: ATPM from where the train stands
+    if(u.target==='AM'&&tr.atoInhibit) {
+      if(tr.v<.05&&setMode(sim,tr,'CM',tr.level,`${crewLabel()}转 ATPM（${tr.atoInhibit}）`)){tr.manual=true;tr.atoDriver=false;tr.notch=-7;u.target='CM';u.reason='atoFault';u.detail='随车人员 ATPM 驾驶';}
+      return true;
+    }
+    // ATO back while full automation is still out: ATO again at a stop
+    if(u.reason==='atoFault'&&!tr.atoInhibit&&!dtoAllowed(sim,tr)&&u.computer&&tr.v<.05&&tr.phase==='dwell') {
+      if(setMode(sim,tr,'AM',tr.level,`${crewLabel()}恢复 ATO 驾驶`)){tr.manual=false;tr.notch=0;u.target='AM';u.reason=tr.dtoInhibit===FAM_FAULT?'fault':'degrade';u.detail='随车人员 ATO 驾驶';}
+      return true;
+    }
+    if((u.target==='CM'||u.target==='AM')&&!available&&tr.v<.05) {
       if(tr.eb&&!releaseForRestrictedManual(sim,tr).ok)return true;
       sim.command({c:'manual',train:tr.id,mode:'RM',computer:u.computer},crewLabel());
       if(tr.uto)tr.uto.reason='signalLoss';
@@ -102,12 +126,22 @@ export function utoTrainTick(sim:Sim,tr:Train):boolean {
       if(setMode(sim,tr,'CM',tr.level,'RM压道结束，恢复 ATPM'))u.detail='随车人员 ATPM 驾驶';
     }
     if(u.reason==='signalLoss'&&available)u.returnAt=sim.t;
-    if(u.computer)attendantDoors(sim,tr);
+    if((u.reason==='fault'||u.reason==='degrade'||u.reason==='atoFault')&&dtoAllowed(sim,tr)&&!tr.atoInhibit)u.returnAt=Math.min(u.returnAt??Infinity,sim.t);
+    // 用户决定（2026-11-15）：全自动功能故障后从故障起，经一次终点站折返，到下一个终点站仍未恢复 FAM 的，退出运营
+    if(u.reason==='fault'&&tr.dtoInhibit===FAM_FAULT) {
+      const head=tr.tasks[0];
+      if(tr.phase==='dwell'&&head?.k==='stop'&&head.dep===null&&u.lastTerminal!==tr.arrivedAt){u.lastTerminal=tr.arrivedAt;u.terminals=(u.terminals??0)+1;}
+      if((u.terminals??0)>=1&&tr.phase==='run'&&tr.inService&&!tr.withdrawn&&!tr.withdrawAtTerminus&&!tr.withdrawAtEnd) {
+        tr.withdrawAtTerminus=FAM_FAULT;
+        sim.log('B','列车',`${tr.vehicle} 终点站折返后仍未恢复 FAM，运行至下一终点站退出运营`,{train:tr.id});
+      }
+    }
+    if(u.computer&&tr.manual)attendantDoors(sim,tr);
     if(u.retreat) {
       if(tr.phase==='dwell') {u.retreat=false;tr.reverser=1;u.returnAt=sim.t;}
       return true;
     }
-    if(u.computer&&tr.v<.05&&available&&!tr.dtoInhibit&&sim.t>=(u.returnAt??Infinity)) sim.command({c:'manual',train:tr.id,mode:'AUTO',computer:true},crewLabel());
+    if(u.computer&&tr.v<.05&&available&&dtoAllowed(sim,tr)&&!tr.atoInhibit&&sim.t>=(u.returnAt??Infinity)) sim.command({c:'manual',train:tr.id,mode:'AUTO',computer:true},crewLabel());
     return true;
   }
   if (tr.v>=.05) return true;
@@ -119,13 +153,31 @@ export function utoTrainTick(sim:Sim,tr:Train):boolean {
     if(u.computer&&tr.manual&&tr.doorsAwait)attendantDoors(sim,tr);
   }
   if(u.computer&&u.stage==='doors'&&tr.doorsOpen&&!tr.doorMotion&&sim.t>=(u.closeAt??0)) {
-    const task=tr.tasks[0];if(task?.k==='stop')sim.command({c:'door',train:tr.id,side:platformSide(sim,tr,sim.topo.berths[task.berth].platform)},crewLabel());
+    const task=tr.tasks[0],platform=task?.k==='stop'?sim.topo.berths[task.berth]?.platform??-1:-1;if(platform>=0)sim.command({c:'door',train:tr.id,side:platformSide(sim,tr,platform)},crewLabel());
   }
   if (tr.doorsOpen||tr.doorsAwait||tr.doorMotion||sim.t<(tr.doorLockedAt??0)||sim.t<u.until)return true;
   const next=nextUtoAction(tr.uto);
   if(!next)completeControl(sim,tr,u);
   else if(u.computer)sim.command({c:'utoStep',train:tr.id,action:next},crewLabel());
   return true;
+}
+/** A line with the driver in the cab (no takeover procedure): when ATO fails the simulated
+ * driver changes to ATPM (CM) where the train stands, works its doors, and hands back to
+ * automatic driving at a stop once ATO works again. A player's cab is left alone. */
+function crewTick(sim:Sim,tr:Train) {
+  const u=tr.uto;
+  if(!u) {
+    if(!tr.atoInhibit||tr.manual||tr.atoDriver||tr.eb||tr.v>=.05||tr.failed||tr.phase==='stabled'||tr.pendingMode)return;
+    if(!setManual(sim,tr,'CM',true).ok)return;
+    tr.uto={target:'CM',computer:true,stage:'manual',until:sim.t,detail:`${crewLabel()} ATPM 驾驶（${tr.atoInhibit}）`,reason:'atoFault'};
+    sim.log('I','列车',`列车 ${tr.vehicle} ${crewLabel()}转 ATPM 人工驾驶（${tr.atoInhibit}）`,{train:tr.id});
+    return;
+  }
+  if(!u.computer||u.stage!=='manual')return;
+  if(!tr.manual){tr.uto=undefined;return;}
+  if(u.retreat){if(tr.phase==='dwell'){u.retreat=false;tr.reverser=1;}return;}
+  attendantDoors(sim,tr);
+  if(!tr.atoInhibit&&tr.v<.05&&!tr.eb&&tr.phase==='dwell'&&!tr.doorMotion&&setManual(sim,tr,'AUTO',true).ok)tr.uto=undefined;
 }
 /** Daily sample comes from an isolated seed, so capability=false consumes no RNG. */
 function randomTakeoverDue(sim:Sim,tr:Train):boolean {
@@ -142,13 +194,15 @@ function randomTakeoverDue(sim:Sim,tr:Train):boolean {
 export function startUtoReset(sim:Sim,tr:Train) {
   const rule=OPERATIONS.uto;
   if(!rule||tr.dtoInhibit!=='车载全自动功能故障'||tr.v>=.05||tr.uto?.stage!=='manual')return {ok:false,msg:'须在全自动故障列车停稳、接管完成后复位'};
-  tr.uto={target:'CM',computer:tr.uto?.computer??!tr.manual,stage:'reset',detail:'等待 OCC 远程复位',until:sim.t+rule.resetS,resetSuccess:sim.rng()<rule.resetSuccess};
+  tr.uto={...tr.uto,target:tr.uto.target==='AM'?'AM':'CM',computer:tr.uto?.computer??!tr.manual,stage:'reset',detail:'等待 OCC 远程复位',until:sim.t+rule.resetS,resetSuccess:sim.rng()<rule.resetSuccess};
   return {ok:true,msg:`开始远程复位，预计 ${rule.resetS} 秒`};
 }
 function attendantDoors(sim:Sim,tr:Train) {
   if(tr.phase!=='dwell'||tr.doorMotion||tr.v>=.05)return;
   const task=tr.tasks[0];if(task?.k!=='stop')return;
-  const side=platformSide(sim,tr,sim.topo.berths[task.berth].platform);
+  // only a platform has a side to open (a depot work stop or a siding has none)
+  const platform=sim.topo.berths[task.berth]?.platform??-1;if(platform<0)return;
+  const side=platformSide(sim,tr,platform);
   if(tr.doorsAwait||tr.doorsOpen&&sim.t>=tr.dwellUntil-DOOR_CLOSE_S)
     sim.command({c:'door',train:tr.id,side},crewLabel());
 }
@@ -165,7 +219,7 @@ export function utoAttendantEffort(tr:Train) {
 }
 /** Uses the existing retreat path and permission check, never changes a route. */
 export function utoRetreatEffort(sim:Sim,tr:Train) {
-  if(!tr.uto?.retreat||!tr.uto.computer||tr.uto.stage!=='manual'||tr.mode!=='RM')return;
+  if(!tr.uto?.retreat||!tr.uto.computer||tr.uto.stage!=='manual'||tr.mode!=='RM'&&tr.mode!=='CM')return;
   const remaining=Math.max(0,-stopError(sim,tr)), atTarget=remaining<.2;
   // Once stopped at the controller's existing target, let manualArrival
   // accept the mark. Requesting another reverse step would recheck a return

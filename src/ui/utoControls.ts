@@ -18,8 +18,11 @@ export function isPlayerDriving(train: Pick<TrainSnap, 'manual' | 'uto'>): boole
 }
 
 export function utoDrivingChoices(store: Store, train: TrainSnap): HTMLElement[] {
-  const choices: ['AUTO' | 'CM' | 'RM', string][] = train.uto?.computer || train.mode === 'DTO' && !train.uto
-    ? [['CM', `${OPERATIONS.uto?.crewLabel ?? '司机'}接管 ATPM`], ['RM', `${OPERATIONS.uto?.crewLabel ?? '司机'}接管 RM`]]
+  const crew = OPERATIONS.uto?.crewLabel ?? '司机';
+  // 降级次序 FAM → ATO → ATPM（用户决定 2026-11-15）；随车人员已在驾驶的不再列它当前的模式
+  const choices: ['AUTO' | 'AM' | 'CM' | 'RM', string][] = train.uto?.computer || train.mode !== 'CM' && train.mode !== 'RM' && !train.uto
+    ? ([['AM', `${crew}接管 ATO`], ['CM', `${crew}接管 ATPM`], ['RM', `${crew}接管 RM`]] as ['AM' | 'CM' | 'RM', string][])
+      .filter(([mode]) => !(train.uto?.computer && train.uto.stage === 'manual' && train.uto.target === mode) && !(mode === 'AM' && train.ato))
     : [['AUTO', '申请恢复 FAM']];
   return choices.map(([mode, label]) => h('button', { class: 'btn warn', disabled: !!train.uto && train.uto.stage !== 'manual', onclick: () => void store.command({ c: 'manual', train: train.id, mode }) }, label));
 }

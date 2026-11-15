@@ -408,7 +408,13 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
     if (nl.platform >= 0) {
       const ps = sim.plat[nl.platform];
       if (ps.esp) { obstacle(res, d - 3, '站台紧急关闭', 'ESP'); if (!onSight) break; }
-      if (!psdSafe(ps) && atp) { obstacle(res, d - 3, '站台门未关闭锁紧', 'PSD_FAULT'); break; }
+      if (!psdSafe(ps) && atp) {
+        // doors open on a train standing there are not a fault: name the train (stop reasons tell the truth)
+        const holder = ps.psd !== 'closeFail' && !ps.psdFault ? trainInSection(sim, nl.section, tr.id) : -1;
+        if (holder >= 0) obstacle(res, d - 3, '前车停站，站台门未关闭', 'TRAIN_AHEAD', false, holder);
+        else obstacle(res, d - 3, '站台门未关闭锁紧', 'PSD_FAULT');
+        break;
+      }
     }
     // speed limits
     const lim = Math.min(taskPlatformLimit(topo, nl.platform, tr.lastStation, goalPlatform), linkLimit(sim, nx.link));
@@ -1058,6 +1064,8 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
     tr.ato!.delay = targetDelay;
   } else tr.ato = undefined;
   vT = Math.min(vT, vPerm, tr.vCap);
+  // ATO failed (车载ATO功能故障): automatic driving brakes the train to a stand for the crew
+  if (tr.atoInhibit && !tr.manual && !rm) vT = 0;
   // standing a few metres short of a signal at stop: ATO does not start into
   // so short an authority (it could not ease off in time under the jerk limit)
   if (!rm && (!tr.manual || recommend) && tr.v < 0.05 && scan.maCode === 'ROUTE_WAIT' && scan.maDist < 15 && scan.stopDist > scan.maDist) vT = 0;

@@ -4,7 +4,7 @@
 import type { Sim } from './engine';
 import { injectTraction, injectDoor, injectBrake, clearVehicleFault } from './vehicle';
 import type { Fault, FaultKind, Command } from './model';
-import { STATIONS, supportsSignalSystem, unattended } from '../data/current';
+import { OPERATIONS, STATIONS, supportsSignalSystem, unattended } from '../data/current';
 import { cancelRoute, committedTrain } from './interlocking';
 import { withdrawAuthority } from './movement';
 import { failTrain, recoverTrain, trainLabel, rescueBlockedByConsist } from './ats';
@@ -46,6 +46,7 @@ function recovered(sim: Sim, f: Fault): boolean {
     return zones.every(z => sim.zoneState[z] === 'CBTC' && sim.trainList.every(tr => sim.topo.links[tr.link].zone !== z || tr.forceLevel === 'TBTC' || tr.manual || tr.phase === 'stabled' || tr.level === 'CBTC' && !tr.eb));
   }
   if (f.kind === 'trainDto') { const tr = sim.trains.get(f.target); return !tr || tr.mode !== 'AM' || tr.level !== 'CBTC' || !dtoAllowedFor(sim, tr); }
+  if (f.kind === 'trainAto') { const tr = sim.trains.get(f.target); return !tr || !tr.atoInhibit && tr.uto?.reason !== 'atoFault'; }
   if (f.kind === 'trainComm') { const tr = sim.trains.get(f.target); return !tr || tr.comm && !tr.eb && (tr.level === 'CBTC' || tr.forceLevel === 'TBTC' || tr.manual); }
   return true;
 }
@@ -62,6 +63,7 @@ export const FAULT_LABELS: Record<FaultKind, string> = {
   trainComm: '列车车地通信中断',
   trainUto: '车载全自动功能故障',
   trainDto: '车载DTO功能故障',
+  trainAto: '车载ATO功能故障',
   zcFail: '区域控制器(ZC)故障',
   axle: '计轴区段故障占用',
   switch: '道岔失表',
@@ -112,7 +114,17 @@ export function injectFault(sim: Sim, kind: FaultKind, target: number, duration:
       if(!tr||!unattended('doorClose'))return {ok:false,msg:'列车无全自动接管能力'};
       tr.dtoInhibit=FAULT_LABELS.trainUto;
       f.text=`列车 ${trainLabel(tr)}（${tr.vehicle}）车载全自动功能故障`;
-      sim.log('B','列车',`${f.text}：停稳后随车人员接管 ATPM`,{key:`uto-${tr.id}`,train:tr.id});
+      sim.log('B','列车',`${f.text}：停稳后随车人员接管 ATO（ATO 也不可用时接管 ATPM）`,{key:`uto-${tr.id}`,train:tr.id});
+      break;
+    }
+    case 'trainAto': {
+      const tr = sim.trains.get(target);
+      if (!tr) return { ok: false, msg: '列车不存在' };
+      tr.atoInhibit = FAULT_LABELS.trainAto;
+      // 用户决定（2026-11-15）：ATO 故障转 ATPM 人工驾驶，载客运行至终点站退出运营
+      tr.withdrawAtTerminus = FAULT_LABELS.trainAto;
+      f.text = `列车 ${trainLabel(tr)}（${tr.vehicle}）车载ATO功能故障`;
+      sim.log('B', '列车', `${f.text}：ATO 不能驾驶，列车停车后${OPERATIONS.uto?.crewLabel ?? '司机'}转 ATPM 人工驾驶，载客运行至终点站退出运营`, { key: `ato-${tr.id}`, train: tr.id });
       break;
     }
     case 'trainDto': {
@@ -298,6 +310,16 @@ export function faultsTick(sim: Sim) {
         const tr=sim.trains.get(f.target);
         if(tr&&tr.dtoInhibit===FAULT_LABELS.trainUto)tr.dtoInhibit='';
         sim.clearAlarm(`uto-${f.target}`);
+        break;
+      }
+      case 'trainAto': {
+        const tr = sim.trains.get(f.target);
+        if (tr && tr.atoInhibit === FAULT_LABELS.trainAto) {
+          tr.atoInhibit = undefined;
+          if (tr.withdrawAtTerminus === FAULT_LABELS.trainAto) tr.withdrawAtTerminus = undefined;
+          sim.log('C', '列车', `列车 ${trainLabel(tr)} 车载ATO功能恢复，停站时恢复自动驾驶，取消终点站退出运营`, { train: tr.id });
+        }
+        sim.clearAlarm(`ato-${f.target}`);
         break;
       }
       case 'trainDto': {

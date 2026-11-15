@@ -826,6 +826,9 @@ export interface LineData {
   id: string;
   branding: { title: string; shortName: string; color: string; badgeUrl: string; logoText: string };
   unattended: { doorClose: boolean; turnback: boolean; wakeSleep: boolean; depotMoves: boolean };
+  /** The dispatcher can put the whole line on driver-driven ATO (DTO compatibility mode) as a
+   * fallback from DTO, and an operating day can start in it. */
+  lineAtoFallback: boolean;
   signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[]; onLoss: 'fallback' | 'restrictedManual' | 'wait' };
   automation: 'DTO' | 'UTO' | 'ATO';
   core: CoreLineData;

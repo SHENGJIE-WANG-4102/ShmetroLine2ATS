@@ -184,12 +184,22 @@ describe('unattended line operating procedures',()=>{
     expect(result.ok).toBe(true);
     expect(tr.uto?.stage).toBe('manual');expect(tr.retreat).toMatchObject({distance:9.4,authorised:true});
   });
-  it('full-auto equipment failure degrades to ATPM and exposes the remote reset command',()=>{
+  // 用户决定（2026-11-15）：降级次序 FAM → ATO → ATPM（原为 FAM 故障直接接管 ATPM）
+  it('full-auto equipment failure degrades to attendant ATO and exposes the remote reset command',()=>{
     const tr=fixture();expect(sim.command({c:'fault',kind:'trainUto',target:tr.id,duration:0}).ok).toBe(true);
     uto.utoTrainTick(sim,tr);sequence(tr);
-    expect(tr.mode).toBe('CM');expect(tr.uto?.detail).toContain('ATPM');
+    expect(tr.mode).toBe('AM');expect(tr.manual).toBe(false);expect(tr.uto?.detail).toContain('ATO');
     expect(sim.command({c:'utoReset',train:tr.id}).ok).toBe(true);
     expect(tr.uto?.stage).toBe('reset');expect(tr.uto?.until).toBe(sim.t+data.OPERATIONS.uto!.resetS);
+  });
+  it('ATO failure under the attendant ATO changes to ATPM where the train stands and comes off at the terminus',()=>{
+    const tr=fixture();sim.command({c:'fault',kind:'trainUto',target:tr.id,duration:0});uto.utoTrainTick(sim,tr);sequence(tr);
+    expect(tr.mode).toBe('AM');
+    expect(sim.command({c:'fault',kind:'trainAto',target:tr.id,duration:0}).ok).toBe(true);
+    uto.utoTrainTick(sim,tr);
+    expect(tr.mode).toBe('CM');expect(tr.manual).toBe(true);expect(tr.uto).toMatchObject({target:'CM',stage:'manual',reason:'atoFault'});
+    expect(tr.withdrawAtTerminus).toBe('车载ATO功能故障');
+    expect(sim.command({c:'manual',train:tr.id,mode:'AM'}).ok).toBe(false);
   });
   it('successful remote reset repairs the equipment and completes the guarded FAM restoration',()=>{
     const tr=fixture();sim.command({c:'fault',kind:'trainUto',target:tr.id,duration:0});uto.utoTrainTick(sim,tr);sequence(tr);
@@ -207,7 +217,7 @@ describe('unattended line operating procedures',()=>{
     const rng=vi.spyOn(sim,'rng').mockReturnValue(.999);
     try {expect(sim.command({c:'utoReset',train:tr.id}).ok).toBe(true);} finally {rng.mockRestore();}
     sim.t=tr.uto!.until;uto.utoTrainTick(sim,tr);
-    expect(tr.mode).toBe('CM');expect(tr.withdrawAtEnd).toBe(true);expect(tr.uto?.returnAt).toBe(Infinity);
+    expect(tr.mode).toBe('AM');expect(tr.withdrawAtEnd).toBe(true);expect(tr.uto?.returnAt).toBe(Infinity);
     expect(tr.dtoInhibit).toBe('车载全自动功能故障');
     expect(sim.command({c:'manual',train:tr.id,mode:'RM',computer:true}).ok).toBe(true);sequence(tr);
     expect(tr.uto?.resetSuccess).toBe(false);

@@ -10,7 +10,7 @@ import { CommandPanel, type PanelHooks } from './cmdpanel';
 import { confirmAndSend, toast, showIntegritySnapshot } from './confirm';
 import { FAULT_LABELS } from '../sim/faults';
 import { SCENARIOS, RANDOM_LEVELS } from '../sim/scenario';
-import { LINE, STATIONS, LINE_INFO, DIRECTIONS, WEATHER_RULES, unattended } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, DIRECTIONS, WEATHER_RULES, unattended, LINE_ATO_FALLBACK } from '../data/current';
 import type { FaultKind, RadioCall, SimEvent } from '../sim/model';
 import type { Audio } from './audio';
 import { inverterMode, type VvvfMode } from './vvvf';
@@ -24,7 +24,8 @@ import { isPlayerDriving } from './utoControls';
 const CAT_FILTERS = ['全部', '报警', '调度', '通话', '信号', '列车', '车站', '客流', '施工', '教员'];
 
 const PROCEDURES: Record<FaultKind, string> = {
-  trainUto: '后果：车载全自动功能故障，随车人员先关门，再报OCC、插钥匙、模式开关归0、制动并确认ATPM，人工驾驶。处置：OCC可远程复位；成功后按操作序列恢复FAM，失败后运行至终点或安排回段。',
+  trainUto: '后果：车载全自动功能故障，随车人员先关门，再报OCC、插钥匙、模式开关归0、制动并确认ATO，由随车人员ATO驾驶（ATO也不可用时为ATPM人工驾驶）。处置：OCC可远程复位，成功后按操作序列恢复FAM；经一次终点站折返、到下一终点站仍未恢复的，退出运营。',
+  trainAto: '后果：车载ATO功能故障，列车不能自动驾驶，制动停车后由司机（随车人员）转ATPM人工驾驶，载客运行至终点站退出运营。处置：确认司机已转ATPM；故障修复后停站时恢复自动驾驶，取消终点站退出运营。',
   trainComm: '后果：ZC 失去列车位置，该车按计轴区段占用防护；列车紧急制动。处置：司机停稳后报告 → 授权缓解并降级TBTC后备（AM）运行；通信恢复后在下一区段边界不停车升级CBTC（DTO）。',
   trainDto: '后果：该车DTO功能不可用（如障碍物检测、车载DTO设备故障），仍在CBTC下运行，但须司机在驾驶室值守：下一站停站时转ATO（AM），折返时司机换端（多约45秒），发车需司机按ATO启动按钮。处置：调度确认司机已上岗；故障修复后停站时恢复DTO，或安排回段检修。',
   zcFail: '后果：区域内CBTC列车失去移动授权，原地转TBTC后备（AM）按固定闭塞运行。处置：“切换TBTC”（二次确认）使后续列车停站降级；ZC修复后“恢复CBTC”，列车不停车升级。',
@@ -409,7 +410,7 @@ export class SidePanel {
       h('button', { class: 'btn primary', onclick: async () => { const r = await this.store.command({ c: 'env', wind: Number(wind.value), rain: rain.checked, duration: Number(wdur.value) }); toast(r.msg, r.ok); } }, '设置')));
     // manual fault injection
     const kind = h('select', {}, ...(Object.keys(FAULT_LABELS) as FaultKind[])
-      .filter(k => k === 'trainUto' ? unattended('doorClose') : k === 'trainDto' ? !unattended('doorClose') : true)
+      .filter(k => k === 'trainUto' ? unattended('doorClose') : k === 'trainDto' ? !unattended('doorClose') && LINE_ATO_FALLBACK : true)
       .map((k) => h('option', { value: k }, FAULT_LABELS[k]))) as HTMLSelectElement;
     const target = h('select', { style: 'min-width:420px;max-width:100%' }) as HTMLSelectElement;
     const dur = h('select', {}, ...[[0, '需人工修复'], [120, '2分钟'], [300, '5分钟'], [600, '10分钟'], [1200, '20分钟'], [1800, '30分钟']].map(([v, t]) => h('option', { value: v }, String(t)))) as HTMLSelectElement;
@@ -427,7 +428,7 @@ export class SidePanel {
       const sel = this.store.selection;
       const opt = (v: number, t: string, chosen = false) => { const o = h('option', { value: v }, t); if (chosen) (o as HTMLOptionElement).selected = true; return o; };
       const s = this.store.snap!;
-      if (k === 'trainComm' || k === 'trainDto' || k === 'trainUto' || k === 'trainFail' || k === 'traction' || k === 'door' || k === 'brake' || k === 'pecu') {
+      if (k === 'trainComm' || k === 'trainDto' || k === 'trainUto' || k === 'trainAto' || k === 'trainFail' || k === 'traction' || k === 'door' || k === 'brake' || k === 'pecu') {
         for (const t of [...s.trains].sort((a, b) => a.svc.localeCompare(b.svc))) if (t.inService || t.phase === 'run') target.append(opt(t.id, `${formatTrainNumber(t.svc, t.trip, true)}（${t.vehicle}）`, sel?.kind === 'train' && sel.id === t.id));
         if (k === 'traction' || k === 'door' || k === 'brake') {
           (sev.options[0] as HTMLOptionElement).text = k === 'traction' ? '切除1个单元' : '一般';

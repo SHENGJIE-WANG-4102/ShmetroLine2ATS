@@ -6,7 +6,7 @@
  * and a command log for rewind and replay (回放).
  */
 import { Sim, FIXED_DT } from './engine';
-import type { FromWorker, ToWorker, SimConfig } from './model';
+import type { Command, FromWorker, ToWorker, SimConfig } from './model';
 import { nextOperatingConfig, unfinishedAtRollover } from './operatingDay';
 import { OPERATING_DAY } from './dayRandom';
 import { capture, restore, type Checkpoint } from './state';
@@ -235,6 +235,15 @@ function applyDrive(train: number, notch: number) {
 }
 
 /** the dispatcher acts during a replay: the recorded future is discarded */
+/** a command issued by the worker itself, logged like the player's own */
+function logged(cmd: Command) {
+  if (!sim) return;
+  takeOver();
+  const inputIndex = sim.inputLog.length;
+  sim.command(cmd);
+  if (sim.inputLog.length > inputIndex) cmdLog.push(structuredClone(sim.inputLog[inputIndex]));
+}
+
 function takeOver() {
   if (!sim || !pending.length) return;
   cmdLog = cmdLog.slice(0, cmdLog.length - pending.length);
@@ -326,9 +335,17 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case 'pause':
       paused = m.paused;
       break;
-    case 'jump':
-      if (sim && Number.isFinite(m.to) && m.to > sim.t) runUntil(m.to, false, true);
+    case 'jump': {
+      if (!sim || !Number.isFinite(m.to) || m.to <= sim.t) break;
+      // 用户决定（2026-11-15）：nobody sits at the desk during a fast-forward either (as in the
+      // warm-up before the start time), so calls are answered automatically for its duration.
+      // Logged commands, so a replay of the diagnostics reproduces it.
+      const manualRadio = !sim.autoRadio;
+      if (manualRadio) logged({ c: 'radioAuto', on: true });
+      runUntil(m.to, false, true);
+      if (manualRadio && sim) logged({ c: 'radioAuto', on: false });
       break;
+    }
     case 'cmd': {
       if (!sim) return;
       takeOver();

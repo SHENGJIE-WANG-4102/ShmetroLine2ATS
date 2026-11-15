@@ -22,7 +22,7 @@ import { openCall, unsafeAhead } from './radio';
 import { nextLink, stablingBerth } from './topology';
 import { swPos } from './interlocking';
 import { withdrawAuthority } from './movement';
-import { OPERATIONS, supportsSignalSystem, unattended, LINE } from '../data/current';
+import { OPERATIONS, supportsSignalSystem, unattended, LINE, LINE_ATO_FALLBACK } from '../data/current';
 
 /** driver action time for a mode / level change at standstill (s) 【假设】 */
 export const MODE_CHANGE_TIME = 10;
@@ -302,36 +302,47 @@ export function cmdTrainLevel(_sim: Sim, tr: Train, level: ForceLevel): { ok: bo
   return { ok: true, msg: `列车 ${trainLabel(tr)} 控制级别设为${txt}` };
 }
 
-/** dispatcher: degrade one train to ATO with the driver (on = false), or let it run DTO again */
+/** dispatcher: degrade one train to ATO with the driver (on = false), or let it run DTO again
+ * (用户决定 2026-11-15：降级次序各线通用，DTO/FAM → ATO → ATPM) */
 export function cmdTrainDto(sim: Sim, tr: Train, on: boolean): { ok: boolean; msg: string } {
-  if(unattended('doorClose'))return {ok:false,msg:'全自动线路由随车人员办理 ATPM / RM 接管或恢复 FAM'};
+  if (!LINE_ATO_FALLBACK) return { ok: false, msg: '本线没有 ATO 后备运营' };
+  const top = unattended('doorClose') ? 'FAM' : 'DTO', crew = OPERATIONS.uto?.crewLabel ?? '司机';
   if (!on) {
-    if (tr.dtoInhibit) return { ok: false, msg: `列车已不能DTO运行（${tr.dtoInhibit}）` };
+    if (tr.dtoInhibit) return { ok: false, msg: `列车已不能${top}运行（${tr.dtoInhibit}）` };
     tr.dtoInhibit = '调度命令降级ATO';
-    return { ok: true, msg: `列车 ${trainLabel(tr)} 降级ATO：司机在下一站停站时转AM驾驶` };
+    return { ok: true, msg: `列车 ${trainLabel(tr)} 降级ATO：${crew}在下一站停站时${unattended('doorClose') ? '接管 ATO 驾驶' : '转AM驾驶'}` };
   }
   if (tr.dtoInhibit === '调度命令降级ATO') tr.dtoInhibit = '';
-  else if (tr.dtoInhibit) return { ok: false, msg: `${tr.dtoInhibit}未修复，不能恢复DTO` };
-  if (sim.atoLine) return { ok: false, msg: '全线ATO运营中，先恢复全线DTO' };
-  return { ok: true, msg: `列车 ${trainLabel(tr)} 下一站停站时恢复DTO` };
+  else if (tr.dtoInhibit) return { ok: false, msg: `${tr.dtoInhibit}未修复，不能恢复${top}` };
+  if (sim.atoLine) return { ok: false, msg: `全线ATO运营中，先恢复全线${top}` };
+  return { ok: true, msg: `列车 ${trainLabel(tr)} 下一站停站时恢复${top}` };
 }
 
 /** dispatcher: the whole line runs ATO with drivers (DTO compatibility mode) or DTO again */
 export function cmdLineAto(sim: Sim, on: boolean): { ok: boolean; msg: string } {
-  if(unattended('doorClose'))return {ok:false,msg:'全自动线路不使用全线有人值守 ATO 切换，请按列车办理接管'};
-  if (sim.atoLine === on) return { ok: false, msg: on ? '已是全线ATO运营' : '已是全线DTO运营' };
+  if (!LINE_ATO_FALLBACK) return { ok: false, msg: '本线没有全线ATO后备运营' };
+  const top = unattended('doorClose') ? 'FAM' : 'DTO';
+  if (sim.atoLine === on) return { ok: false, msg: on ? '已是全线ATO运营' : `已是全线${top}运营` };
   sim.atoLine = on;
   sim.log('B', '调度', on
-    ? '全线转ATO运营（DTO兼容模式）：各列车停站时由司机转AM驾驶，终点站折返司机换端'
-    : '全线恢复DTO运营：各列车停站时恢复DTO', {});
-  return { ok: true, msg: on ? '全线转ATO运营：列车在下一站停站时转AM' : '全线恢复DTO：列车在下一站停站时恢复DTO' };
+    ? unattended('doorClose') ? `全线转ATO后备运营：各列车停站时由${OPERATIONS.uto?.crewLabel ?? '随车人员'}接管 ATO 驾驶，终点站折返换端`
+      : '全线转ATO运营（DTO兼容模式）：各列车停站时由司机转AM驾驶，终点站折返司机换端'
+    : `全线恢复${top}运营：各列车停站时恢复${top}`, {});
+  return { ok: true, msg: unattended('doorClose')
+    ? on ? '全线转ATO后备运营：随车人员在下一站停站时接管ATO' : '全线恢复FAM：随车人员在下一站停站时恢复FAM'
+    : on ? '全线转ATO运营：列车在下一站停站时转AM' : '全线恢复DTO：列车在下一站停站时恢复DTO' };
 }
 
 /** dispatcher hands a train to manual driving (CM / RM) or back to automatic (DTO / AM) */
-export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'): { ok: boolean; msg: string } {
+/** `computer`: the simulated driver of an ATO-failed train (uto.ts crewTick), not the player's cab */
+export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO', computer = false): { ok: boolean; msg: string } {
   if (tr.failed) return { ok: false, msg: '列车故障中' };
   if (tr.phase === 'stabled') return { ok: false, msg: '列车已存车' };
   if (tr.eb) return { ok: false, msg: '列车紧急制动中，须先报告调度并获授权缓解' };
+  if (tr.atoInhibit && (mode === 'AUTO' || mode === 'AM')) return { ok: false, msg: `${tr.atoInhibit}未修复，不能转自动驾驶` };
+  // the player takes the cab from the simulated driver
+  if (!computer && tr.uto?.computer) tr.uto = undefined;
+  const playerCab = (o: Train) => o.manual && !o.uto?.computer || o.atoDriver;
   if (mode === 'AUTO') {
     if (!tr.manual && !tr.atoDriver) return { ok: false, msg: '列车未处于人工驾驶' };
     if (tr.v > 0.1 && tr.mode === 'RM') return { ok: false, msg: 'RM 转自动驾驶须停车后进行' };
@@ -365,7 +376,7 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
     return { ok: true, msg: `列车 ${trainLabel(tr)} 恢复 ${modeLabel(tr.mode, tr.level)} 自动驾驶` };
   }
   if (mode === 'AM') {
-    const other = sim.trainList.find(o => o.id !== tr.id && (o.manual || o.atoDriver));
+    const other = sim.trainList.find(o => o.id !== tr.id && playerCab(o));
     if (other) return { ok: false, msg: `列车 ${trainLabel(other)} 已被接管` };
     if (tr.doorSide || tr.doorMotion?.kind === 'closing') return { ok: false, msg: '请先完成车门操作' };
     if (!setMode(sim, tr, 'AM', tr.level, '司机接管ATO')) return { ok: false, msg: '当前条件不能转AM' };
@@ -384,7 +395,7 @@ export function setManual(sim: Sim, tr: Train, mode: 'CM' | 'RM' | 'AM' | 'AUTO'
     return { ok: true, msg: 'ATO驾驶接管，发车条件满足后同时按住F和G' };
   }
   // one cab at a time: a second manual train would run on with its handle left where it was
-  const other = !tr.manual && [...sim.trains.values()].find((o) => o.id !== tr.id && (o.manual || o.atoDriver));
+  const other = !computer && !tr.manual && [...sim.trains.values()].find((o) => o.id !== tr.id && playerCab(o));
   if (other) return { ok: false, msg: `列车 ${trainLabel(other)} 正在人工驾驶，请先将其恢复自动驾驶` };
   if (mode === 'RM' && tr.v > 0.1) return { ok: false, msg: '转RM模式须先停车' };
   if (mode === 'CM' && tr.level === 'CBTC' && !tr.comm) return { ok: false, msg: '车地通信中断，无ATP防护，只能以RM模式驾驶' };
@@ -465,6 +476,7 @@ export function updateOnboard(sim: Sim) {
         const head = tr.tasks[0];
         const stop = standing && (tr.phase === 'dwell' || tr.phase === 'reversing' || !tr.inService
           || head?.k === 'stop' && !!head.standby);
+        if (tr.atoInhibit || unattended('doorClose')) continue;
         if (tr.mode === 'DTO' && !dtoAllowed(sim, tr) && stop) setMode(sim, tr, 'AM', 'CBTC', sim.atoLine ? '全线ATO运营，转ATO（司机驾驶）' : `降级ATO（${tr.dtoInhibit}）`);
         else if (tr.mode === 'AM' && dtoAllowed(sim, tr) && stop) setMode(sim, tr, 'DTO', 'CBTC', '恢复DTO');
         continue;
