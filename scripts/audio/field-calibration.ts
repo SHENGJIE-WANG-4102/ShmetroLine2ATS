@@ -35,6 +35,7 @@ for (const [id, clock, name, from] of [
   ['ride-1021-west', '20:33', '20.33PVG~浦东南路.wav', '浦东1号2号航站楼'],
 ]) {
   const pa = FIELD_1021_ORIGINALS.filter(p => p.source === id);
+  if (!pa.length) continue; // another line group: these Line 2 rides are not in its data
   (sources as unknown[]).push({ id, path: resolve('work/recordings', name), filename: name,
     clockStart: clock, clockStartPrecision: 'minute', from, directions: [pa[0].direction],
     durationS: id.endsWith('west') ? 3667.54 : 1859.30,

@@ -31,6 +31,30 @@ export const DOOR_CYCLE = meanRange(OPERATIONS.autoDoorOpenDelay) + DOOR_REFEREN
  * 物理门序列用区间期望12.2秒；差额2.8秒留作原图定客流作业余量。 */
 export const PLANNED_DOOR_BUDGET = C.plannedDoorBudget; // D73图定门作业预算，D119保持
 export const PLANNED_CLOSE_BUDGET = C.plannedCloseBudget;
+/** Seconds the departure countdown shows zero before the planned departure (driverCloseRule). */
+export const COUNTDOWN_LEAD_S = C.driverCloseRule ? meanRange(C.driverCloseRule.countdownLeadS) : 0;
+/** The (simulated) driver leaves by the countdown, never as soon as the doors lock. */
+export const DRIVER_WAITS_COUNTDOWN = !!C.driverCloseRule;
+function closeRange(station: number): [number, number] {
+ const rule=C.driverCloseRule!, fixed=rule.fixedCloseS?.[STATIONS[station]?.id ?? ''];
+ return fixed!==undefined?[fixed,fixed]:(STATIONS[station]?.dwell ?? 0)>=rule.longDwellS?rule.longCloseS:rule.closeS;
+}
+/** Mean seconds before the planned departure that the doors start closing at this station. */
+export function plannedCloseBudgetAt(station: number): number {
+ return C.driverCloseRule ? COUNTDOWN_LEAD_S+meanRange(closeRange(station)) : PLANNED_CLOSE_BUDGET;
+}
+/** This stop's driver: seconds before the countdown's zero that the doors close, and after
+ * it that the train moves. A pure function of the stop (seed, train, arrival), so a
+ * replay draws the same values without any stored state. */
+export function driverCloseDraw(seed: number, train: number, arrivedAt: number, station: number): { closeS: number; leadS: number } | undefined {
+ const rule=C.driverCloseRule;
+ if (!rule) return undefined;
+ let h=2166136261;
+ for (const c of `${train}|${Math.round(arrivedAt*10)}|${station}`) h=Math.imul(h^c.charCodeAt(0),16777619);
+ const r=dayRandom(seed,h>>>0); r(); r();
+ const [a,b]=closeRange(station), [c,d]=rule.countdownLeadS;
+ return { closeS: a+r()*(b-a), leadS: c+r()*(d-c) };
+}
 export const MIN_DWELL = C.minDwell; // D73保留的停站下限；物理门序列改用DOOR_CYCLE期望值
 export const MAX_EARLY_HOLD = C.maxEarlyHold;
 export const MAX_DWELL_BUSY = C.maxDwellBusy; // 【假设】 peak ceiling, calibrated against fleet counts (D73)

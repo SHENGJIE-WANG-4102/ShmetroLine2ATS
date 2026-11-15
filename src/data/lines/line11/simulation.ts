@@ -76,7 +76,12 @@ export const LINE11_SIMULATION: SimulationData = {
       weekday: { stationWeights: [], amplitude: 0, morning: 8, evening: 18, width: 2 },
       weekend: { stationWeights: [], amplitude: 0, morning: 8, evening: 18, width: 2 },
     },
-    minDwell: 20,
+    // 用户决定（2026-11-15，L11-03）：开门起倒计时至少 20 s，到 0 后约 7 s 起动，开门起最短 27 s；加开门约 3 s，停稳到起动最短约 30 s
+    minDwell: 27,
+    // 用户决定（2026-11-15）：司机看发车倒计时关门，每站随机：一般站剩 5–15 s 关，大站剩 15–25 s 关，
+    // 曹杨路换司机固定剩 10 s 关；倒计时到 0 后 5–10 s 起动。早了晚了由 ATO 按图调速追回。
+    // 哪些站算「大站」【假设】：图定停站 ≥ 40 s（上海西站、真如、东方体育中心、徐家汇）。
+    driverCloseRule: { countdownLeadS: [5, 10], closeS: [5, 15], longCloseS: [15, 25], longDwellS: 40, fixedCloseS: { CYL: 10 } }, // CYL：曹杨路车站代码
   },
   gradient: { ...LINE14_SIMULATION.gradient, depths: {}, river: null }, // 【假设】缺11号线纵断面，按平坦隧道处理
   holiday: { calendar: [], returnRuns: [], closure: null, surges: [] },

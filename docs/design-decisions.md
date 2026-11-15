@@ -5319,3 +5319,15 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
   - 自动调度员办的事见 `src/sim/dispatcher.ts` 头注释：计轴/道岔/信号/ZC/站台门故障处置（含钩锁、引导、单操恢复）、救援、晚点调整。
 - 动了公共文件：`src/sim/model.ts`、`src/sim/engine.ts`、`src/sim/commands.ts`、`src/sim/worker.ts`；测试 `tests/fuzz-roots.test.ts` 补该命令样例（命令表按判别字段全覆盖）。
 - 验证：11 号线种子 5、三级随机故障，开局不开自动调度、10:00 发 `dispatchAuto on`（相当于此时开始快进）：P0815 修好后恢复，468 趟载客车次全部跑完、0 违例（不开自动调度时 254 趟没跑完）；午间最大晚点约 2000 s，21:00 前收敛。tsc 0 error，`tests/fuzz-roots.test.ts` 96 条全过。
+
+## D200 司机按发车倒计时关门（线路数据 driverCloseRule）（2026-11-15，用户决定）
+
+- 起因：11 号线司机看倒计时（TDT/DMI）关门，倒计时到 0 后过几秒才起动（L11-21）。原来的门流程是按图定关门预算倒推关门、锁闭后立刻放行，倒计时到 0 就是起动时刻。
+- 做法：新增可选的 `SIMULATION.calibration.driverCloseRule`，没有这项的线路行为不变。
+  - 每站抽一次：关门时刻（倒计时剩几秒，按一般/大站/固定站取范围）和到 0 后起动的秒数。抽样是车次、到站时刻、车站的纯函数（`driverCloseDraw`，用 `dayRandom` 独立流），不加任何状态，回放一致，不用进 `DAY_STATE`。
+  - 倒计时显示（`dwellDepartureAt`）= 图定发车 − 起动延时均值。
+  - 关门时刻 = max(倒计时 0 − 抽到的关门秒数，最早可发 − 起动延时 − 关门秒数)。
+  - 关门锁闭后放行不早于「倒计时 0 + 抽到的起动延时」，ATO 自动关门和模拟司机关门两条路径都一样；早了晚了靠现有到站调速追回。
+- 公共文件：`src/data/simulationExtras.ts`（类型）、`src/sim/calibration.ts`（`COUNTDOWN_LEAD_S`、`plannedCloseBudgetAt`、`driverCloseDraw`）、`src/sim/ats.ts`（关门时刻、两处放行）。
+- 顺手：`scripts/audio/field-calibration.ts` 在别的线路组下跳过 2 号线自带录音（原来 11 号线一跑就崩）。
+- 验证：见 L11-21；2 号线、14 号线没有这项数据，路径不变，相关测试全过。

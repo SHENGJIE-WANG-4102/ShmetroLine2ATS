@@ -4,6 +4,7 @@ import { LINE11_CORE } from './line11';
 import { LINE11_FIRST_LAST } from './firstlast';
 import { LINE11_SIMULATION } from './simulation';
 import { LINE11_UI } from './ui';
+import * as soundbank from './soundbank';
 
 // 11号线没有本地录音库；门动作物理预算沿用 6A 通用值【假设】。
 const silentAudio = emptyAudio(LINE11_CORE.STATIONS, { openingS: 2.5, warningToMotionS: 2.2, motionToLockedS: 4.5 });
@@ -18,7 +19,8 @@ export const LINE_11: LineData = {
   core: LINE11_CORE,
   firstLast: LINE11_FIRST_LAST,
   lastTrains: { OTHER_LAST_TRAINS: [] },
-  audio: silentAudio,
+  // 车内走行/停车环境声来自用户录音（L11-21，2026-11-15）；其余录音库仍为空
+  audio: { ...silentAudio, soundbank },
   simulation: LINE11_SIMULATION,
   ui: LINE11_UI,
 };

@@ -15,6 +15,12 @@ export interface SimulationExtras {
     profiles: Record<Day, [number, number][]>;
     tides: Record<Day, { stationWeights: number[]; amplitude: number; morning: number; evening: number; width: number }>;
     plannedDoorBudget: number; plannedCloseBudget: number; minDwell: number;
+    /** A driver who closes by the departure countdown (TDT/DMI), drawn per stop (s, [min, max]):
+     * the train moves `countdownLeadS` after the countdown shows zero; doors close `closeS`
+     * before that zero, `longCloseS` at a stop planned for at least `longDwellS`, or a fixed
+     * value at the stations of `fixedCloseS` (station id). Absent: plannedCloseBudget. */
+    driverCloseRule?: { countdownLeadS: [number, number]; closeS: [number, number]; longCloseS: [number, number];
+      longDwellS: number; fixedCloseS?: Record<string, number> };
     maxEarlyHold: number; maxDwellBusy: number; maxDwell: number;
     doorsPerSide: number; exchangePerDoor: number;
   };
