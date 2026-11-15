@@ -5,6 +5,7 @@ import { utoBusy, utoVehicleWait } from './uto';
  */
 import type { Sim } from './engine';
 import type { Train, BodySeg, StopTask } from './model';
+import { originStandAt } from './calibration';
 import { nextLink, linkChain, signalAtEntry, type Dir } from './topology';
 import { profileOf, heightAt, chainSense, gradeAccelAt, gradeAlong, brakingSpeedH } from './gradient';
 import { adhesionLimit, LOW_ADH_BPLAN, LOW_ADH_TRACTION } from './adhesion';
@@ -942,8 +943,11 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   const estimate = timed && (tr.ato?.delay === undefined || tr.ato.turnbackLeg !== undefined
     || tr.ato.berth !== (nextStop as StopTask).berth || tr.ato.arrival !== (nextStop as StopTask).arr
     || Math.floor(sim.t / DELAY_ESTIMATE_S + tr.id / 7) !== Math.floor((sim.t - dt) / DELAY_ESTIMATE_S + tr.id / 7));
+  // a revenue origin is reached early enough to stand its off-peak platform time (originStandS)
+  const origin = timed && (nextStop as StopTask).stopIndex === 0 && sim.plan.trips[(nextStop as StopTask).trip]?.revenue;
+  const targetArr = timed ? (nextStop as StopTask).arr! - (origin ? originStandAt(sim.plan.dayType, (nextStop as StopTask).arr!) : 0) : 0;
   const targetDelay = !timed ? tr.delay : estimate
-    ? sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, profile().limits, PERF.atoMargin) - (nextStop as StopTask).arr!
+    ? sim.t + etaToStop(budgetDistance, tr.v, PERF.vMax - PERF.atoMargin, profile().limits, PERF.atoMargin) - targetArr
     : tr.ato!.delay!;
   if (regulated) tr.delay = targetDelay;
   const atoMargin = rearLeg || targetRegulated && targetDelay > 2 ? PERF.atoFastMargin : PERF.atoMargin;

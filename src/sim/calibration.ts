@@ -31,6 +31,15 @@ export const DOOR_CYCLE = meanRange(OPERATIONS.autoDoorOpenDelay) + DOOR_REFEREN
  * 物理门序列用区间期望12.2秒；差额2.8秒留作原图定客流作业余量。 */
 export const PLANNED_DOOR_BUDGET = C.plannedDoorBudget; // D73图定门作业预算，D119保持
 export const PLANNED_CLOSE_BUDGET = C.plannedCloseBudget;
+/** Seconds a revenue origin departure at `t` stands at its platform beyond the turnback
+ * (OPERATIONS.originStandS): off-peak only; in a peak period the diagram decides. */
+export function originStandAt(dayType: DayType, t: number): number {
+ const stand=OPERATIONS.originStandS;
+ if (!stand) return 0;
+ const periods=SIMULATION.timetable.dayPeriods[dayType];
+ const p=periods.find(x=>t>=x.from&&t<x.to) ?? (t<periods[0].from?periods[0]:periods[periods.length-1]);
+ return SIMULATION.timetable.templates[p.template]?.peak?0:stand;
+}
 /** Seconds the departure countdown shows zero before the planned departure (driverCloseRule). */
 export const COUNTDOWN_LEAD_S = C.driverCloseRule ? meanRange(C.driverCloseRule.countdownLeadS) : 0;
 /** The (simulated) driver leaves by the countdown, never as soon as the doors lock. */

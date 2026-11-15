@@ -278,6 +278,9 @@ export interface CoreLineData {
     lastBigWestboundArrival: number;
     peakCoreHeadway: number;
     minTurnback: Record<string, number>;
+    /** Seconds a turned train may stand at its departure platform before an origin departure
+     * as normal work (doors open, boarding); a longer wait is a long wait. Absent: 0. */
+    originStandS?: number;
     /** Shared physical rear-turnback legs and cab work; absent retains the existing timing. */
     rearTurnback?: { entryRunS: number; changeEndsS: number; exitRunS: number };
     /** Station IDs where long turnback waits remain at the platform. */

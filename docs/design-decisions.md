@@ -5331,3 +5331,13 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - 公共文件：`src/data/simulationExtras.ts`（类型）、`src/sim/calibration.ts`（`COUNTDOWN_LEAD_S`、`plannedCloseBudgetAt`、`driverCloseDraw`）、`src/sim/ats.ts`（关门时刻、两处放行）。
 - 顺手：`scripts/audio/field-calibration.ts` 在别的线路组下跳过 2 号线自带录音（原来 11 号线一跑就崩）。
 - 验证：见 L11-21；2 号线、14 号线没有这项数据，路径不变，相关测试全过。
+
+## D201 始发站台停站（OPERATIONS.originStandS）（2026-11-15，用户决定）
+
+- 起因：11 号线始发站平峰在站台停 180 s 开门候车，高峰按排图（L11-23）。原来换端到始发只留最小折返时间，长等待又不许在站台，三林小交路因此接不上车。
+- 做法：新增可选 `OPERATIONS.originStandS`，没设的线路行为不变（各处都退化为加 0）。
+  - `originStandAt(dayType, t)`（`calibration.ts`）：所在时段模板是高峰返回 0，否则返回 `originStandS`。
+  - 排图：车底接续（`duty/planner.ts` 的 `turnAllowed`、D173 晚移、`connectAt`）在载客始发时要求「最小折返 + 始发停站」；`plannedWaitBerth` 换端等待把始发停站算进正常作业，不再当长候班赶出站台。
+  - 运行时：尾轨候车车提前叫车（`resourceArbitration.ts` 的 `sourceReadyAt`，提前量 max(240 s, 始发停站 + 100 s)）；始发窗口放行同样减去始发停站；ATO 到始发站按「图定发车 − 始发停站」调速（`movement.ts`），不会进站太早或太晚。
+- 公共文件：`src/data/types.ts`、`src/sim/calibration.ts`、`src/sim/duty/planner.ts`、`src/sim/plannedWaitBerth.ts`、`src/sim/resourceArbitration.ts`、`src/sim/movement.ts`。
+- 验证：tsc 0；12 个相关测试文件 278 条全过；11 号线排图工作日/双休日 0 问题；2 号线工作日 734 趟/74 列、双休日 582 趟/57 列 0 问题；14 号线工作日 5 个问题是原有的（14 号线不设这项，新路径全退化）。

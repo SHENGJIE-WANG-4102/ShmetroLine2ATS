@@ -19,7 +19,7 @@ export function plannedNormalWork(dayType: Plan['dayType'], arrival: Pick<Trip, 
   const to = effectiveEnd(arrival as Trip);
   if (!last || to === undefined) return Infinity;
   const from = last.arr;
-  return arrival.dir !== departure.dir ? minTurn(to)
+  return arrival.dir !== departure.dir ? minTurn(to) + (OPERATIONS.originStandS ?? 0)
     : plannedDwell(dayType, to, departure.dir, from, dwellFactorAt(dayType, from));
 }
 

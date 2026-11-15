@@ -24,6 +24,7 @@ import {
   minTurn, overnightPlaces, standbyWindows, turnbackAt, MAX_LAYOVER, THROUGH_WAIT, MIN_HEADWAY, CORE_W, CORE_E, MAX_DIAGRAM_SHIFT_S, stationIndex,
   TEMPLATES, periodAt, DEPOT_ENTRY_CLEAR, inboundWindow, outboundWindow, noDepotReturnBefore,
 } from '../timetable';
+import { originStandAt } from '../calibration';
 import { OPERATIONS, STATIONS } from '../../data/current';
 import { ahead } from '../topology';
 import { matchPool } from './pool';
@@ -79,6 +80,8 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   const firstAdded = trips.length;
   const carOf = (id: number) => { let t = trips[id]; while (t.id >= firstAdded && t.prev !== undefined) t = trips[t.prev]; return t.id; };
   const { topo } = ctx;
+  /** a turn into `d` at `st`: the turnback plus, off-peak, the origin platform stand (OPERATIONS.originStandS) */
+  const turnNeed = (st: number, d: GenTrip) => minTurn(st) + (d.revenue ? originStandAt(ctx.dayType, d.stops[0].dep) : 0);
   const issues: PlanIssue[] = [];
   const mv = createMoves(ctx, trips, periods);
   const { lineEnd, arr, dep, live, services, leavingFrom, throughMin, waitLimit, index, slot, lastService, POSITIONING, startOf, endOf, link,
@@ -130,7 +133,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     const turnAllowed = (a: GenTrip, d: GenTrip) => {
       const wait = dep(d) - arr(a);
       if (a.dir === d.dir) return wait >= throughMin(T, a.dir, arr(a)) - 1e-6 && wait <= THROUGH_WAIT && safe(a, d);
-      return !!turnbackAt(topo, T, a.dir) && wait >= minTurn(T) - 1e-6 && safe(a, d)
+      return !!turnbackAt(topo, T, a.dir) && wait >= turnNeed(T, d) - 1e-6 && safe(a, d)
         && frontTurnClear(ctx, live(), a, dep(d), new Set([a.id, d.id]));
     };
     // published arrivals turn first, into the first departure they can make
@@ -153,7 +156,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     // turn after it queueing. The departure keeps its order on the platform,
     // its path, and the turn or return at its other end.
     if (lineEnd(T)) for (const want of result.unmet.slice()) {
-      const d = want.trip, turn = minTurn(T);
+      const d = want.trip, turn = turnNeed(T, d);
       if (locked.has(d.id)) continue;
       const late = result.spare.filter(c => c.trip.dir !== d.dir && arr(c.trip) + turn > dep(d) && arr(c.trip) + turn <= dep(d) + MAX_DIAGRAM_SHIFT_S)
         .sort((x, y) => arr(x.trip) - arr(y.trip))[0];
@@ -179,7 +182,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
         const wait = dep(d) - arr(a);
         if (a.dir === d.dir) return wait <= THROUGH_WAIT ? 'ok' : 'through-wait';
         if (!turnbackAt(topo, T, a.dir)) return 'no-turnback';
-        if (wait < minTurn(T) - 1e-6) return 'short';
+        if (wait < turnNeed(T, d) - 1e-6) return 'short';
         if (!connectionSafe(topo, ctx.dayType, a, d)) return 'unsafe';
         if (!frontTurnClear(ctx, live(), a, dep(d), new Set([a.id, d.id]))) return 'front';
         if (!reserve(T, arr(a), dep(d), false)) return 'reserve';
@@ -275,7 +278,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   /** car `a` may take `d` at `st`: turning or running on, held within the limits */
   const connectAt = (a: GenTrip, d: GenTrip, st: number) => {
     const turn = a.dir !== d.dir, wait = dep(d) - arr(a);
-    return wait >= (turn ? minTurn(st) : throughMin(st, a.dir, arr(a))) - 1e-6 && wait <= waitLimit(st, turn, arr(a)) && safe(a, d)
+    return wait >= (turn ? turnNeed(st, d) : throughMin(st, a.dir, arr(a))) - 1e-6 && wait <= waitLimit(st, turn, arr(a)) && safe(a, d)
       && (!turn || !!turnbackAt(topo, st, a.dir) && frontTurnClear(ctx, live(), a, dep(d), new Set([a.id, d.id])) && reserve(st, arr(a), dep(d)));
   };
   const trimStart = (want: Want): boolean => {

@@ -273,6 +273,8 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   lastBigWestboundArrival: H(24, 0),
   peakCoreHeadway: 120, // 官方 南翔—三林 早高峰往三林 平均2分
   minTurnback: { HQ: 240, JDB: 240, DSL: 300, NX: 240, SL: 300, LSH: 240, AT: 240 }, // 【假设】按尾轨/中间线作业加余量
+  // 用户决定（2026-11-15）：始发站平峰在站台停 180 s（开门候车），高峰看排图；站台上站这么久算正常折返作业，不算长候班
+  originStandS: 180,
   longWaitPlatformStations: ['NX'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）
   platformTurnClear: {},
   // 回段：图上城北路只接嘉定北下行正线，数据照图写；赛车场只接上行正线，但因站东 X 放不下，

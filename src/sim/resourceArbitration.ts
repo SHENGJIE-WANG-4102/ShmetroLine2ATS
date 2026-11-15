@@ -10,7 +10,8 @@ import { canStopBeforeSignal } from './protection';
 import { SIGNAL_MARGIN } from './protection';
 import type { HaltCode, WaitAlternative } from './halt';
 import { blockTasks, departureBerthAfterReverse, effectiveStops } from './timetable';
-import { MIN_DWELL } from './calibration';
+import { MIN_DWELL, originStandAt } from './calibration';
+import { OPERATIONS } from '../data/current';
 import { LINE_INFO } from '../data/current';
 import { peekVehicle } from './yard';
 import { distanceToBerthFrom, signalAheadFrom, depotBerth, berthHolder, cowTask, applyDepotChoice, routeUser, routeOccupant, trainLabel, depotSourceBusy, arsReadyAt } from './ats';
@@ -549,8 +550,14 @@ export function sourceReadyAt(sim: Sim, task: Task, tr?: Train): number {
         { turnbackLead: turnbackLeadBerth(sim.topo, task.turnbackWaitBerth) })) return -Infinity;
   }
   const departure = sourceDepartureAt(sim, task, tr);
-  return departure === null ? -Infinity : departure - STANDBY_CALL;
+  // A turnback waiter is called early enough to stand its originStandS at the departure
+  // platform (ORIGIN_RUN_IN_S covers the run in from the tail 【假设】).
+  const lead = task.turnbackWaitBerth !== undefined && !task.standby && !task.stabledOut && OPERATIONS.originStandS
+    ? Math.max(STANDBY_CALL, OPERATIONS.originStandS + ORIGIN_RUN_IN_S) : STANDBY_CALL;
+  return departure === null ? -Infinity : departure - lead;
 }
+/** Run in from a turnback tail to the departure platform, for calling a waiter (s) 【假设】. */
+const ORIGIN_RUN_IN_S = 100;
 
 /** Shared reason for the existing source-readiness gate. */
 export function sourceWaitReason(task: Task): string {
@@ -657,8 +664,10 @@ function makeRequest(sim: Sim, id: number, tasks: Task[], point: TrackPoint, len
     const terminal = station.turnbackBerths.length > 0;
     const edge = ['DN', 'UP'].some(dir => downstreamTerminal(dir as 'DN' | 'UP') === origin.station);
     // Existing origin arrival windows, applied once before the shared motion.
+    // (plus the off-peak platform stand of a revenue origin, OPERATIONS.originStandS)
+    const stand = sim.plan.trips[origin.trip]?.revenue ? originStandAt(sim.plan.dayType, origin.dep!) : 0;
     if (!terminal || !edge || !tr) option.readyAt = Math.max(option.readyAt,
-      origin.dep! - distance / 15 - 30 - prep - (terminal ? 90 : 40));
+      origin.dep! - distance / 15 - 30 - prep - (terminal ? 90 : 40) - stand);
   }
   const readyAt = Math.min(...options.map(o => o.readyAt!));
   // Existing standby/stabling release is a source-readiness condition, not a
