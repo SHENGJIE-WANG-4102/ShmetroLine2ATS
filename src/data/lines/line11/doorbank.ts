@@ -2,21 +2,23 @@ import type { SoundClip } from '../../types';
 
 /** 用户 2026-11-15 车内录音（嘉定北→江苏路）剪出的开关门声，按站随机取（确定性）。
  * 关门：门铃（约 2850 Hz、860 Hz 脉冲，约 6 s）到铃后 3.5 s，含门动作和锁闭。
- * 开门：没有铃声，门开到底有一下碰撞声（用户确认）；取碰撞前 2.8 s 到后 1.5 s。
- * 自动找的（门铃按频率、碰撞按关门铃前 8–25 s 最强宽频冲击），没逐条试听；所在站未对齐，不填。
+ * 开门：没有铃声，有开门动作声和开到位的碰撞声（用户确认）；取关门铃前 6–25 s 最强宽频冲击的前 1 s 到后 4 s，开门和到位都在里面。
+ * 用户核对一站：2:21 开门、2:24 开门到位、2:37 关门提示音、2:41 关门、2:43 关门到位（o1、c1，高置信）；
+ * 其余为自动找的，没逐条试听；所在站未对齐，不填。
  * 录音和成片都不入库（public/sounds/line11/）。实录时长不改变门动作物理预算。 */
 export const DOOR_SELECTION = 'random' as const;
 export const DOOR_TAKES = [
-  { id: 'o1', station: '', primary: false, open: [383.1, 387.4], confidence: 'medium' }, // 碰撞声 385.9 s
-  { id: 'o2', station: '', primary: false, open: [553.2, 557.5], confidence: 'medium' }, // 碰撞声 556.0 s
-  { id: 'o3', station: '', primary: false, open: [756.6, 760.9], confidence: 'medium' }, // 碰撞声 759.4 s
-  { id: 'o4', station: '', primary: false, open: [1174.3, 1178.6], confidence: 'medium' }, // 碰撞声 1177.1 s
-  { id: 'o5', station: '', primary: false, open: [1566.6, 1570.9], confidence: 'medium' }, // 碰撞声 1569.4 s
-  { id: 'c1', station: '', primary: false, warn: [402.2, 412.25], confidence: 'medium' }, // 门铃 402.5–408.75 s
-  { id: 'c2', station: '', primary: false, warn: [569.8, 579.75], confidence: 'medium' }, // 门铃 570.1–576.25 s
-  { id: 'c3', station: '', primary: false, warn: [1431.45, 1441.5], confidence: 'medium' }, // 门铃 1431.75–1438.0 s
-  { id: 'c4', station: '', primary: false, warn: [1998.35, 2008.4], confidence: 'medium' }, // 门铃 1998.65–2004.9 s
-  { id: 'c5', station: '', primary: false, warn: [2274.35, 2284.4], confidence: 'medium' }, // 门铃 2274.65–2280.9 s
+  { id: 'o1', station: '', primary: false, open: [141.0, 146.0], confidence: 'high' }, // 用户核对：2:21 开门、2:24 到位
+  { id: 'o2', station: '', primary: false, open: [384.9, 389.9], confidence: 'medium' },
+  { id: 'o3', station: '', primary: false, open: [555.0, 560.0], confidence: 'medium' },
+  { id: 'o4', station: '', primary: false, open: [758.4, 763.4], confidence: 'medium' },
+  { id: 'o5', station: '', primary: false, open: [1568.4, 1573.4], confidence: 'medium' },
+  { id: 'c1', station: '', primary: false, warn: [156.6, 166.65], confidence: 'high' }, // 用户核对：2:37 提示音、2:41 关门、2:43 到位
+  { id: 'c2', station: '', primary: false, warn: [402.2, 412.25], confidence: 'medium' },
+  { id: 'c3', station: '', primary: false, warn: [569.8, 579.75], confidence: 'medium' },
+  { id: 'c4', station: '', primary: false, warn: [1431.45, 1441.5], confidence: 'medium' },
+  { id: 'c5', station: '', primary: false, warn: [1998.35, 2008.4], confidence: 'medium' },
+  { id: 'c6', station: '', primary: false, warn: [2274.35, 2284.4], confidence: 'medium' },
 ] as const;
 
 export const DOOR_BANK: readonly SoundClip[] = DOOR_TAKES.map(take => {

@@ -7,8 +7,8 @@ import { LINE11_UI } from './ui';
 import * as soundbank from './soundbank';
 import * as doorbank from './doorbank';
 
-// 11号线没有本地录音库；门动作物理预算沿用 6A 通用值【假设】。
-const silentAudio = emptyAudio(LINE11_CORE.STATIONS, { openingS: 2.5, warningToMotionS: 2.2, motionToLockedS: 4.5 });
+// 门动作时间：用户核对录音一站（2026-11-15）：开门 3 s 到位；关门提示音 4 s 后门动，2 s 关到位。
+const silentAudio = emptyAudio(LINE11_CORE.STATIONS, { openingS: 3, warningToMotionS: 4, motionToLockedS: 2 });
 
 export const LINE_11: LineData = {
   id: '11',
