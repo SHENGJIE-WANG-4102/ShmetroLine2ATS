@@ -794,7 +794,11 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     }
     if (cur.k === 'depot') {
       const b = topo.berths[depotBerth(topo, cur)];
-      const near = tr.manual ? tr.off <= b.offset + 1 && tr.off >= b.offset - 40 : Math.abs(tr.off - b.offset) < 1.5;
+      // A driven train hands over anywhere from 40 m short of the berth up to the depot
+      // limit itself: stopping a little past the berth but inside its authority is still
+      // at the boundary, and there is no further movement that could reach it.
+      const past = (tr.off - b.offset) * b.dir, beyond = b.dir === 1 ? topo.links[b.link].len - b.offset : b.offset;
+      const near = tr.manual ? past >= -40 && past <= beyond : Math.abs(tr.off - b.offset) < 1.5;
       if (tr.link === b.link && near && tr.v < 0.05) enterDepot(sim, tr, cur.depot);
     }
     if (task.k === 'rescue') rescueStep(sim, tr, task.target);

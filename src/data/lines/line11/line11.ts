@@ -241,6 +241,27 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   ...LINE14_CORE.OPERATIONS,
   // 11号线是 6A、司机驾驶（ATO），不继承14号线的 UTO 作业表。
   uto: undefined,
+  randomFaults: {
+    // 用户决定（2026-11-15）：11号线单独一套，不照搬14号线（全自动功能故障在司机驾驶线上触发不了）。
+    // 【假设】故障预算沿用14号线的量级，不是故障率统计；高峰窗口取 simulation 的工作日高峰时段。
+    // 车载功能故障只放ATO故障（权重为14号线全自动功能故障的0.1倍，用户决定）；11号线没有ATO后备，
+    // 不放DTO功能故障。模型里没有高架断面（PROFILE_ANCHORS），暂不放风雨。
+    levels: [{ count: 3, majorProbability: .08 }, { count: 7, majorProbability: .2 }, { count: 12, majorProbability: .4 }],
+    crowdWindows: [[H(7), H(9, 30)], [H(17, 30), H(19, 30)]],
+    kinds: [
+      { kind: 'door', weight: 4, scope: 'passenger', vehicle: true, minLevel: 1 },
+      { kind: 'psd', weight: 4, scope: 'passenger', minLevel: 1 },
+      { kind: 'pecu', weight: 3, scope: 'passenger', vehicle: true, minLevel: 1 },
+      { kind: 'surge', weight: 3, scope: 'peak', minLevel: 1 },
+      { kind: 'trainComm', weight: 2, scope: 'passenger', vehicle: true, minLevel: 1 },
+      { kind: 'trainAto', weight: .3, scope: 'passenger', vehicle: true, minLevel: 1 },
+      { kind: 'switch', weight: 1, scope: 'all', minLevel: 2 },
+      { kind: 'axle', weight: 1, scope: 'all', minLevel: 2 },
+      { kind: 'signal', weight: 1, scope: 'all', minLevel: 2 },
+      { kind: 'zcFail', weight: .5, scope: 'all', minLevel: 3 },
+    ],
+    majorKinds: ['traction', 'brake'],
+  },
   maintenance: { dailyLimit: 14, monthlyPeriod: 55, monthlyLimit: 85, monthlyDays: 1, overhaulDays: 28, overhaulCount: 1 }, // 【假设】缺11号线检修周期公开资料
   intervalTrainLimits: RUN_PAIRS.map(([from, to]) => ({ from, to, limit: 1 })), // 【假设】每方向每区间1列
   // 官方首末班：嘉定北 05:36 往迪士尼、迪士尼 05:58 往嘉定北；末班嘉定北 22:10、迪士尼 22:30。

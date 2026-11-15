@@ -423,6 +423,7 @@ export const OPERATIONS = {
       {kind:'surge',weight:4,scope:'peak',minLevel:1},
       {kind:'trainComm',weight:4,scope:'passenger',vehicle:true,minLevel:1},
       {kind:'trainDto',weight:3,scope:'passenger',vehicle:true,minLevel:1},
+      {kind:'trainAto',weight:.3,scope:'passenger',vehicle:true,minLevel:1}, // 用户决定（2026-11-15）：车载功能故障的0.1倍
       {kind:'switch',weight:1,scope:'all',minLevel:2},
       {kind:'axle',weight:1,scope:'all',minLevel:2},
       {kind:'signal',weight:1,scope:'all',minLevel:2},

@@ -6,6 +6,7 @@ import { cbtcAvailable, setMode, releaseForRestrictedManual, dtoAllowed, setManu
 import { platformSide } from './ats';
 import { stopError } from './movement';
 import { DOOR_CLOSE_S } from './calibration';
+import { PERF } from './dynamics';
 import { depotMoves } from './timetable';
 import { sourceDepartureAt } from './resourceArbitration';
 
@@ -211,11 +212,18 @@ function attendantDoors(sim:Sim,tr:Train) {
 export function utoAttendantEffort(tr:Train) {
   if(!tr.uto?.computer||tr.uto.stage!=='manual'||!tr.manual||tr.uto.retreat)return;
   if(tr.phase!=='run'||tr.eb||tr.doorsOpen||tr.doorMotion){tr.notch=-7;return;}
-  const remaining=Math.max(0,Math.min(tr.stopDist,tr.maDist)-.5);
+  // Aim 0.3 m short of the mark; a train that stopped short creeps up to it.
+  const remaining=Math.max(0,Math.min(tr.stopDist,tr.maDist)-.3);
   const ceiling=Math.max(0,tr.vPermit-.4);
-  const target=remaining<.8?0:Math.min(tr.vRecommended??tr.vTarget,ceiling,Math.sqrt(.6*remaining));
+  const target=remaining<.1?0:Math.min(tr.vRecommended??tr.vTarget,ceiling,Math.sqrt(.6*remaining));
   const error=target-tr.v;
   tr.notch=target<.04?-7:error<-.12?Math.max(-7,Math.floor(error*3)):error>.15?Math.min(4,Math.ceil(error*2)):0;
+  // Above the curve, brake for the distance left, not only for the speed error:
+  // a proportional notch alone lags and runs past the mark when entering fast.
+  if(tr.v>target&&remaining>=.1){
+    const need=tr.v*tr.v/(2*remaining);
+    if(need>.1)tr.notch=Math.min(tr.notch,-Math.min(7,Math.ceil(need/PERF.bService*7)));
+  }
 }
 /** Uses the existing retreat path and permission check, never changes a route. */
 export function utoRetreatEffort(sim:Sim,tr:Train) {

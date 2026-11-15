@@ -453,6 +453,10 @@ function injectRandom(sim: Sim, kind: string, usedVehicles?: string[]): string {
       const tr=pick(sim,running.filter(t=>!t.dtoInhibit));
       return tr?result(injectFault(sim,'trainUto',tr.id,0)):'';
     }
+    case 'trainAto': {
+      const tr = pick(sim, running.filter((t) => !t.atoInhibit));
+      return tr ? result(injectFault(sim, 'trainAto', tr.id, 0)) : '';
+    }
     case 'trainDto': {
       const tr = pick(sim, running.filter((t) => ['DTO','AM'].includes(t.mode) && !t.dtoInhibit));
       return tr ? result(injectFault(sim, 'trainDto', tr.id, dur(1800))) : '';
