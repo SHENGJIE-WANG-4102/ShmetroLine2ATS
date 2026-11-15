@@ -116,6 +116,9 @@ export interface LoopDef {
     island?: 'UP' | 'DN' | 'both';
     /** Permit a protected pull-out and reversal for entry from either main platform. */
     localEntryShunt?: boolean;
+    /** A platformless loop where trains may also change ends: a train arriving either way enters
+     * it heading its own way, changes ends and leaves on the other main (D203). */
+    turnback?: boolean;
 }
 export interface TailDef {
     station: number;

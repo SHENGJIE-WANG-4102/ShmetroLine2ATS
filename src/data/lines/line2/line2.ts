@@ -305,7 +305,8 @@ export const LAYOUT = {
   ] as SidingDef[],
   loops: [
     { id: 'GLL', name: '广兰路中间线', station: 22, west: -170, east: 170, platform: true },
-    { id: 'CXZ', name: '创新中路中间线', station: 24, west: -170, east: 170, localEntryShunt: true },
+    // 用户决定（2026-11-16，D203）：中间线也作折返线，川沙出段去机场方向的车先到这里换端（比广兰路近两站）。
+    { id: 'CXZ', name: '创新中路中间线', station: 24, west: -170, east: 170, localEntryShunt: true, turnback: true },
   ] as LoopDef[],
   /** single crossovers (渡线) '/' '\'; 'X' a scissors (交叉渡线: both diagonals on one centre, crossing) */
   crossovers: [
@@ -472,6 +473,7 @@ export const OPERATIONS = {
    * A daily circulation chooses homes within the yards' balanced quotas. */
   // 用户决定（2026-11-08）：出库方向就是运行方向，远东大道、龙阳路正常运营时段不在站台换端出入库
   // （川沙去机场方向的车先到广兰路折返，龙阳路的先到科技馆折返；回库同理先折返再顺向进库）。
+  // 用户决定（2026-11-16，D203）：川沙这边改为先到创新中路中间线换端，排不下再去广兰路；回远东大道这段同样空车。
   // 凌晨出车、夜间收车可以换端但尽量少用。淞虹路（北翟路）西行出库、东行回库只能在站台换端，照旧。
   // 【假设】凌晨出车 = 06:00 前出段，夜间收车 = 21:30 后进段。
   portalReversal: { stations: ['YDD', 'LYL'], pullOutBefore: '06:00', pullInFrom: '21:30' },

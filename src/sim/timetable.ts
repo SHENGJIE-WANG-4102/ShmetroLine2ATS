@@ -116,7 +116,8 @@ const TERMINAL_CAP = stationTable(SIMULATION.timetable.terminals.capacity);
 export const MAX_PRESENT = stationTable(SIMULATION.timetable.terminals.maxPresent);
 /** An omitted operational override never creates an extra physical berth. */
 export function terminalCapacity(topo: Topology, station: number): number {
-  return TERMINAL_CAP[station] ?? (topo.stations[station].turnbackBerths.length || 1);
+  // one train per turnback track: a middle track's two facing berths are one place (D203)
+  return TERMINAL_CAP[station] ?? (new Set(topo.stations[station].turnbackBerths.map(id => topo.berths[id].link)).size || 1);
 }
 /** longest a train may wait at a terminal between trips (s) */
 export const MAX_LAYOVER = 1500;
@@ -2430,8 +2431,10 @@ export function addExtraTrain(ctx: PlanContext, plan: Plan, depot: number, dir: 
 
 export type Turnback = { kind: 'rear'; berths: number[] } | { kind: 'front'; arrBerth: number; depBerth: number };
 
-/** how a train arriving at `station` travelling `arrDir` can reverse there */
-export function turnbackAt(topo: Topology, station: number, arrDir: TrackDir): Turnback | null {
+/** how a train arriving at `station` travelling `arrDir` can reverse there. `beside`: also a middle
+ * track beside the platforms (D203), which takes only empty moves the duty planner turns there on
+ * purpose; nothing else (short turns, dispatcher turnbacks, homing) chooses it. */
+export function turnbackAt(topo: Topology, station: number, arrDir: TrackDir, beside = false): Turnback | null {
   const s = topo.stations[station];
   // A middle-track platform (广兰路) has a throat to both mains at each end: a
   // train arriving the other way stops on it heading its own way and changes
@@ -2445,6 +2448,7 @@ export function turnbackAt(topo: Topology, station: number, arrDir: TrackDir): T
   // a berth serves arrivals that keep their heading into it (eastbound berths for DN)
   const rear = [...s.turnbackBerths, ...twins].filter((bid) => {
     const b = topo.berths[bid];
+    if (b.beside && !beside) return false;
     const l = topo.links[b.link];
     const east = (l.chainB - l.chainA) * b.dir > 0;
     return arrDir === 'DN' ? east : !east;
@@ -2479,7 +2483,7 @@ export function platformBerth(topo: Topology, station: number, dir: TrackDir, fr
  * other lead while a direct return needs one, in both tasks and validation. */
 const DEPOT_TURN_CLEAR = 120;
 function dutyTurnBerths(topo: Topology, plan: Plan, block: Block, arrival: Trip, departure: Trip, plannedMoves?: YardMove[]): number[] {
-  const turn = turnbackAt(topo, arrival.to, arrival.dir);
+  const turn = turnbackAt(topo, arrival.to, arrival.dir, true);
   if (turn?.kind !== 'rear') return [];
   let berths = turn.berths;
   const hot = hotStandbyPlaces(topo).find(p => p.station === arrival.to);
@@ -2868,18 +2872,28 @@ export function addTurnback(topo: Topology, trip: Trip, tasks: Task[]) {
   const actual = effectiveTrip(trip);
   if (!actual) return;
   trip = actual;
-  const tb = turnbackAt(topo, trip.to, trip.dir);
+  const tb = turnbackAt(topo, trip.to, trip.dir, true);
   if (!tb) return;
   if (tb.kind === 'rear') {
     // a platform turnback track (广兰路 middle track): set down there, not on the main
     const platform = topo.berths[tb.berths[0]].kind === 'platform';
     if (platform) retargetArrival(tasks, trip.to, tb.berths[0]);
+    // D203: an empty move turning on a middle track beside the platforms runs straight into it
+    // from the main, with no platform stop (it carries nobody there; the planner sees to that)
+    else if (topo.berths[tb.berths[0]].beside) dropArrival(tasks, trip.to);
     const minTime = platform ? OPERATIONS.platformChangeEndsS?.[STATIONS[trip.to].id] ?? 40 : 40;
     tasks.push({ k: 'reverse', berths: tb.berths, chosen: tb.berths[0], station: trip.to, minTime });
   } else {
     // station-front: retarget the arrival stop to the opposite platform
     retargetArrival(tasks, trip.to, tb.arrBerth);
     tasks.push({ k: 'reverse', berths: [tb.arrBerth], chosen: tb.arrBerth, station: trip.to, minTime: 40 });
+  }
+}
+
+function dropArrival(tasks: Task[], station: number) {
+  for (let i = tasks.length - 1; i >= 0; i--) {
+    const t = tasks[i];
+    if (t.k === 'stop' && t.station === station) { if (!t.doors) tasks.splice(i, 1); break; }
   }
 }
 
@@ -2968,6 +2982,14 @@ export function terminalOverflows(topo: Topology, st: number, list: { from: numb
     cur += dlt;
     if (!lineEnd && cur > cap) out.push({ t, cur, cap });
     if (lineEnd && dlt < 0 && cur === cap) held = t + HOLD_CLEAR;
+  }
+  // D203: the one held on the arrival platform reaches a turnback only once a train there has left,
+  // so it cannot leave before the first of them (浦东机场 06:12: 1008 behind two later departures)
+  const tracks = new Set(topo.stations[st].turnbackBerths.map(id => topo.berths[id].link)).size;
+  if (lineEnd && tracks) for (const o of list) {
+    const left = list.filter(p => p !== o && p.from <= o.from && p.to > o.from + 1e-6).map(p => p.to).sort((a, b) => a - b);
+    const need = left.length - tracks + 1;
+    if (need > 0 && o.to < left[need - 1] + HOLD_CLEAR) out.push({ t: o.from, cur: left.length + 1, cap });
   }
   return out;
 }
@@ -3291,7 +3313,8 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
       if (a.to !== d.from) { out.push({ severity: 'error', code: 'BLOCK_BREAK', t: arr, text: `车底 ${b.svc}：${a.no} 终到 ${name(a.to)}，下一车次 ${d.no} 从 ${name(d.from)} 出发` }); continue; }
       const storedTurn = a.standby && hotStandbyPlaces(topo).some(p=>p.station===a.to&&p.depot
         &&storageArrivalBerth(topo,p.berth,a.dir)!==undefined);
-      if (a.dir !== d.dir && !turnbackAt(topo,a.to,a.dir) && !storedTurn)
+      // (an empty arrival may turn on a middle track beside the platforms, D203)
+      if (a.dir !== d.dir && !turnbackAt(topo,a.to,a.dir,!a.revenue) && !storedTurn)
         out.push({severity:'error',code:'TURN_UNAVAILABLE',t:arr,blocks:[b.id],text:`${name(a.to)} 无${DIRECTIONS[a.dir].label}到达换端条件（${a.no}→${d.no}）`});
       if (a.dir !== d.dir && dep - arr < minTurn(a.to) - 1e-6) out.push({ severity: 'error', code: 'TURN_SHORT', t: arr, text: `车底 ${b.svc} 在 ${name(a.to)} 折返仅 ${(dep - arr).toFixed(1)} s（${a.no}→${d.no}，最小 ${minTurn(a.to)} s）` });
       if (a.dir !== d.dir && !storedTurn && !frontTurnClear(ctx, live, a, dep, new Set(ts.map(trip => trip.id))))

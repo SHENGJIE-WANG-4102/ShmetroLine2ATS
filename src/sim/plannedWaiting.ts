@@ -54,8 +54,10 @@ export function plannedWaiting(ctx: { topo: Topology }, plan: Plan, options: { f
       const hold = occupancy.get(a.to)?.find(h => h.block === block.id && h.arrival === a.id && h.departure === d.id);
       const lastArrival = tasks.map(t => t.k === 'stop' && t.trip === a.id).lastIndexOf(true);
       const firstDeparture = tasks.findIndex((t, index) => index > lastArrival && t.k === 'stop' && t.trip === d.id);
-      const reverse = lastArrival >= 0 && firstDeparture > lastArrival
-        ? tasks.findIndex((t, index) => index > lastArrival && index < firstDeparture && t.k === 'reverse') : -1;
+      const reverse = firstDeparture > lastArrival
+        ? tasks.findIndex((t, index) => index > lastArrival && index < firstDeparture && t.k === 'reverse'
+          // an empty move into a middle track beside the platforms has no arrival stop (D203)
+          && (lastArrival >= 0 || t.station === a.to)) : -1;
       const reverseTask = tasks[reverse];
       // Use both the actual task and the same duty/occupancy candidates; a
       // fixed hot-spare task is its own physical source of truth.

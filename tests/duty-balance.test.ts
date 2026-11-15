@@ -152,7 +152,8 @@ describe.each(['weekday', 'weekend'] as DayType[])('duty balance in the %s plan'
       route.add(`${STATIONS[t.from].id}-${STATIONS[t.to].id}`);
       const exits = topo.depots.some((_, d) => exitStation(topo, d, t.dir) === t.from);
       const entries = topo.depots.some((_, d) => entryStation(topo, d, t.dir) === t.to);
-      const turnsFrom = !!turnbackAt(topo, t.from, other(t.dir)) || t.from === 0 || t.from === topo.stations.length - 1;
+      // (D203: a trip that calls nowhere at its origin may have changed ends there on a middle track beside the platforms)
+      const turnsFrom = !!turnbackAt(topo, t.from, other(t.dir), !t.stops[0].stop) || t.from === 0 || t.from === topo.stations.length - 1;
       const turnsTo = !!turnbackAt(topo, t.to, t.dir) || t.to === 0 || t.to === topo.stations.length - 1;
       if (!(turnsFrom || exits)) bad.push(`trip ${t.id} starts ${STATIONS[t.from].id} ${t.dir} ${clock(t.stops[0].dep)}`);
       if (!(turnsTo || entries)) bad.push(`trip ${t.id} ends ${STATIONS[t.to].id} ${t.dir} ${clock(t.stops.at(-1)!.arr)}`);

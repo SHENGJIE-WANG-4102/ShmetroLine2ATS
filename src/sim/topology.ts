@@ -181,6 +181,9 @@ export interface TBerth {
   maxLength?: number;
   /** Original deep position for parking when ordinary turning uses a near point. */
   stablingBerth?: number;
+  /** A turnback berth on a platformless middle track beside the platforms (创新中路, D203): a train
+   * turning there runs straight into it, not first to the platform, and leaves from its twin. */
+  beside?: boolean;
 }
 
 /** A parking task keeps its physical deep position, without another slot. */
@@ -1666,11 +1669,13 @@ export function buildTopology(): Topology {
       // Both throats and their exit signals already exist. Register the
       // usable stopping point; no interlocking rule changes.
       const link = links[lb.middle[0]];
+      const beside = lb.def.turnback ? { beside: true } : {};
       const id = addBerth({ kind: 'siding', link: link.id, offset: link.len / 2 + LINE_INFO.trainLength / 2,
-        dir: 1, platform: -1, station: lb.def.station, depot: -1, reverse: false, name: lb.def.name });
-      addBerth({ kind: 'siding', link: link.id, offset: link.len / 2 - LINE_INFO.trainLength / 2,
-        dir: -1, platform: -1, station: lb.def.station, depot: -1, reverse: false, name: lb.def.name });
+        dir: 1, platform: -1, station: lb.def.station, depot: -1, reverse: false, name: lb.def.name, ...beside });
+      const twin = addBerth({ kind: 'siding', link: link.id, offset: link.len / 2 - LINE_INFO.trainLength / 2,
+        dir: -1, platform: -1, station: lb.def.station, depot: -1, reverse: false, name: lb.def.name, ...beside });
       stationStorage[lb.def.station].push(id);
+      if (lb.def.turnback) stationTurnback[lb.def.station].push(id, twin);
       continue;
     }
     const id = berths.find((b) => b.link === lb.platLink && b.dir === 1)!.id;
