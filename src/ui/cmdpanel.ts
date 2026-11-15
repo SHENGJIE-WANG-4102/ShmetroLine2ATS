@@ -1,6 +1,14 @@
 import { formatTrainNumber } from './trainNumber';
 import { utoControls, utoDrivingChoices, isPlayerDriving } from './utoControls';
 import { formatDrivingMode } from './drivingMode';
+
+/** what 恢复自动驾驶 gives on this line: the automatic modes by their DMI names, the TBTC backup
+ * only where the line has one (not Line 2's DTO/TBTC wording on every line) */
+function autoModeText(): string {
+  const dto = formatDrivingMode('DTO'), am = formatDrivingMode('AM');
+  const cbtc = dto === am ? `CBTC级 ${am}` : `CBTC级 ${dto} 或降级ATO时 ${am}`;
+  return supportsSignalSystem('TBTC') ? `${cbtc}，TBTC级 ${am}` : cbtc;
+}
 /**
  * Details & commands for the selected object (select → command → confirm).
  * Trains get the driver display (DMI), following and manual driving;
@@ -355,7 +363,7 @@ export class CommandPanel {
     const drive = h('div', { class: 'cmdgrid' },
       this.btn(following ? '取消跟踪' : '跟踪列车', () => this.hooks.follow(following ? null : id), following ? 'on' : 'primary'),
       ...(unattended('doorClose') ? utoDrivingChoices(this.store, t0) : t0.manual || t0.atoDriver
-        ? [this.btn('恢复自动驾驶', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 恢复自动驾驶（CBTC级 DTO 或降级ATO时 AM，TBTC级 AM）`, cmd: { c: 'manual', train: id, mode: 'AUTO' } }, 'primary')]
+        ? [this.btn('恢复自动驾驶', { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 恢复自动驾驶（${autoModeText()}）`, cmd: { c: 'manual', train: id, mode: 'AUTO' } }, 'primary')]
         : [
           this.btn('ATO 驾驶', { title: `接管列车 ${formatTrainNumber(t0.svc, t0.trip, true)}：ATO驾驶`, cmd: { c: 'manual', train: id, mode: 'AM' }, detail: '自动驾驶，到站后关门锁闭、发车条件满足时，同时按住F和G启动。' }, 'warn'),
           this.btn('人工驾驶 CM', { title: `接管列车 ${formatTrainNumber(t0.svc, t0.trip, true)}：人工驾驶 CM（ATP 防护）`, cmd: { c: 'manual', train: id, mode: 'CM' }, detail: '由你操纵牵引/制动手柄驾驶列车（Z 牵引、Q 制动、S 中立位、E 紧急制动；Y/U 右/左侧车门）。到站停准后由你开关门，车门关好才能牵引。ATP 监督速度与移动授权，超速将触发紧急制动并计入安全违章。停站对标将评分。人工驾驶期间仿真速率最高 5×。' }, 'warn'),

@@ -366,7 +366,7 @@ export class Dmi {
     c.fillText(t.mode === 'DTO' || t.mode === 'AM' ? 'AA' : 'MM', 527, 400);
     const pc = psd === 'fault' ? C.red : psd === 'bypass' ? '#ff9a2a' : C.yellow;
     // 用户实拍（2026-11-02）：站台门图标在车门开好以后才出现，关门锁闭后消失；故障、旁路照常显示
-    for (const x of psd === 'fault' || psd === 'bypass' ? [669, 691] : psd === 'open' && d?.doorsDone ? [663, 697] : []) {
+    for (const x of psd === 'fault' || psd === 'bypass' ? [669, 691] : (psd === 'open' || psd === 'closing') && d?.doorsDone ? [663, 697] : []) {
       c.strokeStyle = pc;
       c.lineWidth = 3;
       c.strokeRect(x, 358, 22, 52);

@@ -971,7 +971,8 @@ export class TrackView {
       if (tr.phase === 'dwell' && !tr.stopWorkDone) continue;
       // nor one that is turning back: its way on runs the other way once it has changed ends (用户, D188)
       if (tr.tbStage === 'reverse' || tr.tbStage === 'manual' || tr.tbStage === 'arrive' && (atStop || tr.stopDist < 0)) continue;
-      const end = tr.phase === 'dwell' ? tr.maDist : Math.min(tr.maDist, tr.stopDist);
+      // stopDist −1: no stop in range (snapshot of Infinity, a manual train or a far stop), the authority alone
+      const end = tr.phase === 'dwell' || tr.stopDist < 0 ? tr.maDist : Math.min(tr.maDist, tr.stopDist);
       if (!(end > 0)) continue;
       let link = tr.link, dir = tr.dir, from = tr.off, dist = 0, sections = 0;
       for (let i = 0; i < 100; i++) {

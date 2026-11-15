@@ -242,8 +242,8 @@ export class Geometry {
       }
     }
     // depot transfer tracks: from the end of each lead (on its lane) to the yard gate, leads of one
-    // depot side by side. The yard is drawn above the UP main; in a station drawing a yard whose
-    // leads leave the DN main on its outer side is drawn below it, as it lies
+    // depot side by side. The yard is drawn above the UP main; a yard whose leads leave the DN
+    // main on its outer side is drawn below it, as it lies, where the row is tall enough
     for (const d of topo.depots) {
       d.transferPaths.forEach((path, k) => {
         const T = topo.nodes[path.throat];
@@ -260,8 +260,12 @@ export class Geometry {
           return;
         }
         const x = this.chainX(T.chain, row) + s * (10 + 18 * k);
-        const y = (dy: number) => top + (p.detail && depotBelow(topo, d) ? p.dnY + dy : p.upY - dy);
-        pos[path.gate] = { row, x, y: y(p.depotDy.gate) };
+        // below the DN main when the leads leave on its outer side and the row has room for the
+        // junctions, the gate and the yard box (86 high, trackview) under the lanes
+        const gateDy = Math.max(p.depotDy.gate, p.depotDy.j2 + 14);
+        const below = depotBelow(topo, d) && (p.detail || p.dnY + gateDy + 6 + 86 <= p.rowH);
+        const y = (dy: number) => top + (below ? p.dnY + dy : p.upY - dy);
+        pos[path.gate] = { row, x, y: y(below ? gateDy : p.depotDy.gate) };
         pos[topo.links[path.links[2]].a] = { row, x, y: y(p.depotDy.j2) };
         pos[topo.links[path.links[1]].a] = { row, x, y: y(p.depotDy.j1) };
       });

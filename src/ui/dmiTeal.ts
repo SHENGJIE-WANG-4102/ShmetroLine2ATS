@@ -51,16 +51,21 @@ export function drawTeal(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData |
   const v = Math.max(0, t.v * 3.6);
   const stopped = t.v < 0.05;
   const protectedMode = t.mode !== 'RM' && t.comm && t.level === 'CBTC' && d?.avail.level === 'CBTC';
-  const docked = stopped && d?.stopWin === 'aligned' && !!t.platSide;
+  const board = d?.departureBoard;
+  // still standing at the stop it was released from (a manual train is released at door lock)
+  const standing = stopped && board?.departedAt !== undefined && board.headLeftAt === undefined;
+  const docked = stopped && d?.stopWin === 'aligned' && !!(t.platSide || (standing && board?.side));
   const doorOpen = !!d && ['open', 'opening', 'closing'].includes(d.trainDoor);
-  const depart = !t.eb && !t.failed && !t.hold && !d?.stationHold && !t.halt && !doorOpen && !t.doorsAwait
+  const depart = !t.eb && !t.failed && !t.hold && !d?.stationHold && (!t.halt || (t.halt.code === 'MANUAL' && !!d?.manualReady)) && !doorOpen && !t.doorsAwait
     && t.phase === 'run' && t.maDist > 3 && t.vTarget > 0.1;
 
   // top fields
   const fields: [string, string, string][] = [
     ['模式', formatDrivingMode(t.mode), C.blue],
     ['停靠', docked ? 'YES' : 'NO', docked ? C.green : C.red],
-    ['停站', t.phase === 'dwell' ? String(Math.max(0, Math.ceil(t.dwellLeft))) : '—', C.yellow],
+    // the same countdown target as the TDT (computeDmi dep), not the release time, which moves
+    // when the doors open and close
+    ['停站', t.phase === 'dwell' || standing ? String(Math.max(0, Math.ceil(d && d.dep >= 0 ? d.dep - now : t.dwellLeft))) : '—', C.yellow],
     ['出发', depart ? 'YES' : 'NO', depart ? C.green : C.red],
   ];
   fields.forEach(([label, value, col], i) => {

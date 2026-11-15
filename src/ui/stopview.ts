@@ -189,7 +189,7 @@ export class StopView {
 
   draw(t: TrainSnap, d: DmiData | null = null, now = 0) {
     const board = d?.departureBoard;
-    const platformDoorsOpen = d?.psd === 'open' || d?.psd === 'fault' ? true : d?.psd === 'closed' ? false : t.doors;
+    const platformDoorsOpen = d?.psd === 'open' || d?.psd === 'closing' || d?.psd === 'fault' ? true : d?.psd === 'closed' || d?.psd === 'opening' ? false : t.doors;
     const side = board?.side || t.platSide;
     const rem = board?.side && Number.isFinite(board.remaining) ? board.remaining : StopView.remaining(t);
     const show = !!side && Number.isFinite(rem) && rem < STOPVIEW_RANGE;

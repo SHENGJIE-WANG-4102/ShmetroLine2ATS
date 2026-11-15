@@ -575,7 +575,10 @@ export function computeBody(sim: Sim, tr: Train, remember = true) {
     // short link. An overrun retains its entire return as it grows, including
     // returns requiring dispatch consent. Projection must not prune its copy.
     const err = stopError(sim, tr);
-    const back = Math.max(5, Number.isFinite(err) ? -err : 0, tr.retreat?.distance ?? 0, tr.overrun);
+    // a return may end up to RETREAT_WINDOW_M past its mark (manualReverse): keep that much more,
+    // or the permit fails the moment the head goes back past the mark
+    const back = Math.max(5, (Number.isFinite(err) ? -err : 0) + RETREAT_WINDOW_M,
+      (tr.retreat?.distance ?? 0) + RETREAT_WINDOW_M, tr.overrun + RETREAT_WINDOW_M);
     const retained = pathBody(sim, tr, tr.len + back);
     if (tr.hist.length > retained.length) tr.hist.splice(0, tr.hist.length - retained.length);
     // (every moving train, every step: plain loops rather than flatMap/find)
@@ -716,6 +719,9 @@ function authorityOverlaps(sim: Sim, tr: Train, swept: BodySeg[]): boolean {
 }
 
 /** Pure remaining return geometry, shared by admission and new MA scans. */
+/** a manual return may stop this far past its mark before the ATP trips (err > 1, manualReverse) */
+const RETREAT_WINDOW_M = 1;
+
 function retreatSweep(sim: Sim, tr: Train, distance: number) {
   const projected = { ...tr, hist: tr.hist.slice(), body: tr.body.slice() };
   const swept = tr.body.slice();
@@ -777,7 +783,7 @@ export function reversePermission(sim: Sim, tr: Train, distance = Math.max(0, -s
   if (!Number.isFinite(distance)) return { ok: false, detail: '退行停车点不在本车已走路径内', train: -1, code: 'ROUTE_CONFLICT' };
   const { projected, swept } = retreatSweep(sim, tr, distance);
   const endError = stopError(sim, projected);
-  if (!Number.isFinite(endError) || Math.abs(endError) > 1 || projected.body.reduce((s, b) => s + b.to - b.from, 0) < tr.len - .01)
+  if (!Number.isFinite(endError) || Math.abs(endError) > RETREAT_WINDOW_M || projected.body.reduce((s, b) => s + b.to - b.from, 0) < tr.len - .01)
     return { ok: false, detail: '退行范围超出本车已占用路径', train: -1, code: 'ROUTE_CONFLICT' };
   for (const b of swept) {
     const visited = tr.recentBody?.find(v => v.link === b.link);
@@ -824,8 +830,8 @@ function manualReverse(sim: Sim, tr: Train, dt: number) {
   tr.maCode = permit.code; tr.maTrain = permit.train;
   tr.vTarget = permit.ok ? limit : 0;
   tr.vRecommended = 0;
-  if (!tr.eb && (tr.v > limit + 1e-6 || err > 1)) {
-    triggerEB(sim, tr, err > 1 ? '退行越过停车窗' : '退行超速防护', 'atp');
+  if (!tr.eb && (tr.v > limit + 1e-6 || err > RETREAT_WINDOW_M)) {
+    triggerEB(sim, tr, err > RETREAT_WINDOW_M ? '退行越过停车窗' : '退行超速防护', 'atp');
     if (tr.v > limit) { tr.drv.overspeed++; sim.metrics.safety.overspeed++; }
   }
   if (!permit.ok && tr.v > 0 && !tr.eb) triggerEB(sim, tr, permit.detail, 'atp');
@@ -834,7 +840,7 @@ function manualReverse(sim: Sim, tr: Train, dt: number) {
   const before = tr.v;
   tr.v = Math.max(0, before + a * dt); tr.a = a;
   let ds = (before + tr.v) * dt / 2;
-  const remaining = Number.isFinite(err) ? Math.max(0, 1 - err) : 0;
+  const remaining = Number.isFinite(err) ? Math.max(0, RETREAT_WINDOW_M - err) : 0;
   if (ds > remaining) {
     if (!tr.eb) triggerEB(sim, tr, '退行越过停车窗', 'atp');
     ds = remaining; tr.v = 0; tr.a = 0;
@@ -891,6 +897,9 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   if(OPERATIONS.atoRandomOverrunProbability>0&&!tr.manual&&tr.mode==='DTO'&&approach?.k==='stop'&&approach.doors
     &&scan.stopDist<100&&scan.stopDist>10&&tr.v>1&&tr.randomOverrunBerth!==approach.berth) {
     tr.randomOverrunBerth=approach.berth;
+    // a fresh draw for every stop: one left over from a stop that was overrun and then skipped
+    // (no arrival to clear it, ats.ts) would overrun every following stop by the same amount
+    tr.randomOverrunM=undefined;
     if(sim.rng()<OPERATIONS.atoRandomOverrunProbability)tr.randomOverrunM=2+sim.rng()*6;
   }
   // 自动对标误差：每次进站抽一次，过标/欠标比例与上限取自线路数据（国标 ±0.3 m 内）

@@ -309,7 +309,8 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   depotDoorTests: { CBL: { beforeSignal: 5 }, SSC: { beforeSignal: 5 }, CYL: { beforeSignal: 5 } }, // 【假设】未建库内试验线
   // 用户决定（2026-11-15）：11 号线时分只对官方首末班。停站（停稳到起动）= 开门约 3 s + 倒计时（一般 20 s，司机剩 10 s 关门；长停站剩 20 s 关门）+ 倒计时到 0 后约 7 s 起动；
   // 余下差额摊进区间补时：官方逐段平均差 2.6 s，南翔—罗山路 60.7 min（官方 61），嘉定北—江苏路 45.2 min（官方 44、录音 44.7）
-  sectionRunAllowanceS: 30,
+  // 软停车（physics.ts，2026-11-15）让每个区间最短运行多约 6 s，余量同步 30→24 s，逐段对官方不变
+  sectionRunAllowanceS: 24,
   sectionCruiseMinKmh: 12,
   sectionCoastMinKmh: 60,
   passRunMargin: .16,

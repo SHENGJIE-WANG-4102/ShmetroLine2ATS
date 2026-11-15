@@ -444,7 +444,7 @@ export interface DmiData {
   dwellTotal: number;
   /** highest mode the equipment could offer now */
   avail: { mode: Mode; level: Level };
-  psd: 'none' | 'closed' | 'open' | 'fault' | 'bypass';
+  psd: 'none' | 'closed' | 'open' | 'opening' | 'closing' | 'fault' | 'bypass';
   trainDoor: 'closed' | 'opening' | 'closing' | 'open' | 'fault' | 'isolated';
   /** dwelling and the doors have finished opening at this stop (they may be closed again) */
   doorsDone: boolean;
@@ -452,6 +452,8 @@ export interface DmiData {
   turnHold: boolean;
   /** doors locked and the automatic start pending (yellow start arrow, M on the brake symbol) */
   startReady: boolean;
+  /** a manual train with nothing holding its traction back (only the driver's notch left) */
+  manualReady: boolean;
   /** signed distance (m) from the head to the stopping point, positive short of it; null when none */
   stopErr: number | null;
   /** Platform sign, located from the departure signal; never a DMI countdown. */

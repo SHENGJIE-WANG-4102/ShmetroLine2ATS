@@ -6,7 +6,7 @@
 import type { Sim } from './engine';
 import type { DmiData, DmiMsg, Level, Mode, Train, StopTask, Trip } from './model';
 import { LINE, STATIONS, fleetEntry } from '../data/current';
-import { stopError, scanAhead, goalBerth } from './movement';
+import { stopError, scanAhead, goalBerth, berthError, manualTractionHold } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
 import { effectiveStops, serviceEnd, turnbackAt } from './timetable';
 import { signalAheadFrom, platformSide, dwellDepartureAt } from './ats';
@@ -107,9 +107,17 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
   if (pi >= 0) {
     const ps = sim.plat[pi];
     psd = ps.psd === 'bypass' ? 'bypass' : ps.psd === 'closeFail' || ps.psdFault ? 'fault' : ps.psd === 'closed' ? 'closed' : 'open';
+    // the PSD is still moving with this train's door cycle (psd.ts doorMotion: PSD done at psdAt)
+    const m = tr.doorMotion;
+    if (m && m.platform === pi && !m.psdDone && psd !== 'fault' && psd !== 'bypass') psd = m.kind;
   }
   // stopping window indicator
-  const err = stopError(sim, tr);
+  // a manual train's stop ends when its doors lock (ats.ts); until it moves it still stands at
+  // that stop: docked, stop close-up and countdown keep showing it, not the next station
+  const dd = tr.departureDisplay;
+  const standing = !dwelling && tr.v < 0.05 && dd?.departedAt !== undefined && dd.headLeftAt === undefined;
+  const standErr = standing ? berthError(sim, tr, dd!.stop.berth) : NaN;
+  const err = Number.isNaN(standErr) ? stopError(sim, tr) : standErr;
   let win: DmiData['stopWin'] = 'none';
   if (dwelling) win = 'aligned';
   else if (Number.isFinite(err) && tr.v < 0.05 && Math.abs(err) < 5) win = Math.abs(err) <= 0.5 ? 'aligned' : err > 0 ? 'short' : 'over';
@@ -124,7 +132,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
       signalOffset: found.dist, aspect: sim.sig[found.sig].aspect,
       held: tr.hold || sim.plat[b.platform].hold, headLeftAt: tr.departureDisplay?.headLeftAt,
       departedAt: tr.departureDisplay?.departedAt, stood: dwelling || tr.departureDisplay?.departedAt !== undefined,
-      remaining: tr.departureDisplay?.remaining ?? err, side: tr.departureDisplay?.side ?? platformSide(sim, tr, b.platform), station: current.station };
+      remaining: standing && !Number.isNaN(standErr) ? standErr : tr.departureDisplay?.remaining ?? err, side: tr.departureDisplay?.side ?? platformSide(sim, tr, b.platform), station: current.station };
   }
   const doorFault = tr.vfault?.kind === 'door' && tr.vfault.stage !== 'armed';
   return {
@@ -150,6 +158,7 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     // 用户实拍（2026-11-02）：门锁闭后、动车前出现黄色起步箭头
     startReady: tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen && !tr.doorSide
       && !tr.doorMotion && sim.t >= (tr.doorLockedAt ?? 0),
+    manualReady: tr.manual && !manualTractionHold(sim, tr),
     stopErr: Number.isFinite(err) ? err : null,
     stopWin: win,
     vEbi: tr.vEbi,

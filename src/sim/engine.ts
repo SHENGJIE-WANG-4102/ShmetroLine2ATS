@@ -395,6 +395,9 @@ export class Sim {
         if (display.remaining !== undefined) display.remaining -= tr.lastDs;
         const platform = this.topo.berths[display.stop.berth].platform;
         if (display.headLeftAt === undefined && this.topo.links[tr.link].platform !== platform) display.headLeftAt = this.t;
+        // TDT goes out 10 s after the train starts moving: a manual train is released when its
+        // doors lock and may stand a while before the driver takes power
+        if (display.departedAt !== undefined && display.headLeftAt === undefined && tr.lastDs <= 0) display.departedAt = this.t;
         const gone = display.departedAt ?? display.headLeftAt;
         if (gone !== undefined && this.t - gone >= TDT_OFF_AFTER_DEPART_S) tr.departureDisplay = undefined;
       }
