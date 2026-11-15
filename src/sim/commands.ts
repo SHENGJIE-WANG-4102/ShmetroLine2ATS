@@ -13,7 +13,7 @@ const COMMANDS: Record<Command['c'], true> = {
   utoStep:true, utoReset:true, dmiAck:true,
   ebRelease: true, trainLevel: true, trainDto: true, lineAto: true, door: true, reverser: true, atoButton: true, rescue: true,
   addTrain: true, overlay: true, zoneLevel: true, ack: true, fault: true, repair: true,
-  trainMaintenance: true, sectionBlock: true, switchBlock: true, manual: true, radio: true, radioAuto: true,
+  trainMaintenance: true, sectionBlock: true, switchBlock: true, manual: true, radio: true, radioAuto: true, dispatchAuto: true,
   env: true, runLevel: true, randomFaults: true, scenarioEnd: true, bookmark: true, lowAdhesion: true,
 };
 
@@ -32,7 +32,7 @@ export function validateCommand(sim: Sim, cmd: Command): string | null {
     rescue: ['failed', 'rescuer'], addTrain: ['depot', 'dir', 'to', 'time'], overlay: ['id', 'from', 'to', 'headway'],
     zoneLevel: ['zones', 'level'], ack: ['ids'], fault: ['kind', 'target', 'duration'], repair: ['fault'], trainMaintenance: ['fault'],
     sectionBlock: ['sections', 'on'], switchBlock: ['sw', 'on'], manual: ['train', 'mode'], radio: ['call', 'option'],
-    radioAuto: ['on'], env: ['duration'], lowAdhesion: ['on'], runLevel: ['level'], randomFaults: ['level'], bookmark: ['label'],
+    radioAuto: ['on'], dispatchAuto: ['on'], env: ['duration'], lowAdhesion: ['on'], runLevel: ['level'], randomFaults: ['level'], bookmark: ['label'],
   };
   for (const field of required[cmd.c] ?? []) if (!(field in c)) return `命令缺少参数：${field}`;
   for (const field of ['id', 'option', 'label', 'reason']) if (field in c && (typeof c[field] !== 'string' || !(c[field] as string).trim())) return `无效文本：${field}`;

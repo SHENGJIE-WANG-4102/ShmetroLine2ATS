@@ -1052,7 +1052,7 @@ describe('weather command contract',()=>{
       overlay:{c:'overlay',id:'ciie',from:sim.t+3600,to:sim.t+7200,headway:600},zoneLevel:{c:'zoneLevel',zones:[0],level:'CBTC'},ack:{c:'ack',ids:[]},
       fault:{c:'fault',kind:'trainDto',target:train,duration:300},repair:{c:'repair',fault},trainMaintenance:{c:'trainMaintenance',fault},
       sectionBlock:{c:'sectionBlock',sections:[0],on:false},switchBlock:{c:'switchBlock',sw:0,on:false},manual:{c:'manual',train,mode:'AUTO'},
-      radio:{c:'radio',call:call!.id,option:'wait'},radioAuto:{c:'radioAuto',on:true},env:{c:'env',wind:4,rain:true,duration:300},
+      radio:{c:'radio',call:call!.id,option:'wait'},radioAuto:{c:'radioAuto',on:true},dispatchAuto:{c:'dispatchAuto',on:false},env:{c:'env',wind:4,rain:true,duration:300},
       lowAdhesion:{c:'lowAdhesion',on:true},runLevel:{c:'runLevel',level:1},randomFaults:{c:'randomFaults',level:0},scenarioEnd:{c:'scenarioEnd'},bookmark:{c:'bookmark',label:'契约'},
     };
     const start=capture(sim);

@@ -338,11 +338,14 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case 'jump': {
       if (!sim || !Number.isFinite(m.to) || m.to <= sim.t) break;
       // 用户决定（2026-11-15）：nobody sits at the desk during a fast-forward either (as in the
-      // warm-up before the start time), so calls are answered automatically for its duration.
+      // warm-up before the start time), so calls are answered automatically and the automatic
+      // dispatcher does the dispatcher's work (钩锁、引导、单操恢复、晚点调整) for its duration.
       // Logged commands, so a replay of the diagnostics reproduces it.
-      const manualRadio = !sim.autoRadio;
+      const manualRadio = !sim.autoRadio, manualDispatch = !sim.autoDispatch;
       if (manualRadio) logged({ c: 'radioAuto', on: true });
+      if (manualDispatch) logged({ c: 'dispatchAuto', on: true });
       runUntil(m.to, false, true);
+      if (manualDispatch && sim) logged({ c: 'dispatchAuto', on: false });
       if (manualRadio && sim) logged({ c: 'radioAuto', on: false });
       break;
     }

@@ -5307,3 +5307,15 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
   - 2 号线、14 号线降级探针：0 违例，ATO 故障车分别在航站楼、桂桥路下线回段。
   - 相关 11 个测试文件、182 条全过。
 - 动了公共文件：`src/sim/scenario.ts`（`injectRandom` 加 `trainAto`）、`src/sim/ats.ts`（入段点判定）、`src/sim/uto.ts`（模拟司机制动）。
+
+## D199 快进期间自动调度员接管（2026-11-15，用户决定）
+
+- 起因：快进时没人在调度台（D197 已让快进期间自动接电话），但调度操作仍没人做。11 号线种子 5、三级随机故障：09:42 嘉定北存车线道岔 P0815 失表，09:58 现场修好，要调度单操恢复表示；没人操作，嘉定支线整条堵死到收车（L11-20）。
+- 用户决定：快进期间临时打开自动调度员，快进结束关掉。
+- 做法：
+  - 新调度命令 `dispatchAuto {on}`，切换 `sim.autoDispatch`。
+  - worker 的 `jump`：本来没开自动调度的，快进前记一条 `dispatchAuto on`，快进结束（含因 CM/RM 列车上线而中途停下）记一条 `dispatchAuto off`；和 `radioAuto` 一样走 `logged`，进 inputLog，诊断回放能原样重现。
+  - 自动调度员自己发的命令带 `by='自动调度'`，不进 inputLog，回放时按同样状态重新算出，结果一致。
+  - 自动调度员办的事见 `src/sim/dispatcher.ts` 头注释：计轴/道岔/信号/ZC/站台门故障处置（含钩锁、引导、单操恢复）、救援、晚点调整。
+- 动了公共文件：`src/sim/model.ts`、`src/sim/engine.ts`、`src/sim/commands.ts`、`src/sim/worker.ts`；测试 `tests/fuzz-roots.test.ts` 补该命令样例（命令表按判别字段全覆盖）。
+- 验证：11 号线种子 5、三级随机故障，开局不开自动调度、10:00 发 `dispatchAuto on`（相当于此时开始快进）：P0815 修好后恢复，468 趟载客车次全部跑完、0 违例（不开自动调度时 254 趟没跑完）；午间最大晚点约 2000 s，21:00 前收敛。tsc 0 error，`tests/fuzz-roots.test.ts` 96 条全过。

@@ -690,6 +690,7 @@ export type Command =
   | { c: 'atoButton'; train: number; button: 'f' | 'g'; down: boolean }
   | { c: 'radio'; call: number; option: string }
   | { c: 'radioAuto'; on: boolean }
+  | { c: 'dispatchAuto'; on: boolean }
   | { c: 'env'; wind?: number; rain?: boolean; duration: number }
   | { c: 'lowAdhesion'; on: boolean }
   | { c: 'runLevel'; level: number }

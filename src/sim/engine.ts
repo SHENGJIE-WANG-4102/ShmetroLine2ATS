@@ -694,6 +694,9 @@ export class Sim {
       case 'radioAuto':
         this.autoRadio = cmd.on;
         return { ok: true, msg: cmd.on ? '通话自动应答（演示）' : '通话需人工应答' };
+      case 'dispatchAuto':
+        this.autoDispatch = cmd.on;
+        return { ok: true, msg: cmd.on ? '自动调度员接管调度操作' : '调度操作由人工办理' };
       case 'env': return setWeather(this, { wind: cmd.wind, rain: cmd.rain, duration: cmd.duration });
       case 'lowAdhesion': return setLowAdhesion(this, cmd.on);
       case 'runLevel': {
@@ -931,6 +934,7 @@ export function describeCommand(sim: Sim, cmd: Command): string {
     case 'manual': return `${cmd.mode === 'AUTO' ? '恢复自动驾驶' : `人工驾驶${cmd.mode}`} ${tn(cmd.train)}`;
     case 'radio': return '通话应答';
     case 'radioAuto': return '通话应答方式';
+    case 'dispatchAuto': return `自动调度员${cmd.on ? '接管' : '退出'}`;
     case 'env': return '【教员】环境设置';
     case 'lowAdhesion': return `${cmd.on ? '设置' : '取消'}低粘着模式`;
     case 'runLevel': return cmd.level === 0 ? '运行等级按图' : `运行等级 ${cmd.level}`;
