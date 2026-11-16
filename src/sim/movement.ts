@@ -42,7 +42,8 @@ export const MA_SCAN_CAP = 25000;
  * refreshAuthority and shifted by the train's own travel in between.
  */
 export const MA_NEAR = LOOKAHEAD;
-export const MA_CAP_REASON = '授权扫描上限';
+export { MA_CAP_REASON } from './model';
+import { MA_CAP_REASON } from './model';
 const CBTC_SAFETY = 20; // m behind a preceding communicating train's tail
 const SIGHT_MARGIN = 10; // m, RM on-sight stopping margin
 

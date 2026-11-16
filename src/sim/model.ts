@@ -1035,6 +1035,8 @@ export type FromWorker =
   | { type: 'planPreview'; id: number; preview: import('./planning').PlanPreview };
 
 // bit flags for packed state arrays
+/** maReason when the MA scan ran out of range without meeting any limit (movement.ts) */
+export const MA_CAP_REASON = '授权扫描上限';
 export const SEC = { OCC: 1, COMM: 2, LOCK: 4, DIST: 8, PRESET: 16, TSR: 32, TRAIN: 64, ROUTEFLEET: 128, BLOCK: 256, POSS: 512, ENV: 1024, ROUTEMAN: 2048, GUIDE: 4096 } as const;
 export const SW = { R: 1, MOVING: 2, FAILED: 4, LOCKED: 8, SINGLE: 16, FIELD: 32, TARGET_R: 64, BLOCKED: 128 } as const;
 export const SIG_ASPECT: Aspect[] = ['R', 'G', 'Y', 'GUIDE', 'DARK', 'FAIL', 'W'];
