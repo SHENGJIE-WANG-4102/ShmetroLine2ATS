@@ -38,3 +38,7 @@ reference/line2/PIS_10.22/
 reference/line2/pis1026/
 reference/line2/recordings/
 reference/line2/11_2/
+
+# 第三方资料，不随仓库分发（清单见 reference/external-sources.md）
+/reference/上海轨道交通全网配线V*.pdf
+/reference/line2/j.1007-869x.*.pdf
