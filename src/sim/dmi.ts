@@ -9,7 +9,7 @@ import { LINE, STATIONS, fleetEntry } from '../data/current';
 import { stopError, scanAhead, goalBerth, berthError, manualTractionHold } from './movement';
 import { cbtcAvailable, dtoAllowed } from './onboard';
 import { effectiveStops, serviceEnd, turnbackAt } from './timetable';
-import { signalAheadFrom, platformSide, dwellDepartureAt } from './ats';
+import { signalAheadFrom, platformSide, dwellDepartureAt, atoStartReady } from './ats';
 import { trainLevel } from './energy';
 
 const LOG_MAX = 40;
@@ -158,6 +158,8 @@ export function computeDmi(sim: Sim, id: number): DmiData | null {
     // 用户实拍（2026-11-02）：门锁闭后、动车前出现黄色起步箭头
     startReady: tr.phase === 'dwell' && tr.autoStartAt !== undefined && !tr.doorsOpen && !tr.doorSide
       && !tr.doorMotion && sim.t >= (tr.doorLockedAt ?? 0),
+    atoStart: tr.mode === 'AM' && !tr.manual && atoStartReady(sim, tr).ready,
+    atoPressed: !!(tr.atoButtons?.f && tr.atoButtons?.g),
     manualReady: tr.manual && !manualTractionHold(sim, tr),
     stopErr: Number.isFinite(err) ? err : null,
     stopWin: win,

@@ -7,6 +7,7 @@
 import type { DmiData, DmiMsg, TrainSnap } from '../sim/model';
 import { FONT_CN, fmtTime } from './theme';
 import { formatDrivingMode } from './drivingMode';
+import { departureCue } from './departCue';
 
 const W = 800, H = 600;
 /** the DMI canvas (dmi.ts) */
@@ -56,8 +57,10 @@ export function drawTeal(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData |
   const standing = stopped && board?.departedAt !== undefined && board.headLeftAt === undefined;
   const docked = stopped && d?.stopWin === 'aligned' && !!(t.platSide || (standing && board?.side));
   const doorOpen = !!d && ['open', 'opening', 'closing'].includes(d.trainDoor);
-  const depart = !t.eb && !t.failed && !t.hold && !d?.stationHold && (!t.halt || (t.halt.code === 'MANUAL' && !!d?.manualReady)) && !doorOpen && !t.doorsAwait
-    && t.phase === 'run' && t.maDist > 3 && t.vTarget > 0.1;
+  // 用户（2026-11-16）：出发跟 2 号线起步箭头一样，给了发车授权就 YES，不等车动
+  const depart = stopped ? departureCue(t, d, now)
+    : !t.eb && !t.failed && !t.hold && !d?.stationHold && (!t.halt || (t.halt.code === 'MANUAL' && !!d?.manualReady)) && !doorOpen && !t.doorsAwait
+      && t.phase === 'run' && t.maDist > 3 && t.vTarget > 0.1;
 
   // top fields
   const fields: [string, string, string][] = [

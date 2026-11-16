@@ -22,7 +22,7 @@ import { openCall, unsafeAhead } from './radio';
 import { nextLink, stablingBerth } from './topology';
 import { swPos } from './interlocking';
 import { withdrawAuthority } from './movement';
-import { OPERATIONS, supportsSignalSystem, unattended, LINE, LINE_ATO_FALLBACK } from '../data/current';
+import { OPERATIONS, supportsSignalSystem, unattended, LINE, LINE_ATO_FALLBACK, normalAutoMode } from '../data/current';
 
 /** driver action time for a mode / level change at standstill (s) 【假设】 */
 export const MODE_CHANGE_TIME = 10;
@@ -49,7 +49,7 @@ export function cbtcAvailable(sim: Sim, tr: Train): boolean {
 
 /** DTO allowed for the train: the line runs DTO and its DTO equipment works */
 export function dtoAllowed(sim: Sim, tr: Train): boolean {
-  return !sim.atoLine && !tr.dtoInhibit && !tr.atoDriver;
+  return normalAutoMode(sim.atoLine) === 'DTO' && !tr.dtoInhibit && !tr.atoDriver;
 }
 
 /** best automatic mode for the train at a level: under CBTC DTO, or ATO with

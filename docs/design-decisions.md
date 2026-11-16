@@ -5386,3 +5386,15 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - 11号线故障处置说明（`line11/ui.ts faultProcedures`）：原来继承14号线随车人员/FAM 版，通信中断、ZC 故障、ATO 故障、站台门联动四条改为本线司机驾驶、无 TBTC 后备的说法，只写仿真里真会发生的处置（通信中断、ZC 故障都是原地等恢复）；其他沿用通用司机版。
 - 公共文件：`src/ui/tooltip.ts`、`src/ui/cmdpanel.ts`、`src/ui/help.ts`、`src/sim/model.ts`、`src/sim/movement.ts`。2号线（有 TBTC、DTO）显示不变；14号线跟着去掉「恢复CBTC」、帮助页按 UTO 写。
 - 没动：11号线列车内部仍按 2 号线的 DTO 模式跑（终点站不需要司机换端、发车不按 ATO 按钮），见待定。
+
+## D205 11号线改为司机驾驶 ATO；出发授权、司机台 ATO 启动按钮；门键 Y 左 U 右；站台特写按编组（2026-11-16，用户决定）
+
+- 线路能力新增 `LineData.dto`：常态 DTO（自己发车、换端不算司机作业）还是 GoA2 司机驾驶 ATO。11号线 `dto: false`（用户选 A），2号线、14号线（FAM）、测试线为 true。`normalAutoMode()`（data/current.ts）给出常态自动模式，`dtoAllowed`、新车初始模式、车次窗模式标记、车次窗排序都从它取，不再只认 `sim.atoLine`。
+  - 11号线全线列车现在是 AM：每站司机锁门后按 ATO 启动（发车确认延时 1–2 s，线路数据原有），换端按司机作业（本线司机换端额外时间为 0，数据原有）。
+  - ATO 随机过标原来只对 DTO 生效，改为 DTO/AM 都生效（11号线继承的万分之二不会因改 AM 消失；2号线概率为 0 不受影响）。
+- 11号线 DMI「出发」：原来车动了才变 YES；改为和 2号线起步箭头同一授权（`departCue.ts`：AM 车 `atoStartReady`、DTO 车起步提示、人工驾驶的起步条件），给了授权就 YES。
+- 司机台 ATO 启动按钮兼指示灯（在 DMI 下方手柄旁，不在 DMI 屏里）：玩家接管 ATO 驾驶时显示；出发授权后绿灯闪，F+G 按下后常亮、列车起动，ATO 行车中常亮。点它等于同时按 F、G。闪烁用 CSS 动画，不依赖快照刷新。
+- 门键对调：Y 左侧门，U 右侧门（各线通用，用户要求）。
+- 站台对标特写的编组、车长、停车牌数字取线路数据（`LINE_INFO.cars`、`trainLength`）：11号线 6 节 140 m，停车牌写 6；2号线仍 8 节 186 m。随机车门/车辆故障的车号也按编组抽（11号线不再出「第8车」）。
+- 公共文件：`src/data/types.ts`、`src/data/current.ts`、`src/sim/{onboard,ats,movement,dmi,model,vehicle}.ts`、`src/ui/{dmi,dmiTeal,departCue,cmdpanel,trackview,app,help,stopview}.ts`、`src/styles.css`。
+- 验证：11号线工作日全天（无故障，种子 5）改前改后逐小时最大晚点完全一致，462 趟载客全部跑完、0 违例；07:00 在线 63 列全部 AM。带随机故障（种子 2783861847）两边都是 15:25 ZC2 故障造成的大晚点（改前就有），车门故障车号变了之后随机序列分叉，数字略有出入。浏览器实测：接管 ATO 驾驶，U 开关右门、Y 开关左门，出发 YES 后按钮闪，点按钮/F+G 后常亮发车。

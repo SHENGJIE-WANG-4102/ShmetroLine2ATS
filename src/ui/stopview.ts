@@ -15,9 +15,10 @@
  * stops (用户决定，11-08 由 2-5 改为 5-1): from there on the scale is fixed and the train runs across
  * the picture towards the last pillar, so its distance and speed read true.
  *
- * Geometry is approximate 【假设】: cars of 23.25 m (8 × = 186 m), five doors
- * per side at 4.6 m pitch from 3 m behind the car front, the driver's eye 1.8 m
- * behind the nose, the end door 2.5 m beyond the last pillar, a 188 m platform.
+ * Geometry is approximate 【假设】: the line's formation (LINE_INFO cars, 8 when not given) over
+ * its train length (Line 2: 8 × 23.25 m = 186 m; Line 11: 6 × 23.3 m), five doors per side at
+ * 4.6 m pitch from 3 m behind the car front, the driver's eye 1.8 m behind the nose, the end door
+ * 2.5 m beyond the last pillar, a platform 2 m longer than the train.
  * PSD doors are numbered car-door from the stopping end (1-1 opposite the head
  * car's front door) 【假设】.
  */
@@ -47,8 +48,8 @@ const Y0 = 95;
 /** metres shown beyond the stopping point (pillar): the end door and some wall */
 const BEYOND = 3.5;
 const EYE = 1.8;
-const CARS = 8;
-const CAR = 186 / CARS;
+const CARS = CURRENT_LINE.core.LINE_INFO.cars ?? 8;
+const CAR = CURRENT_LINE.core.LINE_INFO.trainLength / CARS;
 const GANGWAY = 0.6;
 const DOORS = 5;
 const DOOR_PITCH = 4.6;
@@ -56,7 +57,7 @@ const FIRST_DOOR = 3.0;
 const TRAIN_DOOR_W = 1.6;
 const PSD_DOOR_W = DOOR_PITCH / 2.25; // 门:固定玻璃=1:1.25
 const END_DOOR = 2.5;
-const PLATFORM = 188;
+const PLATFORM = CURRENT_LINE.core.LINE_INFO.trainLength + 2;
 /** cab side door and windscreen, from the nose (m) */
 const CAB_DOOR = 1.6;
 const CAB_DOOR_W = 0.6;
@@ -283,7 +284,7 @@ export class StopView {
           });
         });
       }
-      // the last pillar, the end door (端门, swinging) and the stop board 8
+      // the last pillar, the end door (端门, swinging) and the stop board for the formation (8, 6…)
       rect(sx(0) - 3, 62, 7, 26, C.pillarLast);
       rect(sx(0) + 4, 72, Math.max(2, END_DOOR * PX - 6), 6, C.endDoor);
       if (sx(0) > -30 && sx(0) < W + 30) {
@@ -298,7 +299,7 @@ export class StopView {
         c.font = `bold 19px ${FONT}`;
         c.textAlign = 'center';
         c.textBaseline = 'alphabetic';
-        upright(sx(0), by + 13, () => c.fillText('8', 0, 7));
+        upright(sx(0), by + 13, () => c.fillText(String(CARS), 0, 7));
       }
     }
 

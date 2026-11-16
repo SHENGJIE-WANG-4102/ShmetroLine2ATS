@@ -16,6 +16,7 @@ import { FONT_CN, fmtTime } from './theme';
 import { LINE } from '../data/current';
 import { drawStatusGrid, statusGridAlarmAt } from './dmiStatusGrid';
 import { drawTeal, tealAlarmAt } from './dmiTeal';
+import { startCue, manualStartCue, atoLampState } from './departCue';
 
 const STYLES = {
   navyDial: { brand: 'CASCO', draw: null, alarmAt: null },
@@ -86,6 +87,11 @@ export class Dmi {
   private notchEls: HTMLElement[] = [];
   onNotch: (n: number) => void = () => undefined;
   onAck: (message: string, at: number) => void = () => undefined;
+  /** the cab's ATO start button (lamp) was pressed: both F and G */
+  onAto: () => void = () => undefined;
+  /** 用户（2026-11-16）：ATO 启动按钮兼指示灯在司机台上（不在 DMI 屏里）：出发授权后绿灯闪，
+   * F+G 按下后常亮、列车起动；玩家接管 ATO 驾驶时显示 */
+  private atoBtn: HTMLElement;
   /** selected log row (index into the newest-first log) and first visible row */
   private sel = 0;
   private top = 0;
@@ -110,7 +116,9 @@ export class Dmi {
     }, { passive: false });
     // bezel with the maker's name above the screen, as on the cab photo
     const bezel = h('div', { class: 'dmi-bezel' }, h('div', { class: 'dmi-brand' }, STYLE.brand), this.canvas);
-    this.el = h('div', { class: 'dmi-wrap' }, bezel, this.lever);
+    this.atoBtn = h('button', { class: 'ato-btn off', title: 'ATO 启动按钮（F+G）', onclick: () => this.onAto() }, 'ATO');
+    this.atoBtn.style.display = 'none';
+    this.el = h('div', { class: 'dmi-wrap' }, bezel, this.lever, this.atoBtn);
     this.setResolution(resolution());
   }
 
@@ -161,6 +169,8 @@ export class Dmi {
 
   draw(t: TrainSnap, d: DmiData | null, now: number) {
     this.last = { t, d, now };
+    this.atoBtn.style.display = t.atoDriver ? '' : 'none';
+    this.atoBtn.className = `ato-btn ${atoLampState(t, d, now)}`;
     const c = this.ctx;
     c.setTransform(this.res, 0, 0, this.res, 0, 0);
     if (STYLE.draw) {
@@ -335,11 +345,8 @@ export class Dmi {
     const state = eb ? 'eb' : t.a > 0.05 ? 'traction' : t.a < -0.12 && t.v > 0.05 ? 'brake' : 'coast';
     // 用户实拍（2026-11-02）：车头图标只在列车静止时显示，动车后消失
     if (t.v < 0.05) trainFront(c, 656, 214, state);
-    // 用户（2026-11-07，D188）：DTO、ATO、ATPM(CM) 都在允许动车时显示起步箭头；人工驾驶没有自动起步时刻，
-    // 以门关好锁闭、有移动授权、未扣车、到发车时刻前 2 s 为准
-    const manualCue = t.manual && !t.hold && !t.eb && t.maDist > 1 && !t.doors && !t.doorClosing && !t.doorsAwait && !t.doorSide
-      && (!d || d.dep < 0 || d.dep - now <= 2);
-    if (t.v < 0.05 && (startCue(d, now) || manualCue)) startArrow(c, 693, 290);
+    // 用户（2026-11-07，D188）：DTO、ATO、ATPM(CM) 都在允许动车时显示起步箭头（departCue.ts）
+    if (t.v < 0.05 && (startCue(d, now) || manualStartCue(t, d, now))) startArrow(c, 693, 290);
     // Two distinct symbols: train doors always above AA; PSD only on a platform.
     // 用户确认：photograph shows OPEN leaves; closed leaves meet.
     // Train doors are white, PSD yellow in the reference.
@@ -495,11 +502,6 @@ function scrollButton(c: CanvasRenderingContext2D, b: { x: number; y: number; w:
 }
 
 /** wheel / axle status: scalloped ring with a letter (Line 2 photos) on an axle line (Casco) */
-/** 实拍视频（2026-11-02 机场 V1414）：门锁闭后等到 DEP 前约 2 s，黄色起步箭头出现，
- * 同时门关好绿灯熄灭；B 变 M 再晚 0.5～1 s（用户）；TDT 过零车动、箭头消失。 */
-function startCue(d: DmiData | null, now: number, lead = 2): boolean {
-  return !!d?.startReady && d.dep >= 0 && d.dep - now <= lead;
-}
 
 function wheel(c: CanvasRenderingContext2D, x: number, y: number, glyph: 'B' | 'M') {
   c.strokeStyle = C.white;

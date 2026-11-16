@@ -452,6 +452,10 @@ export interface DmiData {
   turnHold: boolean;
   /** doors locked and the automatic start pending (yellow start arrow, M on the brake symbol) */
   startReady: boolean;
+  /** an AM train (driver ATO) may start now: the ATO start buttons will be taken (atoStartReady) */
+  atoStart?: boolean;
+  /** both ATO start buttons are held */
+  atoPressed?: boolean;
   /** a manual train with nothing holding its traction back (only the driver's notch left) */
   manualReady: boolean;
   /** signed distance (m) from the head to the stopping point, positive short of it; null when none */

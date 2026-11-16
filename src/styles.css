@@ -293,6 +293,11 @@ tr.recovered td.txt { color: var(--ok); }
 .lever .notch.b { color: #ffd59a; }
 .lever .notch.eb { color: #ff8080; }
 .lever .notch.on { background: #1b2c3e; border-color: var(--accent); color: #fff; }
+/* the cab's ATO start button with its lamp (dmi.ts): off, blinking green, steady green */
+.ato-btn { align-self: center; width: 76px; height: 76px; border-radius: 50%; border: 4px solid #5d6670; background: #24412b; color: #7d9884; font: 700 20px var(--font-mono); cursor: pointer; }
+.ato-btn.on { background: #39ef08; color: #10161a; box-shadow: 0 0 14px #39ef08; }
+.ato-btn.blink { animation: ato-blink .8s steps(1) infinite; }
+@keyframes ato-blink { 0% { background: #39ef08; color: #10161a; box-shadow: 0 0 14px #39ef08; } 50% { background: #24412b; color: #7d9884; box-shadow: none; } }
 .keys { font-size: 20px; color: var(--text-dim); line-height: 1.6; }
 .keys b { font: 600 20px var(--font-mono); color: #fff; background: #1b2735; padding: 0 8px; border-radius: 3px; }
 .scores { display: flex; flex-wrap: wrap; gap: 8px; }

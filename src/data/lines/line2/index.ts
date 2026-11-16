@@ -22,6 +22,7 @@ export const LINE_2: LineData = {
   },
   unattended: { doorClose: false, turnback: false, wakeSleep: false, depotMoves: false },
   lineAtoFallback: true,
+  dto: true,
   signalling: { primary: 'CBTC', fallback: ['TBTC'], onLoss: 'fallback' },
   automation: 'DTO',
   core, firstLast, lastTrains,

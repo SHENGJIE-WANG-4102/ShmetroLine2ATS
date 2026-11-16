@@ -14,6 +14,7 @@ const silentAudio = emptyAudio(LINE14_CORE.STATIONS, { openingS: 2.5, warningToM
 export const LINE_14: LineData = {
   id: '14', branding: { title: '上海轨道交通14号线', shortName: '14号线', color: LINE14_CORE.LINE_INFO.colorCss, badgeUrl: '', logoText: '14' },
   unattended: { doorClose: true, turnback: true, wakeSleep: true, depotMoves: true },
+  dto: true,
   lineAtoFallback: true, // 用户决定（2026-11-15）：14号线有ATO后备，全线和单车都能降
   signalling: { primary: 'CBTC', fallback: [], onLoss: 'restrictedManual' }, automation: 'UTO',
   core: LINE14_CORE, firstLast: LINE14_FIRST_LAST, lastTrains: { OTHER_LAST_TRAINS: [] },

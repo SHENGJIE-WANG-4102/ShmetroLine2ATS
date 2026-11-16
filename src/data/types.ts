@@ -835,6 +835,10 @@ export interface LineData {
   /** The dispatcher can put the whole line on driver-driven ATO (DTO compatibility mode) as a
    * fallback from DTO, and an operating day can start in it. */
   lineAtoFallback: boolean;
+  /** Trains normally run DTO (FAM on an unattended line): the train departs by itself and changes
+   * ends without a driver's work. false: GoA2, the driver runs ATO (AM), changes ends and presses
+   * the ATO start buttons at every departure. */
+  dto: boolean;
   signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[]; onLoss: 'fallback' | 'restrictedManual' | 'wait' };
   automation: 'DTO' | 'UTO' | 'ATO';
   core: CoreLineData;

@@ -12,7 +12,7 @@ import { CanvasTextMetrics, Container, Graphics, Text, type FederatedPointerEven
 import { nextLink, type Topology } from '../sim/topology';
 import type { Snapshot, TrainSnap } from '../sim/model';
 import { SEC, SW, PLT, SIG_ASPECT } from '../sim/model';
-import { LINE, STATIONS, LINE_INFO, DIRECTIONS, stationOpened } from '../data/current';
+import { LINE, STATIONS, LINE_INFO, DIRECTIONS, stationOpened, normalAutoMode } from '../data/current';
 import { formatTrainNumber } from './trainNumber';
 import { formatDrivingMode } from './drivingMode';
 import type { Store, Selection } from './store';
@@ -1206,8 +1206,8 @@ export class TrackView {
       let p = 0;
       if (this.store.selection?.kind === 'train' && this.store.selection.id === t.id) p += 1000;
       if (t.failed || t.eb) p += 500;
-      // (AM under CBTC is the norm while the whole line runs ATO)
-      if (!t.comm || t.level !== 'CBTC' || t.manual || t.mode !== 'DTO' && !(t.mode === 'AM' && snap.atoLine)) p += 300;
+      // (AM under CBTC is the norm on a driver-ATO line and while the whole line runs ATO)
+      if (!t.comm || t.level !== 'CBTC' || t.manual || t.mode !== 'DTO' && !(t.mode === 'AM' && normalAutoMode(snap.atoLine) === 'AM')) p += 300;
       if (t.hold) p += 200;
       if (t.inService && t.delay > 120) p += 100 + Math.min(99, t.delay / 60);
       if (!t.inService) p -= 50;
@@ -1336,7 +1336,7 @@ export class TrackView {
     if (!tr.comm) chips += '×';
     else if (tr.level === 'TBTC') chips += 'T';
     if (tr.manual) chips += `人${formatDrivingMode(tr.mode)}`;
-    else if (tr.mode !== 'DTO' && !(tr.mode === 'AM' && tr.level === 'CBTC' && this.store.snap?.atoLine)) chips += formatDrivingMode(tr.mode);
+    else if (tr.mode !== 'DTO' && !(tr.mode === 'AM' && tr.level === 'CBTC' && normalAutoMode(!!this.store.snap?.atoLine) === 'AM')) chips += formatDrivingMode(tr.mode);
     if (tr.hold) chips += '扣';
     if (tr.hot) chips += '热备';
     if (tr.inService) chips += lateText(tr.delay);

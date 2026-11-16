@@ -18,7 +18,7 @@ function autoModeText(): string {
 import { timePick } from './timepick';
 import { h, clear } from './dom';
 import type { Store } from './store';
-import { confirmAndSend, type CmdSpec } from './confirm';
+import { confirmAndSend, toast, type CmdSpec } from './confirm';
 import { LINE, STATIONS, LINE_INFO, DIRECTIONS, OPERATIONS, supportsSignalSystem, unattended, LINE_ATO_FALLBACK } from '../data/current';
 import { PERF } from '../sim/dynamics';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT, type TrackDir, type TrainSnap } from '../sim/model';
@@ -59,6 +59,15 @@ export class CommandPanel {
     this.dmi.onAck = (message, at) => {
       const selected = this.store.selection;
       if (selected?.kind === 'train') void this.store.command({ c: 'dmiAck', train: selected.id, message, at });
+    };
+    this.dmi.onAto = () => {
+      const selected = this.store.selection;
+      if (selected?.kind !== 'train') return;
+      const train = selected.id;
+      // a press of both start buttons: down together, released a moment later
+      void Promise.all([this.store.command({ c: 'atoButton', train, button: 'f', down: true }), this.store.command({ c: 'atoButton', train, button: 'g', down: true })])
+        .then(([r]) => { if (!r.ok) toast(r.msg, false); });
+      setTimeout(() => { void this.store.command({ c: 'atoButton', train, button: 'f', down: false }); void this.store.command({ c: 'atoButton', train, button: 'g', down: false }); }, 500);
     };
     this.stopView = new StopView(() => hooks.resolution());
     this.dmi.onNotch = (n) => {
@@ -380,7 +389,7 @@ export class CommandPanel {
     const flow = h('div', { class: 'drv-flow' }, this.stopView.el, this.dmi.el);
     this.el.append(flow);
     if (t0.atoDriver) flow.append(h('div', { class: 'keys' }, 'ATO启动：发车条件满足后同时按住 F + G'));
-    if (isPlayerDriving(t0)) flow.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 右门 · ', h('b', {}, 'U'), ' 左门 · 鼠标滚轮/点击手柄档位'));
+    if (isPlayerDriving(t0)) flow.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 左门 · ', h('b', {}, 'U'), ' 右门 · 鼠标滚轮/点击手柄档位'));
     if (isPlayerDriving(t0)) flow.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
     const scores = h('div', { class: 'scores' });
     if (t0.drv || t0.manual) flow.append(h('div', { class: 'sect-title' }, '人工驾驶记录（对标误差 / 得分）'), scores);

@@ -626,10 +626,10 @@ export class App {
       else if (e.key === 'ArrowDown' || k === 'q') n = Math.max(-7, tr.notch - 1);
       else if (k === 's') n = 0;
       else if (k === 'e') n = -8;
-      // door buttons, TSW layout: Y right, U left; the same side again closes
+      // door buttons (用户 2026-11-16): Y left, U right; the same side again closes
       if ((k === 'y' || k === 'u') && !e.repeat) {
         e.preventDefault();
-        this.store.command({ c: 'door', train: tr.id, side: k === 'y' ? 'R' : 'L' }).then((r) => toast(r.msg, r.ok));
+        this.store.command({ c: 'door', train: tr.id, side: k === 'y' ? 'L' : 'R' }).then((r) => toast(r.msg, r.ok));
         return;
       }
       if (n !== null) {

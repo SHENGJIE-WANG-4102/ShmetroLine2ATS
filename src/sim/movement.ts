@@ -895,7 +895,7 @@ export function updateTrainMotion(sim: Sim, tr: Train, dt: number) {
   tr.nextSignal = scan.nextSignal;
   tr.nextSignalDist = scan.nextSignalDist;
   const approach=tr.tasks[0];
-  if(OPERATIONS.atoRandomOverrunProbability>0&&!tr.manual&&tr.mode==='DTO'&&approach?.k==='stop'&&approach.doors
+  if(OPERATIONS.atoRandomOverrunProbability>0&&!tr.manual&&(tr.mode==='DTO'||tr.mode==='AM')&&approach?.k==='stop'&&approach.doors
     &&scan.stopDist<100&&scan.stopDist>10&&tr.v>1&&tr.randomOverrunBerth!==approach.berth) {
     tr.randomOverrunBerth=approach.berth;
     // a fresh draw for every stop: one left over from a stop that was overrun and then skipped

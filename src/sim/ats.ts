@@ -1,4 +1,4 @@
-import { unattended } from '../data/current';
+import { unattended, normalAutoMode } from '../data/current';
 import { utoBusy, utoVehicleWait, utoDoorWarningReady, beginUtoReturn, requestUtoControl, crewLabel, computerCrew } from './uto';
 import { doorCloseHold, departureHold, DOOR_CUT_DWELL } from './vehicle';
 /**
@@ -449,7 +449,7 @@ export function newTrain(sim: Sim, block: Block | null, link: number, off: numbe
     id: sim.nextTrainId++, vehicle, svc: block?.svc ?? '---', tripNo: '----', tripId: -1, block: block?.id ?? -1,
     destText: '', destStation: -1,
     link, off, dir, hist, body: [], len: LINE_INFO.trainLength, v: 0, a: 0,
-    level: 'CBTC', comm: true, mode: sim.atoLine ? 'AM' : 'DTO', eb: false, ebReason: '', ebSince: 0, ebCause: '', ebAuth: false, ebCallAt: 0,
+    level: 'CBTC', comm: true, mode: normalAutoMode(sim.atoLine), eb: false, ebReason: '', ebSince: 0, ebCause: '', ebAuth: false, ebCallAt: 0,
     forceLevel: 'AUTO', dtoInhibit: '', relocSec: -1, modeSince: sim.t, rmSig: -1, spadSig: -1, tbStage: 'none', tbExitSig: -1, tbCallAt: 0, depotStage: 'none', maSigs: [],
     maDist: 0, maReason: '', maCode: 'NONE', maTrain: -1, maFar: 0, maFarReason: '', maFarCode: 'NONE', maFarTrain: -1,
     lastDs: 0, lastMa: Infinity, maCut: false, arsWait: null, halt: newHalt(), vTarget: 0, vPermit: 0, stopDist: Infinity, rmAuth: 0, rmReason: '',

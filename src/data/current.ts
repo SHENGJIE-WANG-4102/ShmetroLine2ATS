@@ -65,3 +65,6 @@ export const { OTHER_LAST_TRAINS } = LINE.lastTrains;
 /** Behaviour is selected by explicit capability, never by automation display labels. */
 export function unattended(task: keyof typeof LINE.unattended): boolean { return LINE.unattended[task]; }
 export const LINE_ATO_FALLBACK = LINE.lineAtoFallback;
+/** the automatic mode trains normally run in: DTO, or ATO with the driver (AM) on a line without
+ * DTO or while the whole line runs its ATO fallback */
+export function normalAutoMode(atoLine: boolean): 'DTO' | 'AM' { return LINE.dto && !atoLine ? 'DTO' : 'AM'; }

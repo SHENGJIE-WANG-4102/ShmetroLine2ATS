@@ -23,7 +23,9 @@ import { openCall } from './radio';
 import { trainLabel, cmdWithdraw } from './ats';
 import { entryStation } from './timetable';
 import { injectFault } from './faults';
-import { STATIONS } from '../data/current';
+import { STATIONS, LINE_INFO } from '../data/current';
+/** cars in a train: a random car fault picks one of them */
+const CARS = LINE_INFO.cars ?? 8;
 
 /** inverters on an 8-car 6M2T train */
 export const TRACTION_UNITS = 6;
@@ -70,14 +72,14 @@ export function injectTraction(sim: Sim, tr: Train, units: number, recover: bool
 }
 
 export function injectDoor(sim: Sim, tr: Train, sev: 1 | 2, fault: number): string {
-  const car = 1 + Math.floor(sim.rng() * 8), door = 1 + Math.floor(sim.rng() * 5);
+  const car = 1 + Math.floor(sim.rng() * CARS), door = 1 + Math.floor(sim.rng() * 5);
   tr.vfault = { kind: 'door', sev, stage: 'armed', until: 0, fault, recover: false, car, door };
   const text = `列车 ${trainLabel(tr)}（${tr.vehicle}）第${car}车${door}号门故障${sev === 2 ? '（无法关闭且无法切除）' : ''}`;
   return text;
 }
 
 export function injectBrake(sim: Sim, tr: Train, sev: 1 | 2, recover: boolean, fault: number): string {
-  const car = 1 + Math.floor(sim.rng() * 8);
+  const car = 1 + Math.floor(sim.rng() * CARS);
   tr.vfault = { kind: 'brake', sev, stage: 'armed', until: 0, fault, recover, car, door: 0 };
   return `列车 ${trainLabel(tr)}（${tr.vehicle}）第${car}车制动不缓解${sev === 2 ? '（多车）' : ''}`;
 }
