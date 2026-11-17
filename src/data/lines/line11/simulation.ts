@@ -25,7 +25,10 @@ const dayPeriods: Record<'weekday' | 'weekend', Period[]> = {
     // 早间过渡保持 10 分钟一班，让花桥第二班正好落在官方首班 05:37（不是 05:33）。
     { from: H(4), to: H(7), template: 'opening', label: '早间过渡', headway: 600 },
     { from: H(7), to: H(9, 30), template: 'morning', label: '早高峰' },
-    { from: H(9, 30), to: H(17, 30), template: 'offpeak', label: '平峰' },
+    // 高德截图（2026-11-18）：退峰约到 10:30 前后仍约 3 分钟一班，15 点起逐步加密；官方是区段平均值，故用渐变而非一档 6 分钟。
+    { from: H(9, 30), to: H(10, 30), template: 'offpeak', label: '早高峰退峰', headway: 200, headwayTo: 360 },
+    { from: H(10, 30), to: H(14, 30), template: 'offpeak', label: '平峰' },
+    { from: H(14, 30), to: H(17, 30), template: 'offpeak', label: '晚高峰前升峰', headway: 360, headwayTo: 200 },
     { from: H(17, 30), to: H(19, 30), template: 'evening', label: '晚高峰' },
     { from: H(19, 30), to: H(24), template: 'closing', label: '夜间过渡', headway: 480, headwayTo: 720 },
   ],
