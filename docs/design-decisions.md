@@ -5431,3 +5431,9 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
   - `tests/official-headways.test.ts`（2号线）终点停站超限，非 11/14，未查。
 - 验证：11号线两日型 `validate-plan` 0 问题，`tests/line11.test.ts`、`tests/rescue-duty.test.ts` 34 项通过。
 - 文件：`src/sim/duty/planner.ts`、`src/data/lines/line11/simulation.ts`。
+
+## D209 终点停站检查只限站台停靠（2026-11-18，用户决定：等进路应在折返线上）
+- `tests/official-headways.test.ts` 的「终点不排队」检查，原来把折返线/尾轨上的等车也算进限值，工作日 12 处、双休日 3 处超限（蟠祥路折返线、浦东1号2号航站楼尾轨，早间 6:00–9:00 的停站）。用户指出等进路本来就该停折返线，所以这些不是站台排队。检查改为：整段停靠都在 `siding`/`tail` 泊位上的跳过，只限站台上的停靠。代码不动，只改测试。
+- 试过并撤回：`duty/moves.ts` 的 `waitLimit` 让自带折返线的中间站对新增车也按折返线停站上限算，对 14号线工作日 07:27 真新新村无车可供没有任何改善，已还原。
+- 14号线工作日 5 个问题仍在（见 D208），共用规划器容量问题，未解决。
+- 文件：`tests/official-headways.test.ts`。验证：该文件 4 项通过。

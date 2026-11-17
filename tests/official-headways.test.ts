@@ -75,6 +75,8 @@ describe.each(['weekday', 'weekend'] as const)('D173 official headways (%s)', da
         const arrival = o.arrival !== undefined ? sim.plan.trips[o.arrival] : undefined;
         // Night stabling and the hot standby stand by design.
         if (arrival?.standby || o.to - o.from > 3 * 3600 || o.from < SERVICE.from || o.from >= SERVICE.to) continue;
+        // a train waiting for its route stands on the turnback line / tail track (user 2026-11-18), not on the platform: only platform standing is bounded
+        if (o.berths?.length && o.berths.every(b => ['siding', 'tail'].includes(sim.topo.berths[b].kind))) continue;
         // the published interval is an average: a car that just missed a
         // departure of an uneven pattern (150/300 s) waits the local gap
         const leaving = sim.plan.trips.filter(t => !t.cancelled && t.from === st && t.stops[0].dep < o.to - 1e-3).map(t => t.stops[0].dep);
