@@ -11,7 +11,7 @@ const positive = (name, fallback) => {
 const seeds = quick ? 2 : positive('SOAK_SEEDS', 10);
 const workers = positive('SOAK_WORKERS', Math.min(4, Math.max(2, availableParallelism() - 1)));
 const output = process.env.SOAK_OUT ?? (quick ? 'tests/out/soak-quick' : 'tests/out/soak');
-const filter = process.env.SOAK_FILTER;
+const filter = process.argv.find(a => a.startsWith('--filter='))?.slice('--filter='.length) ?? process.env.SOAK_FILTER;
 function modelHash() {
   const hash = createHash('sha256');
   for (const dir of ['src/sim', 'src/data']) for (const file of readdirSync(dir).filter(f => f.endsWith('.ts')).sort())

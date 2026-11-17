@@ -45,6 +45,8 @@ export class Store {
   report: ScenarioReport | null = null;
   progress: { t: number; target: number } | null = null;
   startupText='生成运行图…';
+  /** the sim worker died: shown by the app as a dialog that cannot be dismissed */
+  crash: { where: string; message: string; json: string } | null = null;
   private listeners = new Map<string, Set<Listener>>();
   private nextCmd = 1;
   private snapDirty = false;
@@ -54,6 +56,8 @@ export class Store {
     this.topo = topo;
     this.worker = worker;
     worker.onmessage = (e: MessageEvent<FromWorker>) => this.onMessage(e.data);
+    worker.addEventListener('error', (e) => this.onMessage({ type: 'crash', where: 'worker', message: e.message || '仿真线程出错（无详细信息）', json: '' }));
+    worker.addEventListener('messageerror', () => this.onMessage({ type: 'crash', where: 'worker', message: '仿真线程消息无法解析', json: '' }));
   }
 
   on(ev: string, fn: Listener) {
@@ -173,6 +177,10 @@ export class Store {
       }
       case 'diagnostics':
         void downloadDiagnostics(m.json,`line${GROUP.id}-diagnostics-${Math.round(this.snap?.t??0)}.json`).catch(e=>toast(`诊断导出失败：${String(e)}`,false));
+        break;
+      case 'crash':
+        this.crash ??= { where: m.where, message: m.message, json: m.json };
+        this.emit('crash');
         break;
       case 'dayArchive':
         void archiveDiagnostics(m).then(saved=>{if(!saved)toast('上一运营日诊断已暂存；持久保存失败，请在关闭前导出。',false);});

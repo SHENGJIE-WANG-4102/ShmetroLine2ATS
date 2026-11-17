@@ -1588,7 +1588,7 @@ violations []
 
 ## D95 全仓审计整理：库存进出与过夜预约各留一处定义
 
-- 用户决定：审计由 Claude 直接改，测试由用户或 Codex 做。本次只整理结构和修审计发现的问题，基本运行图逐趟不变（两日型计划指纹改前改后一致）。
+- 用户决定：审计由主线负责人直接改，测试由用户或执行方做。本次只整理结构和修审计发现的问题，基本运行图逐趟不变（两日型计划指纹改前改后一致）。
 - 车辆段进出原有四处各自拼事件（`yardNeed`、`depotLedger`、`planning.ts` 的 `yardCheck`、`circulate` 的 `inventoryFits`），入段 300 秒也抄了多处。现统一为 `depotMoves`（出段在车底开始时刻；入段在末趟到达后 `DEPOT_ENTRY_CLEAR`，或实际退出服务时刻）和 `sortDepotMoves`（同刻先出后入）；各处只按自己的口径筛选。
 - 过夜泊位预约原在 `turnbackOccupancy`、`storedPlatformsClear`、`storageOccupancy` 各写一遍，现由 `overnightHolds` 给出，三处只决定自己关心的泊位和余量。校验里下行正线存车的 24 小时检查口径不同，未合并。
 - 修正：加开把过夜车改去车辆段后，若最终没有加开车停进该过夜位，原车恢复入位（该位已被加开折返占用时不恢复，由日账报出）；热备接替不再因计划里原有、计数不变的库存不平而全部被拒；过夜车次在生成前全部取消时不再崩溃；被删的加开占位车底的车次不再残留旧编号；始发站倒计时按担当车当前晚点顺延，不在车未到时倒数到零后消失。
@@ -2645,7 +2645,7 @@ npx tsx scripts/fuzz-day.ts 13502 --level 1 --wind 3 --density 0:1 --day-type we
 
 未完成：2–3个方案的整图量化/选择题尚未展开，因限速验收先触发上述显式停点，不能把未跑的高架峰速、官方偏差或高德坏格编进方案表。后续若继续，需在隔离副本比较预算重分配、全线富余及阻力假设，方案选定前仍不得修改生产运行图或runMargin。本轮不把有限平轨敏感性当成已选定运营方案。
 
-**用户决定（2026-10-23）**：限速 60 先提交，往西末班的偏差留到下一轮和富余一起修。富余从「最短走行 × 比例」改为「每区间固定秒数」，全线只用一个数。原因：按比例给，长区间分到的富余最多（远东大道→海天三路、虹桥两段长区间约 52 s，短区间 11–15 s，平均 21.5 s），所以高架开不快。Codex 先在副本里量化，汇报后再改正式运行图。
+**用户决定（2026-10-23）**：限速 60 先提交，往西末班的偏差留到下一轮和富余一起修。富余从「最短走行 × 比例」改为「每区间固定秒数」，全线只用一个数。原因：按比例给，长区间分到的富余最多（远东大道→海天三路、虹桥两段长区间约 52 s，短区间 11–15 s，平均 21.5 s），所以高架开不快。执行方先在副本里量化，汇报后再改正式运行图。
 
 
 ## D137 固定区间富余秒数：副本量化与正式定稿
@@ -4108,7 +4108,7 @@ comparison-final/含05–24时76格在线、机场每15min发车及重叠最大�
 独立干净树的类型检查、出入段与车载定向测试、仲裁根因测试和测试线跨日天气通过；严格 validate-plan 与基线逐字一致，工作日仍有原来的 30 条 UNSAFE_WAIT，双休日 0；`tests/timetable.test.ts` 56 通过、2 条原有 D139 首末班失败。旧绿种子 125 的人工折返与车次调整接续不可达已移交 14 侧，本轮不改其正在处理的命令逻辑。公共改动涉及 `src/data/{types,simulation}.ts`、`src/sim/{ats,engine,halt,model,movement,resourceArbitration,timetable,topology}.ts` 及测试；线路数据留在 `src/data/lines/line2/`。
 
 
-干净源同参 seed 134 新报第一天 20:46:26 LIVENESS（旧 v8 两日通过）：人工折返调整车次 6279 从站 4 到站 30 后，任务直接指向其后方站 28 的入段作业，无法从当前方向生成进路；同一现场重载 v8 亦不可达。14 侧正在处理人工折返命令，已转交 `work/claude-inbox/20261027-084858-d145-clean-134.md`，不能算随机验收通过；该新现场由哪处时序差异促发尚未证明。
+干净源同参 seed 134 新报第一天 20:46:26 LIVENESS（旧 v8 两日通过）：人工折返调整车次 6279 从站 4 到站 30 后，任务直接指向其后方站 28 的入段作业，无法从当前方向生成进路；同一现场重载 v8 亦不可达。14 侧正在处理人工折返命令，已转交主线负责人（收件文件在 `work/` 下，2026-10-27 08:48:58），不能算随机验收通过；该新现场由哪处时序差异促发尚未证明。
 
 修复后独立干净源工作日正常整天完整运行：16189 载客站次全部对应，完整性违例 0、EB 0（基线亦 0）；绝对晚点超过 30 秒从 695 项变为 683 项，34 项站次较基线多晚超过 30 秒、最大 53.4 秒。完整逐站差异 `work/depot-leads-20261027/normal-delay-comparison-clean-review-v2.json` 和 `weekday-delay-over30-clean-review-v2.csv`；双休日 75.6 秒取证来自修复前源。
 
@@ -4136,7 +4136,7 @@ comparison-final/含05–24时76格在线、机场每15min发车及重叠最大�
 
 第三组（DMI/PIS及可视状态）：`src/sim/dmi.ts`、`pis.ts`；`src/ui/app.ts`、`cmdpanel.ts`、`dmi.ts`、`pisview.ts`、`side.ts`、`tooltip.ts`、`trackview.ts`、`yardview.ts`；新 `src/ui/dmiStatusGrid.ts`、`drivingMode.ts`、`pisColumn.ts`、`pisColumn.css`、`trainNumber.ts`、`utoControls.ts`。新样式通过渲染表分派，旧样式保持缺省；8节拥挤度均分总载客率为明确假设。告警确认、车门、接管/复位按钮均走sim.command，浏览器实际走完11条操作，最终恢复FAM。
 
-任务的唯一等待点：D142资源仲裁尚未实现；比较本工作树基点与最新 `claude/nifty-faraday-mdr3ug` 的src/scripts/tests没有差异，新增仅文档，未制造合并提交。严守不改 `trainDesire`、`reversalGuard`、`depotEntryBlocker`、`resolveDepot`、`spawnDue`。目前不是整线可玩版本，静态与动态验收结果以L14-06最终记录为准；失败不作已知豁免。
+任务的唯一等待点：D142资源仲裁尚未实现；比较本工作树基点与最新主线分支的src/scripts/tests没有差异，新增仅文档，未制造合并提交。严守不改 `trainDesire`、`reversalGuard`、`depotEntryBlocker`、`resolveDepot`、`spawnDue`。目前不是整线可玩版本，静态与动态验收结果以L14-06最终记录为准；失败不作已知豁免。
 
 公共改动各组共同基线结果（同一最终冻结源码）：
 
@@ -5408,3 +5408,14 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - 【假设】Vader 5 Pro 的 C、Z、背键在 XInput 模式下浏览器是否可见未实测；扫描支持 17 以上的按键编号。
 - 公共文件：`src/ui/{app,header}.ts`；新增 `src/ui/gamepad.ts`（纯映射）、`src/ui/gamepadPanel.ts`（轮询与设置页）、`tests/gamepad.test.ts`。
 - 验证：`tsc` 0 error；`tests/gamepad.test.ts` 15 项通过；`vite build` 通过。真机手柄实测待用户。
+
+## D207 审计小项：worker 崩溃可见、去掉 DUTY_DEBUG 环境开关、scripts 进类型检查、simday 跨平台（2026-11-18，用户决定）
+- 来源 `docs/audit-2026-11-16.md` 的 A1、A2、A4、A10、A7（模型名）。
+- worker 崩溃：`worker.ts` 的 tick、消息处理、`start` 和未处理的 Promise 拒绝都有兜底。出异常后冻结世界，向界面发 `crash`（出错位置、错误文字、诊断包），之后只处理 `diagnostics` 导出和 `init/restart`。界面弹出关不掉的对话框（`crashDialog.ts`）：导出诊断、重新载入。worker 加载失败（`error`/`messageerror`）走同一个对话框，没有诊断包。
+- 没做：`timetable.ts` 里两处 `throw`（缺过夜泊位、无可用过夜出车任务）仍是 throw，现在会被兜住并报崩溃，但还没改成「报警加降级」，留作后续。
+- DUTY_DEBUG：`moves.ts` 不再读环境变量，改成 `setDutyDebug(on)` / `dutyDebugOn()`，行为不变；探针放 `work/` 里调用。`src/data/startup.ts` 读宿主 `process.env` 是选线入口（`ATS_LINE`），不是调试开关，保留。
+- scripts 类型检查：加 `@types/node`（devDependency）和 `tsconfig.scripts.json`（只含 `scripts/`，带 node 与 vite 类型）；`npm run typecheck` 现在两个都跑。主 tsconfig 不变（浏览器工程不引入 node 类型）。清掉的 5 处真错误在 `gaode-compare.ts`（隐式 any）和 `audio/slice-recordings.ts`（类型收窄）。
+- `simday` 改成 `node scripts/soak.mjs --quick --filter=-base-0-`（`soak.mjs` 新增 `--filter=` 参数，仍认 `SOAK_FILTER`），PowerShell 下可跑。
+- D 文件里的 4 处模型名/分支名改成中性说法。
+- 公共文件：`src/sim/{worker,model}.ts`、`src/sim/duty/{moves,planner}.ts`、`src/ui/{app,store}.ts`、新增 `src/ui/crashDialog.ts`。
+- 验证：`tsc` 两个工程都 0 error；`tests/worker-crash.test.ts`（新）、`tests/rescue-duty.test.ts`、`tests/gamepad.test.ts` 共 39 项通过。崩溃对话框没在浏览器里实测。

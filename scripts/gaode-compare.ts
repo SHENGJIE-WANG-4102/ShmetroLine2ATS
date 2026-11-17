@@ -36,12 +36,14 @@ const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${Stri
 const gaodePath = (st: string, dir: string) => comparisonTablePath(evidence.directory, st, dir, day);
 const gaode = (st: string, dir: string) => readFileSync(gaodePath(st, dir), 'utf8')
   .split(/\r?\n/).filter((l) => /^\d\d:\d\d/.test(l)).map((l) => +l.slice(0, 2) * 60 + +l.slice(3, 5));
+type Trip = import('../src/sim/model').Trip;
+type Stop = Trip['stops'][number];
 /** minutes of the revenue calls where passengers can board */
 const plan = (st: string, dir: import('../src/sim/model').TrackDir, arrivals = false) => {
   const i = names.indexOf(st);
-  return (baseline??s.plan).trips.filter((t: import('../src/sim/model').Trip) => t.revenue && !t.cancelled && t.dir === dir)
-    .flatMap((t) => t.stops.filter((p, k) => p.st === i && p.stop && !p.noBoard && (arrivals || k < t.stops.length - 1) &&
-      includedInComparison(SCOPE, st, dir, t.kind, Math.floor(p.arr / 60))).map((p) => Math.floor(p.arr / 60)));
+  return (baseline??s.plan).trips.filter((t: Trip) => t.revenue && !t.cancelled && t.dir === dir)
+    .flatMap((t: Trip) => t.stops.filter((p: Stop, k: number) => p.st === i && p.stop && !p.noBoard && (arrivals || k < t.stops.length - 1) &&
+      includedInComparison(SCOPE, st, dir, t.kind, Math.floor(p.arr / 60))).map((p: Stop) => Math.floor(p.arr / 60)));
 };
 const count = (ts: number[], b: number) => ts.filter((t) => t >= b && t < b + BIN).length;
 

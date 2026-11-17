@@ -52,14 +52,16 @@ export type Yard = {
 };
 
 
-const DEBUG = !!(globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.DUTY_DEBUG;
+let debug = false;
+/** duty-planner trace on or off; probes in work/ turn it on (no environment switch in product code) */
+export const setDutyDebug = (on: boolean) => { debug = on; };
+export const dutyDebugOn = () => debug;
 export const dutyDebug: string[] = [];
 let trace: Map<string, number> | null = null;
 export const setTrace = (m: Map<string, number> | null) => { trace = m; };
 export const getTrace = () => trace;
 /** debug: count the first failing condition of a fitted move */
 export const T = (k: string, ok: boolean) => { if (!ok && trace) trace.set(k, (trace.get(k) ?? 0) + 1); return ok; };
-export { DEBUG };
 
 /** a car at a station, and a departure wanting one */
 export type Car = PoolCar & { trip: GenTrip; station: number };
@@ -598,14 +600,14 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       for (const K of turnsBeyond(from, dir1)) {
       if (K === P || !ahead(dir2, K, P)) continue;
       const back = fitInto(dir2, K, P, d, () => true);
-      if (!back) { if (DEBUG) dutyDebug.push(`via-turn ${STATIONS[P].id} ${d.dir} ${fmt(dep(d))} back ${STATIONS[K].id}→${STATIONS[P].id} failed`); continue; }
+      if (!back) { if (dutyDebugOn()) dutyDebug.push(`via-turn ${STATIONS[P].id} ${d.dir} ${fmt(dep(d))} back ${STATIONS[K].id}→${STATIONS[P].id} failed`); continue; }
       const second = asTrip(dir2, K, P, back.stops), leave = back.stops[0].dep;
       const out = fitBefore(dir1, from, K, Math.max(OPENING.dayStart, notBefore), leave - minTurn(K), undefined, stops => T('outer', outerQuiet(stops))
         && T('waitK', leave - stops.at(-1)!.arr <= waitLimit(K, true, stops.at(-1)!.arr)) && T('safeK', safe(asTrip(dir1, from, K, stops), second))
         && exitFits(yard, dir1, stops)
         && T('placeK', reserve(K, stops.at(-1)!.arr, leave, false))
         && T('frontK', frontTurnClear(ctx, live(), { dir: dir1, to: K, stops }, leave, new Set())));
-      if (!out) { if (DEBUG) dutyDebug.push(`via-turn ${STATIONS[P].id} ${d.dir} ${fmt(dep(d))} out →${STATIONS[K].id} by ${fmt(leave - minTurn(K))} failed`); continue; }
+      if (!out) { if (dutyDebugOn()) dutyDebug.push(`via-turn ${STATIONS[P].id} ${d.dir} ${fmt(dep(d))} out →${STATIONS[K].id} by ${fmt(leave - minTurn(K))} failed`); continue; }
       if (besideTurn(K, dir1) && (out.revenue || back.stops[0].stop)) continue;
       reserve(K, out.stops.at(-1)!.arr, leave);
       if (dir2 !== d.dir) reserve(P, back.stops.at(-1)!.arr, dep(d));
@@ -652,7 +654,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       if (rule === 'no') return false;
       const stops = d.stops;
       if (!exitClear(depot, d.dir, stops)) {
-        if (DEBUG) { const [st, cl] = outboundWindow(ctx, depot, { dir: d.dir, stops });
+        if (dutyDebugOn()) { const [st, cl] = outboundWindow(ctx, depot, { dir: d.dir, stops });
           dutyDebug.push(`exit ${STATIONS[P].id} ${fmt(dep(d))} win ${fmt(st)}+${Math.round(cl - st)} vs ${inbound.filter(m => m.depot === depot && !(cl <= m.from || st >= m.to)).map(m => fmt(m.from) + '+' + Math.round(m.to - m.from) + (m.car !== undefined ? 'T' : '')).join(' ')}`); }
         return false;
       }
@@ -729,7 +731,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       const rule = portalReversal(topo, depot, 'entry', a.dir, arr(a));
       if (rule !== 'yes' && homeViaTurn(car, yard)) return true;
       if (rule === 'no') return false;
-      if (DEBUG && trace && !entryClear(depot, a.dir, X, a.stops)) { const [f, u] = inboundWindow(topo, depot, a);
+      if (dutyDebugOn() && trace && !entryClear(depot, a.dir, X, a.stops)) { const [f, u] = inboundWindow(topo, depot, a);
         dutyDebug.push(`  d-entry ${STATIONS[X].id} ${fmt(f)}-${fmt(u)} vs ${outbound.filter(m => m.depot === depot && !(m.to <= f || m.from >= u)).map(m => fmt(m.from) + '-' + fmt(m.to) + m.dir).join(' ')}`); }
       if (!T('d-entry', entryClear(depot, a.dir, X, a.stops)) || !T('d-full', canTake(depot, arr(a) + DEPOT_ENTRY_CLEAR))) return false;
       if (dry) return true;
@@ -772,20 +774,20 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       // sets down there first and runs on empty (an empty leg, OPERATIONS.emptyLegs).
       const beside = besideTurn(K, dirO);
       const lead = beside && X !== en ? fitOutOf(a, X, dirO, en, -Infinity, latestOut, () => true) : undefined;
-      if (beside && X !== en && !lead) { if (DEBUG) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} out →${STATIONS[en].id} failed`); continue; }
+      if (beside && X !== en && !lead) { if (dutyDebugOn()) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} out →${STATIONS[en].id} failed`); continue; }
       const leadTrip = lead && asTrip(dirO, X, en, lead.stops), leadArr = lead ? lead.stops.at(-1)!.arr : 0;
       const out = lead
         ? fitAfter(dirO, en, K, leadArr + throughMin(en, dirO, leadArr), leadArr + waitLimit(en, false, leadArr), lead.stops,
           stops => T('safeL', safe(leadTrip!, asTrip(dirO, en, K, stops))))
         : fitOutOf(a, X, dirO, K, -Infinity, latestOut, () => true);
-      if (!out || beside && out.revenue) { if (DEBUG) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} out →${STATIONS[K].id} failed`); continue; }
+      if (!out || beside && out.revenue) { if (dutyDebugOn()) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} out →${STATIONS[K].id} failed`); continue; }
       const first = asTrip(dirO, lead ? en : X, K, out.stops), reach = out.stops.at(-1)!.arr;
-      const before = DEBUG && trace ? new Map(trace) : undefined;
+      const before = dutyDebugOn() && trace ? new Map(trace) : undefined;
       const back = fitAfter(dirE, K, en, reach + minTurn(K), reach + waitLimit(K, true, reach), undefined,
         stops => T('peakHome', stops.at(-1)!.arr >= homeFrom()) && T('outer', outerQuiet(stops)) && T('safeK', safe(first, asTrip(dirE, K, en, stops)))
           && T('placeK', reserve(K, reach, stops[0].dep, false)) && T('frontK', frontTurnClear(ctx, live(), first, stops[0].dep, new Set()))
           && entryFits(depot, dirE, en, stops));
-      if (!back) { if (DEBUG) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} back ${STATIONS[K].id}@${fmt(reach)}→${STATIONS[en].id} failed ${before ? [...trace!].filter(([k, n]) => n !== (before.get(k) ?? 0)).map(([k, n]) => k + '=' + (n - (before.get(k) ?? 0))).join(' ') : ''}`); continue; }
+      if (!back) { if (dutyDebugOn()) dutyDebug.push(`home-via ${STATIONS[X].id} ${fmt(arr(a))} back ${STATIONS[K].id}@${fmt(reach)}→${STATIONS[en].id} failed ${before ? [...trace!].filter(([k, n]) => n !== (before.get(k) ?? 0)).map(([k, n]) => k + '=' + (n - (before.get(k) ?? 0))).join(' ') : ''}`); continue; }
       if (dry) return true;
       if (a.dir !== dirO) reserve(X, arr(a), out.stops[0].dep);
       reserve(K, reach, back.stops[0].dep);

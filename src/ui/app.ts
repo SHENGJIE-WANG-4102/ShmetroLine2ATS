@@ -21,6 +21,7 @@ import { Audio } from './audio';
 import { initConfirm, toast } from './confirm';
 import { openYard } from './yardview';
 import { openHelp, helpSeen } from './help';
+import { showCrash } from './crashDialog';
 import { GamepadService, openGamepadSettings } from './gamepadPanel';
 import { openReport } from './report';
 import { h, clear } from './dom';
@@ -746,6 +747,7 @@ export class App {
       this.veil.style.display = 'flex';
     });
     s.on('snap', () => { if (this.veil.style.display !== 'none') this.veil.style.display = 'none'; });
+    s.on('crash', () => { if (s.crash) showCrash(this.overlay, s.crash, `line${GROUP.id}-crash-${Math.round(s.snap?.t ?? 0)}.json`); });
     s.on('ready', () => {
       if (this.mode === 'station') this.closeStation();
       if (this.overview) this.overview.follow = -1;

@@ -60,11 +60,27 @@ function post(msg: FromWorker, transfer: Transferable[] = []) {
   self.postMessage(msg, transfer);
 }
 
+/** set after an uncaught exception: the world is frozen, only the diagnostics export and a restart still work */
+let crashed = false;
+
+/** tell the UI instead of freezing silently, with the diagnostics so the run can be replayed up to the failure */
+function crash(where: string, err: unknown) {
+  if (crashed) return;
+  crashed = true;
+  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+  let json = '';
+  try {
+    if (sim) json = stringifyDiagnostics(exportDiagnostics(sim, cmdLog.slice(0, cmdLog.length - pending.length)));
+  } catch { /* state too broken to export: the message still goes out */ }
+  post({ type: 'crash', where, message, json });
+}
+
 /** UI subscriptions that survive a restart */
 let wantPis = -1;
 let wantDmi = -1;
 
 async function start(raw: SimConfig) {
+  crashed = false;
   const began=performance.now();
   const phase=(phase:'diagram'|'cache'|'warmup'|'complete')=>post({type:'startup',phase,elapsed:performance.now()-began});
   const generation = ++starting;
@@ -276,6 +292,11 @@ function rewind(to: number, replay: boolean) {
 }
 
 function tick() {
+  if (crashed) return;
+  try { tickOnce(); } catch (e) { crash('tick', e); }
+}
+
+function tickOnce() {
   if (!sim || jumping || initializing) return;
   const now = performance.now();
   const dtWall = Math.min(0.25, (now - lastWall) / 1000);
@@ -323,11 +344,17 @@ function tick() {
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const m = e.data;
+  if (crashed && !['diagnostics', 'init', 'restart'].includes(m.type)) return;
+  try { handle(m); } catch (err) { crash(`message ${m.type}`, err); }
+};
+self.addEventListener('unhandledrejection', (ev: PromiseRejectionEvent) => crash('async', ev.reason));
+
+function handle(m: ToWorker) {
   if (initializing && !['init', 'restart', 'speed', 'pause', 'pis', 'dmi'].includes(m.type)) return;
   switch (m.type) {
     case 'init':
     case 'restart':
-      start(m.config);
+      void start(m.config).catch(err => crash('start', err));
       break;
     case 'speed':
       if (Number.isFinite(m.speed) && m.speed >= 0) speed = Math.min(MAX_SPEED, m.speed);
@@ -389,6 +416,6 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       if (sim) post({ type: 'planPreview', id: m.id, preview: preparePlan(sim, m.cmd) });
       break;
   }
-};
+}
 
 setInterval(tick, 8);

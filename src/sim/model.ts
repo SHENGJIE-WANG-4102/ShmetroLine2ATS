@@ -1034,6 +1034,8 @@ export type FromWorker =
   | { type: 'report'; report: ScenarioReport }
   | { type: 'call'; call: RadioCall }
   | { type: 'diagnostics'; json: string }
+  /** uncaught exception in the worker: the world is frozen; `json` is the diagnostics bundle ('' if it could not be built) */
+  | { type: 'crash'; where: string; message: string; json: string }
   | { type: 'dayArchive'; date:string; json:string }
   | { type: 'dayChanged'; text:string }
   | { type: 'planPreview'; id: number; preview: import('./planning').PlanPreview };

@@ -28,7 +28,7 @@ import { originStandAt } from '../calibration';
 import { OPERATIONS, STATIONS } from '../../data/current';
 import { ahead } from '../topology';
 import { matchPool } from './pool';
-import { createMoves, THROUGH_MIN, DEBUG, dutyDebug, setTrace, getTrace, T, fmt, type Car, type Want, type Yard, type LeadBooking } from './moves';
+import { createMoves, THROUGH_MIN, dutyDebugOn, dutyDebug, setTrace, getTrace, T, fmt, type Car, type Want, type Yard, type LeadBooking } from './moves';
 
 export { dutyDebug };
 
@@ -177,7 +177,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       result.spare.splice(result.spare.indexOf(late), 1);
       result.unmet.splice(result.unmet.indexOf(want), 1);
     }
-    if (DEBUG) {
+    if (dutyDebugOn()) {
       const why = (a: GenTrip, d: GenTrip) => {
         const wait = dep(d) - arr(a);
         if (a.dir === d.dir) return wait <= THROUGH_WAIT ? 'ok' : 'through-wait';
@@ -465,7 +465,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       mv.redirecting = undefined;
       if (!went) continue;
       d.done = true; givable[nearest.depot]--;
-      if (DEBUG) dutyDebug.push(`rebalance ${fmt(at)} ${STATIONS[car.station].id} ${car.trip.dir} → ${went.name} (instead of ${nearest.name}) for ${fmt(d.before)}`);
+      if (dutyDebugOn()) dutyDebug.push(`rebalance ${fmt(at)} ${STATIONS[car.station].id} ${car.trip.dir} → ${went.name} (instead of ${nearest.name}) for ${fmt(d.before)}`);
       return went;
     }
     return undefined;
@@ -475,9 +475,9 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     for (const car of spare.filter(c => c.trip.next === undefined && !endOf.has(c.trip.id)
       && arr(c.trip) < Math.min(want.at - POSITION_SPAN, storageClock - 60))) {
       const order = yards.filter(y => y.depot >= 0).sort((a, b) => distanceTo(a, car.station) - distanceTo(b, car.station));
-      if (DEBUG) setTrace(new Map());
+      if (dutyDebugOn()) setTrace(new Map());
       const went = (deliveries.length ? redirect(car, order[0]) : undefined) ?? retire(car, order);
-      if (DEBUG) dutyDebug.push(`retire ${fmt(arr(car.trip))} ${STATIONS[car.station].id} ${car.trip.dir} → ${went?.name ?? '-'}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')}`);
+      if (dutyDebugOn()) dutyDebug.push(`retire ${fmt(arr(car.trip))} ${STATIONS[car.station].id} ${car.trip.dir} → ${went?.name ?? '-'}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')}`);
       setTrace(null);
       if (went) spare.splice(spare.indexOf(car), 1);
     }
@@ -485,7 +485,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     const candidates = spare.filter(c => c.station !== want.station && c.trip.next === undefined
       && arr(c.trip) < want.at && arr(c.trip) >= want.at - POSITION_SPAN).sort((a, b) => arr(b.trip) - arr(a.trip));
     let done = false;
-    if (DEBUG) setTrace(new Map());
+    if (dutyDebugOn()) setTrace(new Map());
     // a storage place's overnight car must leave in the morning: it goes first
     // (not for a published first train: that one comes out of its own end's depot when it can)
     const stored = (y: Yard) => !locked.has(want.trip.id) && y.depot < 0 && y.stock - exits.filter(x => x.yard === y.id).length > 0;
@@ -524,7 +524,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       const nearest = byDistance[0];
       if (!done && nearest && !mv.canDraw(nearest, want.at)) lent.push({ depot: nearest.depot, at: want.at });
     }
-    if (DEBUG && !done) dutyDebug.push(`feed-fail ${STATIONS[want.station].id} ${want.trip.dir} ${fmt(want.at)} cands ${candidates.length}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')}`);
+    if (dutyDebugOn() && !done) dutyDebug.push(`feed-fail ${STATIONS[want.station].id} ${want.trip.dir} ${fmt(want.at)} cands ${candidates.length}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')}`);
     setTrace(null);
     if (!done) issues.push({ severity: 'error', code: 'UNASSIGNED', t: want.at,
       text: `${STATIONS[want.station].name} ${want.trip.dir} ${fmt(want.at)} 发车无车可供（无剩余车、车场出车均排不进）` });
@@ -622,14 +622,14 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     const balanced = depots.slice().sort((a, b) => Number(short(b)) - Number(short(a)) || Number(due(b) > 0) - Number(due(a) > 0)
       || distanceTo(a, car.station) - distanceTo(b, car.station));
     const match = matched.get(car);
-    if (DEBUG) setTrace(new Map());
+    if (dutyDebugOn()) setTrace(new Map());
     const yard = idleNearest(car) ?? retire(car, balanced, match);
-    if (DEBUG && yard) { const last = lastOf(car.trip); dutyDebug.push(`home ${fmt(arr(car.trip))} ${STATIONS[car.station].id} ${car.trip.dir} → ${yard.name} via ${last === car.trip ? 'direct' : `${last.revenue ? '' : 'empty '}${STATIONS[last.from].id}-${STATIONS[last.to].id}`} trimmed ${car.trip.to !== car.station ? STATIONS[car.trip.to].id : '-'} match ${match?.name ?? '-'} due ${depots.map(y => due(y)).join(',')} later ${depots.map(y => later.get(y.id)).join(',')}`); }
+    if (dutyDebugOn() && yard) { const last = lastOf(car.trip); dutyDebug.push(`home ${fmt(arr(car.trip))} ${STATIONS[car.station].id} ${car.trip.dir} → ${yard.name} via ${last === car.trip ? 'direct' : `${last.revenue ? '' : 'empty '}${STATIONS[last.from].id}-${STATIONS[last.to].id}`} trimmed ${car.trip.to !== car.station ? STATIONS[car.trip.to].id : '-'} match ${match?.name ?? '-'} due ${depots.map(y => due(y)).join(',')} later ${depots.map(y => later.get(y.id)).join(',')}`); }
     // a match that no longer fits when its turn comes: match the rest again
     if (match && yard !== match) rematch(homing.slice(i + 1));
     if (yard) void 0;
     else if (match && trimEnd(car, match) || trimEnd(car)) void 0;
-    else if (DEBUG && dutyDebug.push(`home-fail ${STATIONS[car.station].id} ${car.trip.dir} ${fmt(arr(car.trip))} ${car.trip.kind} ${STATIONS[car.trip.from].id}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')} due ${yards.map(y => due(y)).join(',')}`) < 0) void 0;
+    else if (dutyDebugOn() && dutyDebug.push(`home-fail ${STATIONS[car.station].id} ${car.trip.dir} ${fmt(arr(car.trip))} ${car.trip.kind} ${STATIONS[car.trip.from].id}: ${[...getTrace()!].map(([k, n]) => k + '=' + n).join(' ')} due ${yards.map(y => due(y)).join(',')}`) < 0) void 0;
     else if (homeless.push(car.trip.id) < 0) void 0;
     else issues.push({ severity: 'error', code: 'YARD_BALANCE', t: arr(car.trip),
       text: `${STATIONS[car.station].name} ${fmt(arr(car.trip))} 到达的车无法回段或存车` });
@@ -671,7 +671,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     // a depot a car was lent to is short, never spare
     spare: topo.depots.map((_, d) => lent.some(l => l.depot === d) ? 0 : Math.max(0, mv.lowest(yards.find(y => y.depot === d)!, -Infinity, 0))),
   };
-  if (DEBUG && (input.borrow || input.deliver)) dutyDebug.push(`rebalance ${input.borrow ? 'probe' : 'pass'}: lent ${lent.map(l => `${topo.depots[l.depot].name}@${fmt(l.at)}`).join(' ')} spare ${ledger.spare} undelivered ${deliveries.filter(d => !d.done).map(d => `${topo.depots[d.depot].name}@${fmt(d.before)}`).join(' ')} exits ${ledger.exits} returns ${ledger.returns}`);
+  if (dutyDebugOn() && (input.borrow || input.deliver)) dutyDebug.push(`rebalance ${input.borrow ? 'probe' : 'pass'}: lent ${lent.map(l => `${topo.depots[l.depot].name}@${fmt(l.at)}`).join(' ')} spare ${ledger.spare} undelivered ${deliveries.filter(d => !d.done).map(d => `${topo.depots[d.depot].name}@${fmt(d.before)}`).join(' ')} exits ${ledger.exits} returns ${ledger.returns}`);
   return { blocks, issues, ledger };
 }
 

@@ -19,7 +19,7 @@ mkdirSync(out, { recursive: true });
 execFileSync('git', ['check-ignore', out], { stdio: 'pipe' });
 // Validate all sources before writing any clips.
 const sources = [...RECORDING_SOURCES, ...VOICE_SOURCES].map(source => {
-  const dated = 'recordedDate' in source && source.recordedDate
+  const dated = 'recordedDate' in source && typeof source.recordedDate === 'string'
     ? join(sourceRoot, source.recordedDate.slice(5), source.filename) : undefined;
   const path = [sourcePaths[source.id] && resolve(sourcePaths[source.id]), join(sourceRoot, source.filename), dated].find(p => p && existsSync(p));
   if (!path) throw new Error(`Missing source: ${source.filename}`);
