@@ -117,7 +117,11 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
    * runs on or turns. An added train turns at an intermediate station, own tracks or not, within D47's
    * limit (applyOverlay turnWait, validatePlan LAYOVER_LONG). */
   const waitLimit = (st: number, turn: boolean, at: number, car?: GenTrip) => !turn ? THROUGH_WAIT
-    : lineEnd(st) || ownTracks(st) && !addedTrip(car) ? lineEndStand(st, at) : minTurn(st) + INTERMEDIATE_WAIT;
+    : lineEnd(st) ? lineEndStand(st, at)
+    // a car brought to an intermediate station's own turnback tracks for a departure (`car` unset) waits there for its
+    // slot, up to MAX_LAYOVER: a peak stream leaves no gap to run it in just before (D210)
+    : ownTracks(st) && !addedTrip(car) ? (car ? lineEndStand(st, at) : Math.max(MAX_LAYOVER, lineEndStand(st, at)))
+    : minTurn(st) + INTERMEDIATE_WAIT;
   const openers = openingAnchors(services);
   const index = new DepIndex(services);
   /** last service departure per station and direction */
