@@ -5419,3 +5419,15 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - D 文件里的 4 处模型名/分支名改成中性说法。
 - 公共文件：`src/sim/{worker,model}.ts`、`src/sim/duty/{moves,planner}.ts`、`src/ui/{app,store}.ts`、新增 `src/ui/crashDialog.ts`。
 - 验证：`tsc` 两个工程都 0 error；`tests/worker-crash.test.ts`（新）、`tests/rescue-duty.test.ts`、`tests/gamepad.test.ts` 共 39 项通过。崩溃对话框没在浏览器里实测。
+
+## D208 11号线首末班核对：末班不被截短、补南翔 05:45 始发（2026-11-18，用户要求核对 11/14 号线）
+- 核对方法：按方向和终点站比对 `FIRST_LAST`（`work/` 下的探针，不入库）。11号线工作日两种日型 `validate-plan` 均 0 问题。
+- 修复 1（根因，`duty/planner.ts` `keepsThrough`）：`depotReturns[].service` 保护通到终点的车，原先靠「前后两列的间隔」判断，**末班车后面没有车，没法量间隔，就不受保护**，被截短到罗山路进车场（末班嘉定北 22:10 本应 23:44 到迪士尼，实排 23:33 止于罗山路，罗山路—康新公路往迪士尼的末班早 8–10 分）。现在：到该终点的最后一列直接受保护。2号线 `validate-plan` 两种日型仍 0 问题。
+- 修复 2（数据，`line11/simulation.ts` `firstOrigins`）：官方表南翔 05:45 往迪士尼早于上一站陈翔公路 05:53，是另起的始发，补一条 NX→DSL 05:45 【假设】（来源按车场出车排，官方表没写是哪列车）。补后南翔—康新公路往迪士尼首班全部 +0（原 +11）。
+- 没解决（如实记录）：
+  - 花桥支线往迪士尼末班 21:53，官方花桥 22:00（早 7 分）；没有「末班始发」声明机制，是按间隔倒推出的。
+  - 花桥/安亭首班（05:37 / 05:35）和往安亭末班仍是 L11 数据文件里的【待定】。
+  - 14号线工作日排图 5 个问题（真新新村 07:27 往下行无车可供、两个热备未排、金桥定修段夜间库存 29 对 28），`tests/line14-timetable.test.ts` 工作日用例因此失败；至少在 D184（11-06）之后就存在，不是本次引入。早高峰 07:27 从封浜车辆段出车插不进 204 s 的间隔（trace：headway/waitP/core/outer 全卡），属于共用 duty 规划器的容量问题，未动。双休日 0 问题。
+  - `tests/official-headways.test.ts`（2号线）终点停站超限，非 11/14，未查。
+- 验证：11号线两日型 `validate-plan` 0 问题，`tests/line11.test.ts`、`tests/rescue-duty.test.ts` 34 项通过。
+- 文件：`src/sim/duty/planner.ts`、`src/data/lines/line11/simulation.ts`。

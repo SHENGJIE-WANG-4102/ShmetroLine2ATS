@@ -342,6 +342,9 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   const keepsThrough = (a: GenTrip) => {
     const end = requestedEnd.get(a.id)!.to;
     for (const rule of serviceRules) if (rule.terminal === end) {
+      // the last train that reaches a protected terminal is the published last service: nothing follows to measure a gap
+      const at = requestedEnd.get(a.id)!.at;
+      if (!endStream(a.dir, end).some(c => c.t !== a && c.t.to === end && c.at > at)) return true;
       const g = gapWithout(a, end);
       if (g && g.gap > Math.max(...g.span.slice(1).map((c, i) => c.at - g.span[i].at)) * rule.multiplier + 1e-3) return true;
     }
