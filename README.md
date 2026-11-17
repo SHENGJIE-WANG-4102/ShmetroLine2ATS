@@ -78,7 +78,7 @@ Topology, gradients, vehicle performance, demand and operating procedures contai
 
 Known open issues (November 2026):
 
-- Twelve Line 14 tests fail after the shared D178 planner: its three daytime siding hot spares get no stock. Line 14 work is paused; these must be fixed before it is merged.
+- Line 14 plans validate with no errors on both day types (D210); the two optional hot spares at 真新新村 and 蓝天路 (09:45) still do not fit. Line 11's peak intervals miss the official table: its diagram has one short working and symmetric directions (D211).
 - Extra trains leaving 龙阳路 depot still run about 87 s behind plan (within the 120 s limit); the end-change time on the depot exit is optimistic.
 - Terminal clearing of 60 s, boarding of 30 s after the 广兰路 end change and the 100 m look-ahead for the next route section are assumptions awaiting field measurement (D188).
 
