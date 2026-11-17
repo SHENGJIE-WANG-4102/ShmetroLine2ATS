@@ -7,7 +7,7 @@ import { installSelectLists } from './popup';
 import { datePick } from './timepick';
 import { Container, type Application, type Text } from 'pixi.js';
 import type { Topology } from '../sim/topology';
-import type { SimConfig } from '../sim/model';
+import type { SimConfig, TrainSnap } from '../sim/model';
 import type { Store, Selection } from './store';
 import { computeRegions, loadPref, savePref, UI_SCALES, type GraphMode, type Regions, type Rect } from './layout';
 import { Geometry, lineWindow, type GeomParams } from './geometry';
@@ -21,6 +21,7 @@ import { Audio } from './audio';
 import { initConfirm, toast } from './confirm';
 import { openYard } from './yardview';
 import { openHelp, helpSeen } from './help';
+import { GamepadService, openGamepadSettings } from './gamepadPanel';
 import { openReport } from './report';
 import { h, clear } from './dom';
 import { fmtTime, hex, C } from './theme';
@@ -166,6 +167,7 @@ export class App {
       recordedVolume: () => this.audio.recordedVolume,
       setRecordedVolume: (level) => this.audio.setRecordedVolume(level),
       help: () => openHelp(this.overlay),
+      gamepad: () => openGamepadSettings(this.overlay, this.pad),
     });
     this.side = new SidePanel(store, this.audio, panelHooks);
     this.tooltip = new Tooltip(store);
@@ -578,7 +580,7 @@ export class App {
     canvas.addEventListener('pointerleave', () => this.hover(null));
     window.addEventListener('keydown', (e) => this.onKey(e));
     window.addEventListener('keyup', e => { const key = e.key.toLowerCase(); if (key === 'f' || key === 'g') this.releaseAto(key); });
-    window.addEventListener('blur', () => this.releaseAto());
+    window.addEventListener('blur', () => { this.releaseAto(); this.pad.release(); });
   }
 
   private atoKeys = new Map<'f' | 'g', number>();
@@ -586,6 +588,61 @@ export class App {
     for (const [button, train] of this.atoKeys) if (!key || key === button) {
       this.store.command({ c: 'atoButton', train, button, down: false });
       this.atoKeys.delete(button);
+    }
+  }
+
+  // ---- driver actions, shared by keyboard and game controller
+
+  private atoPress(train: number, button: 'f' | 'g') {
+    this.atoKeys.set(button, train);
+    this.store.command({ c: 'atoButton', train, button, down: true });
+  }
+
+  private setReverser(train: number, position: -1 | 0 | 1) {
+    this.store.command({ c: 'reverser', train, position }).then(r => toast(r.msg, r.ok));
+  }
+
+  private pressDoor(train: number, side: 'L' | 'R') {
+    this.store.command({ c: 'door', train, side }).then((r) => toast(r.msg, r.ok));
+  }
+
+  /** one step of the master controller; out of EB only by moving the handle towards release or straight to N */
+  private moveHandle(tr: TrainSnap, step: 'up' | 'down' | 'neutral' | 'emergency') {
+    const n = step === 'up' ? Math.min(4, tr.notch + 1) : step === 'down' ? Math.max(-7, tr.notch - 1) : step === 'neutral' ? 0 : -8;
+    if (tr.notch === -8 && n > -8 && step !== 'neutral' && step !== 'up') return;
+    this.store.send({ type: 'drive', train: tr.id, notch: n });
+  }
+
+  private pad = new GamepadService();
+
+  /** called every frame: game controller → the same driver actions as the keyboard */
+  private pollPad() {
+    const events = this.modalOpen() ? this.pad.release() : this.pad.poll(performance.now());
+    if (!events.length) return;
+    const sel = this.store.selection;
+    const tr = sel?.kind === 'train' ? this.store.snap?.trains.find((t) => t.id === sel.id) : undefined;
+    for (const ev of events) {
+      if (ev.action === 'atoF' || ev.action === 'atoG') {
+        const button = ev.action === 'atoF' ? 'f' : 'g';
+        if (ev.phase === 'up') this.releaseAto(button);
+        else if (tr?.atoDriver) this.atoPress(tr.id, button);
+        continue;
+      }
+      if (ev.phase === 'up') continue;
+      if (ev.action === 'pause') { this.header.setPaused(!this.header.paused); continue; }
+      if (ev.action === 'cancel') { this.onKey(new KeyboardEvent('keydown', { key: 'Escape' })); continue; }
+      if (!tr || !isPlayerDriving(tr)) continue;
+      switch (ev.action) {
+        case 'notchUp': this.moveHandle(tr, 'up'); break;
+        case 'notchDown': this.moveHandle(tr, 'down'); break;
+        case 'neutral': this.moveHandle(tr, 'neutral'); break;
+        case 'emergency': this.moveHandle(tr, 'emergency'); break;
+        case 'doorL': this.pressDoor(tr.id, 'L'); break;
+        case 'doorR': this.pressDoor(tr.id, 'R'); break;
+        case 'reverseBack': this.setReverser(tr.id, -1); break;
+        case 'reverseNeutral': this.setReverser(tr.id, 0); break;
+        case 'reverseFwd': this.setReverser(tr.id, 1); break;
+      }
     }
   }
 
@@ -606,38 +663,29 @@ export class App {
     const key = e.key.toLowerCase();
     if (tr?.atoDriver && (key === 'f' || key === 'g')) {
       e.preventDefault();
-      if (!e.repeat) {
-        this.atoKeys.set(key, tr.id);
-        this.store.command({ c: 'atoButton', train: tr.id, button: key, down: true });
-      }
+      if (!e.repeat) this.atoPress(tr.id, key);
       return;
     }
     if (tr && isPlayerDriving(tr)) {
-      let n: number | null = null;
       const k = e.key.toLowerCase();
       if (['j', 'k', 'l'].includes(k) && !e.repeat) {
         e.preventDefault();
-        this.store.command({ c: 'reverser', train: tr.id, position: k === 'j' ? -1 : k === 'k' ? 0 : 1 }).then(r => toast(r.msg, r.ok));
+        this.setReverser(tr.id, k === 'j' ? -1 : k === 'k' ? 0 : 1);
         return;
       }
       // single master controller, JRETS layout: Z power / release, Q brake, S neutral, E emergency
       const up = e.key === 'ArrowUp' || k === 'z';
-      if (up) n = Math.min(4, tr.notch + 1);
-      else if (e.key === 'ArrowDown' || k === 'q') n = Math.max(-7, tr.notch - 1);
-      else if (k === 's') n = 0;
-      else if (k === 'e') n = -8;
+      const step = up ? 'up' : e.key === 'ArrowDown' || k === 'q' ? 'down' : k === 's' ? 'neutral' : k === 'e' ? 'emergency' : null;
       // door buttons (用户 2026-11-16): Y left, U right; the same side again closes
       if ((k === 'y' || k === 'u') && !e.repeat) {
         e.preventDefault();
-        this.store.command({ c: 'door', train: tr.id, side: k === 'y' ? 'L' : 'R' }).then((r) => toast(r.msg, r.ok));
+        this.pressDoor(tr.id, k === 'y' ? 'L' : 'R');
         return;
       }
-      if (n !== null) {
+      if (step) {
         e.preventDefault();
         if (e.repeat && k !== 'z' && k !== 'q' && !e.key.startsWith('Arrow')) return;
-        // out of EB only by moving the handle towards release or straight to N
-        if (tr.notch === -8 && n > -8 && k !== 's' && !up) return;
-        this.store.send({ type: 'drive', train: tr.id, notch: n });
+        this.moveHandle(tr, step);
         return;
       }
     }
@@ -734,6 +782,7 @@ export class App {
 
   private frame() {
     const now = performance.now();
+    this.pollPad();
     this.store.flushSnap();
     const snap = this.store.snap;
     if (snap) {

@@ -32,6 +32,7 @@ export interface HeaderHooks {
   recordedVolume(): RecordedVolume;
   setRecordedVolume(level: RecordedVolume): void;
   help(): void;
+  gamepad(): void;
 }
 
 export class Header {
@@ -151,6 +152,7 @@ export class Header {
       item('运营日 / 重新开始…', close(() => this.hooks.restart())),
       item('诊断导出', close(() => this.store.send({ type: 'diagnostics' })), {}),
       item('上一运营日诊断导出', close(() => {void this.store.exportPreviousDiagnostics();})),
+      item('手柄设置…', close(() => this.hooks.gamepad())),
       item('帮助', close(() => this.hooks.help()), { key: 'F1' }),
     );
   }

@@ -5398,3 +5398,13 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - 站台对标特写的编组、车长、停车牌数字取线路数据（`LINE_INFO.cars`、`trainLength`）：11号线 6 节 140 m，停车牌写 6；2号线仍 8 节 186 m。随机车门/车辆故障的车号也按编组抽（11号线不再出「第8车」）。
 - 公共文件：`src/data/types.ts`、`src/data/current.ts`、`src/sim/{onboard,ats,movement,dmi,model,vehicle}.ts`、`src/ui/{dmi,dmiTeal,departCue,cmdpanel,trackview,app,help,stopview}.ts`、`src/styles.css`。
 - 验证：11号线工作日全天（无故障，种子 5）改前改后逐小时最大晚点完全一致，462 趟载客全部跑完、0 违例；07:00 在线 63 列全部 AM。带随机故障（种子 2783861847）两边都是 15:25 ZC2 故障造成的大晚点（改前就有），车门故障车号变了之后随机序列分叉，数字略有出入。浏览器实测：接管 ATO 驾驶，U 开关右门、Y 开关左门，出发 YES 后按钮闪，点按钮/F+G 后常亮发车。
+
+## D206 手柄支持：可扫描绑定、组合键（2026-11-17，用户决定）
+- 前端功能，不动 `src/sim`。Gamepad API 每帧轮询，取第一个已连接手柄；窗口失焦、手柄断开、弹窗打开时释放所有按住的动作（含 ATO F/G）。
+- 动作与键盘同一套代码：`app.ts` 的 `moveHandle`、`pressDoor`、`setReverser`、`atoPress` 键盘和手柄共用；驾驶操作仍走 `store.send({type:'drive'})` / `store.command`，进 inputLog，诊断可回放。退出紧急制动只许往缓解或直接回 N 的规则不变。
+- 设置页（设置 → 手柄设置…）：点「按键设定」后在手柄上按键/推摇杆即绑定，不用预先知道按键编号。绑定按手柄 id 存 localStorage（同一手柄的 XInput/DInput 模式编号不同，分开存）。只有报告 standard 布局的手柄有默认设置，其他手柄从空白开始。按键已被别的动作占用时移过来并提示。
+- 组合键（用户选 A）：扫描时按住几个键再全部松开，记录按住的集合（最多 3 个）。组合键完成时触发，并屏蔽用同一输入单独绑定的动作；小组合被大组合包含时屏蔽小的。任何组合键成员单独按下时，松开才触发，且这次按住期间没被组合用过才触发（类似 shift 键）；不属于任何组合的键仍按下即触发。先按修饰键再按第二个键。
+- 默认布局（standard）：摇杆/十字键上下 = 加减一级；B = 零位；LT+RT = 紧急制动；LB/RB = 左/右门；十字键左右 = 方向手柄 J/L，L3 = K；X/Y = ATO F/G（按住）；Start = 暂停；Back = Esc。
+- 【假设】Vader 5 Pro 的 C、Z、背键在 XInput 模式下浏览器是否可见未实测；扫描支持 17 以上的按键编号。
+- 公共文件：`src/ui/{app,header}.ts`；新增 `src/ui/gamepad.ts`（纯映射）、`src/ui/gamepadPanel.ts`（轮询与设置页）、`tests/gamepad.test.ts`。
+- 验证：`tsc` 0 error；`tests/gamepad.test.ts` 15 项通过；`vite build` 通过。真机手柄实测待用户。
