@@ -4,7 +4,7 @@
 
 A TypeScript/Vite simulation of the Line 2 OCC overview, station interlocking and train operation. The Simplified Chinese interface covers 31 stations from 蟠祥路·国家会计学院 to 浦东1号2号航站楼, with a browser version and a Tauri desktop application.
 
-Line 2 is the default and only released line. Development builds also offer Line 14 (fully automatic UTO operation) and a fictional test line, selected with `?line=14` / `?line=test` in the browser or `ATS_LINE` / `--line` for Node scripts. Line-specific data lives in `src/data/lines/<line>/`; simulation and UI code are shared (D140).
+Line 2 is the default and the only finished line. Line 14 (fully automatic UTO operation) and Line 11 (driver-operated ATO, Y-shaped branch) are also selectable but still in progress, and development builds add two fictional test lines. Pick one with `?line=14` / `?line=11` / `?line=test` / `?line=testbranch` in the browser or `ATS_LINE` / `--line` for Node scripts. Line-specific data lives in `src/data/lines/<line>/`; simulation and UI code are shared (D140).
 
 ## Run
 
@@ -44,15 +44,17 @@ powershell -ExecutionPolicy Bypass -File scripts/app-shortcut.ps1
 | F1 / M | Help / application sound toggle |
 | Z or ↑ / Q or ↓ | More traction or release brake / more brake or reduce traction |
 | S / E | Neutral handle / emergency brake |
-| Y / U | Right / left doors; press again to close |
+| Y / U | Left / right doors; press again to close |
 | L / K / J | Reverser forward / neutral / reverse, only at a standstill |
 | F + G | Hold both ATO-start buttons once the taken-over AM train is ready |
+
+Game controllers work too (Xbox layout by default): open 设置 → 手柄设置…, click 按键设定 next to an action and press the button, push the stick, or hold a combination such as LB + D-pad up and release. Bindings are stored per controller in the browser. A button that is also part of a combination fires on release, and only if no combination used it meanwhile (D206).
 
 Early ATO-start presses do not latch. CM/RM operation limits simulation speed to 5×. CM door enable follows the platform side and stopping window; RM uses on-sight driving and station-staff PSD procedures. The help pages explain command conditions and fault recovery.
 
 ## Diagnostics and local sound
 
-Dispatcher commands and driving inputs are logged for diagnostic replay. Checkpoints and continuous operating-day carry preserve the physical world across midnight; diagnostic exports are preferable to screenshots alone when reporting a stuck train.
+Dispatcher commands and driving inputs are logged for diagnostic replay. Checkpoints and continuous operating-day carry preserve the physical world across midnight; diagnostic exports are preferable to screenshots alone when reporting a stuck train. If the simulation worker throws, the screen shows a dialog that cannot be dismissed, with a diagnostics export and a reload button (D207).
 
 Recorded announcements, door motion, warning tones and ambience are generated from local sources. Audio files are excluded from Git: derived clips belong in `public/sounds/`, originals and private analysis in ignored `work/`. Passenger transcripts are not committed. Analysis reads files without playing or uploading them and does not download speech models automatically.
 
@@ -87,11 +89,11 @@ The [bottom-up timing analysis](docs/field/bottom-up-runtime-2026-10.md) has com
 ## Focused checks
 
 ```powershell
-npx tsc --noEmit
+npm run typecheck   # app and scripts/ projects
 npx vitest run tests/driver.test.ts tests/dmi.test.ts tests/stopview.test.ts
 ```
 
-Run the relevant test files for a change. Timetable edits additionally need both day-type plan validators, official first/last checks and the Gaode count comparison. See [AGENTS.md](AGENTS.md) for repository constraints and verification rules.
+Run the relevant test files for a change. Timetable edits additionally need both day-type plan validators, official first/last checks and the Gaode count comparison. See [CLAUDE.md](CLAUDE.md) for how work is split and reviewed, and [AGENTS.md](AGENTS.md) for the executor's repository constraints and verification rules.
 
 ## License
 
