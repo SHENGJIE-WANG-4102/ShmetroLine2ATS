@@ -52,7 +52,7 @@ export function selectPisFirstLast(station: string, track: TrackDir, first?: Pis
   const rules = RULES.destinations;
   const service = rules.find(r => r.station === dest) ?? rules.find(r => r.station === RULES.defaults[track]);
   if (!service) return [];
-  const time = (s: string) => s ? `${String(Number(s.slice(0, 2)) % 24).padStart(2, '0')}${s.slice(2)}` : '--:--';
+  const time = (s?: string) => s ? `${String(Number(s.slice(0, 2)) % 24).padStart(2, '0')}${s.slice(2)}` : '--:--';
   const item = (rule: typeof service): PisFirstLast => ({
     destination: STATIONS.find(s => s.id === rule.station)!.name,
     first: time(row[rule.first]), last: time(row[rule.last]),
