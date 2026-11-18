@@ -12,9 +12,9 @@ const H = (h: number, m = 0) => h * 3600 + m * 60;
  * 小交路写进 pattern，按 terminals.routes 的名字生成；排图主体的 core 取南翔—罗山路。 */
 const templates: Record<string, Template> = {
   opening: { id: 'opening', name: '早间过渡', desc: '嘉定北/花桥两条支线往迪士尼，逐渐接近高峰【假设】', pattern: ['big', 'branch'], headway: 600 },
-  morning: { id: 'morning', name: '工作日早高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路小交路，参考站约2分30秒', pattern: ['big', 'branch', 'shortNX', 'shortHQ'], headway: 150, peak: true },
+  morning: { id: 'morning', name: '工作日早高峰', desc: '嘉定北/花桥全程 + 南翔—罗山路小交路 + 花桥—罗山路（罗山路再出库一趟往迪士尼），参考站约2分30秒', pattern: ['big', 'branch', 'shortNX', 'relayHQ'], headway: 150, peak: true },
   offpeak: { id: 'offpeak', name: '工作日平峰', desc: '嘉定北/花桥全程，主干约6分钟、支线约12分钟', pattern: ['big', 'branch'], headway: 360 },
-  evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路小交路，参考站约3分钟', pattern: ['big', 'branch', 'shortNX', 'shortHQ', 'big', 'branch'], headway: 180, peak: true },
+  evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路（两趟都在罗山路再出库一趟往迪士尼），参考站约3分钟', pattern: ['big', 'branch', 'relayNX', 'relayHQ', 'big', 'branch'], headway: 180, peak: true },
   weekend: { id: 'weekend', name: '双休日日间', desc: '嘉定北/花桥全程，主干约5分钟、支线约10分钟', pattern: ['big', 'branch'], headway: 300, peak: true },
   closing: { id: 'closing', name: '夜间过渡', desc: '全程车，至末班逐渐放疏【假设】', pattern: ['big', 'branch'], headway: 600 },
   late: { id: 'late', name: '末班前', desc: '全程车；每三班嘉定北车有一班只到三林东，进浦三路中间线过夜（夜间特殊交路）【假设】', pattern: ['big', 'branch', 'night', 'branch', 'big', 'branch'], headway: 600 },
@@ -29,9 +29,9 @@ const dayPeriods: Record<'weekday' | 'weekend', Period[]> = {
     { from: H(9, 45), to: H(9, 55), template: 'offpeak', label: '早高峰退峰', headway: 200, headwayTo: 360 },
     { from: H(9, 55), to: H(14, 10), template: 'offpeak', label: '平峰' },
     { from: H(14, 10), to: H(15, 30), template: 'offpeak', label: '晚高峰前升峰', headway: 360, headwayTo: 200 },
-    { from: H(15, 30), to: H(19, 30), template: 'evening', label: '晚高峰' },
+    { from: H(15, 30), to: H(19, 15), template: 'evening', label: '晚高峰' },
     // 晚间 21:33 起东方体育中心约 3 分、22:00 后约 4～5 分一班（折算到南翔提前 43 分）。
-    { from: H(19, 30), to: H(20, 45), template: 'closing', label: '夜间过渡', headway: 190, headwayTo: 230 },
+    { from: H(19, 15), to: H(20, 45), template: 'closing', label: '夜间过渡', headway: 190, headwayTo: 230 },
     { from: H(20, 45), to: H(21, 30), template: 'closing', label: '夜间过渡', headway: 230, headwayTo: 255 },
     { from: H(21, 30), to: H(24), template: 'late', label: '末班前', headway: 255, headwayTo: 300 },
   ],
@@ -133,8 +133,12 @@ export const LINE11_SIMULATION: SimulationData = {
         branch: ['HQ', 'DSL'],       // 花桥—迪士尼（白天到花桥）
         shortNX: ['NX', 'LSH'],      // 南翔—罗山路小交路（主线短交路）
         shortHQ: ['HQ', 'LSH'],      // 花桥—罗山路小交路（支线短交路）
+        relayNX: ['NX', 'LSH'],      // 南翔—罗山路：在罗山路折返的同一槽里，罗山路出库一趟往迪士尼（relays）
+        relayHQ: ['HQ', 'LSH'],      // 花桥—罗山路，同上（早晚高峰都用）
         night: ['JDB', 'SLD'],       // 嘉定北—三林东夜间特殊交路，到后进浦三路中间线过夜
       },
+      // 罗山路出库往迪士尼的营业交路（D215）：这两条小交路在罗山路折返的同一槽里，罗山路再出库一趟往迪士尼
+      relays: { relayNX: 'DSL', relayHQ: 'DSL' },
       // 排图主体仍只认一种小交路 core，取南翔—罗山路（与 shortNX 同一条）。
       core: ['NX', 'LSH'],
       circulate: ['JDB', 'HQ', 'NX', 'SL', 'LSH', 'DSL'],
