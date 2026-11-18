@@ -14,7 +14,7 @@ const templates: Record<string, Template> = {
   opening: { id: 'opening', name: '早间过渡', desc: '嘉定北/花桥两条支线往迪士尼，逐渐接近高峰【假设】', pattern: ['big', 'branch'], headway: 600 },
   morning: { id: 'morning', name: '工作日早高峰', desc: '嘉定北/花桥全程 + 南翔—罗山路小交路 + 花桥—罗山路（罗山路再出库一趟往迪士尼），嘉定北与花桥各约 9 班/小时，参考站约2分30秒', pattern: ['big','branch','big','shortNX','relayHQ','branch','big','shortNX'], headway: 150, peak: true },
   offpeak: { id: 'offpeak', name: '工作日平峰', desc: '嘉定北/花桥全程，主干约6分钟、支线约12分钟', pattern: ['big', 'branch'], headway: 360 },
-  evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路（两趟都在罗山路再出库一趟往迪士尼），参考站约3分钟', pattern: ['big', 'branch', 'relayNX', 'relayHQ', 'big', 'branch'], headway: 180, peak: true },
+  evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路（两趟都在罗山路再出库一趟往迪士尼），参考站约3分钟', pattern: ['branch','big','relayNX','branch','big','relayHQ','big','relayHQ','branch','big','relayHQ','big'], headway: 180, peak: true },
   weekend: { id: 'weekend', name: '双休日日间', desc: '嘉定北/花桥全程，主干约5分钟、支线约10分钟', pattern: ['big', 'branch'], headway: 300, peak: true },
   closing: { id: 'closing', name: '夜间过渡', desc: '全程车，至末班逐渐放疏【假设】', pattern: ['big', 'branch'], headway: 600 },
   late: { id: 'late', name: '末班前', desc: '全程车；每三班嘉定北车有一班只到三林东，进浦三路中间线过夜（夜间特殊交路）【假设】', pattern: ['big', 'branch', 'night', 'branch', 'big', 'branch'], headway: 600 },
@@ -38,7 +38,7 @@ const dayPeriods: Record<'weekday' | 'weekend', Period[]> = {
   weekend: [
     { from: H(4), to: H(7), template: 'opening', label: '早间过渡', headway: 650 },
     { from: H(7), to: H(21), template: 'weekend', label: '日间' },
-    { from: H(20, 45), to: H(24), template: 'closing', label: '夜间过渡', headway: 480, headwayTo: 720 },
+    { from: H(20, 45), to: H(24), template: 'closing', label: '夜间过渡', headway: 330, headwayTo: 360 },
   ],
 };
 /** 高峰波的起点按参考站（南翔下行、罗山路上行）起算【假设】。小交路到罗山路，单程约 1 小时，
@@ -66,6 +66,13 @@ const firstOrigins: SimulationData['timetable']['firstOrigins'] = [
   { dir: 'UP', from: 'LSH', to: 'HQ', dep: H(5, 25) },
   // 官方：安亭 05:35 往迪士尼是始发，车是前一晚往安亭末班（迪士尼 22:25 发、00:01 到）停在安亭中间存车线的那列
   { dir: 'DN', from: 'AT', to: 'DSL', dep: H(5, 35) },
+  // 高德桃浦新村/嘉定北上行 06:17 起约 8 分一班（只取班数）：罗山路 05:30–05:55 往两条支线各补三趟，约 10 分一班【假设】
+  { dir: 'UP', from: 'LSH', to: 'JDB', dep: H(5, 30) },
+  { dir: 'UP', from: 'LSH', to: 'HQ', dep: H(5, 35) },
+  { dir: 'UP', from: 'LSH', to: 'JDB', dep: H(5, 40) },
+  { dir: 'UP', from: 'LSH', to: 'HQ', dep: H(5, 45) },
+  { dir: 'UP', from: 'LSH', to: 'JDB', dep: H(5, 50) },
+  { dir: 'UP', from: 'LSH', to: 'HQ', dep: H(5, 55) },
 ];
 
 /** 用户决定（2026-11-14，L11-04）：首班前 4 趟巡道车，跑完在终点等，接那里的第一趟发车。
