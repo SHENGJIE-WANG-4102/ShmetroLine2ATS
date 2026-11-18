@@ -215,7 +215,7 @@ describe('line 11 branch, layout and plan', () => {
     const patrols = sim.plan.blocks.filter(block => sim.plan.trips[block.trips[0]].patrol);
     expect(patrols.map(block => block.trips.filter(id => sim.plan.trips[id].patrol)
       .map(id => STATIONS[sim.plan.trips[id].from].id).concat(STATIONS[sim.plan.trips[block.trips.find(id => !sim.plan.trips[id].patrol)!].from].id)).sort())
-      .toEqual([['JDB', 'DSL'], ['LSH', 'DSL', 'JDB'], ['SSC', 'HQ'], ['SSC', 'JDC']].sort());
+      .toEqual([['JDB', 'DSL'], ['LSH', 'DSL', 'JDB'], ['SSC', 'HQ'], ['SSC', 'NX']].sort());
     for (const block of patrols) {
       expect(block.start.kind).toBe('depot');
       const legs = block.trips.map(id => sim.plan.trips[id]).filter(trip => trip.patrol);
