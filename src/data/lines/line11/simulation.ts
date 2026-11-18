@@ -5,38 +5,48 @@ import { LINE14_SIMULATION } from '../line14/simulation';
 
 const H = (h: number, m = 0) => h * 3600 + m * 60;
 
-/** 分时段开行花样。按 reference/line11/official-timetable.md 的逻辑比例取整：
- * - 平峰/双休日：主干每 6/5 分钟一班，两条支线各 12/10 分钟；
- * - 工作日高峰：嘉定北、花桥两条支线都跑迪士尼，南翔始发的小交路到三林、罗山路折返；
- *   参考站（曹杨路）间隔 2.5 分钟，对应官方南翔—三林 2 分钟、罗山路—迪士尼 6 分钟、
- *   支线 5～10 分钟的近似值。
- * 小交路只写进 pattern；排图主体仍只认 terminals.core 一种小交路（L11-10 未做部分），
- * shortLSH 是额外的命名交路，走 namedRoute 生成。 */
+/** 分时段开行花样。交路见 docs/design-decisions.md D213（用户 2026-11-18）：
+ * - 平峰/双休日：嘉定北、花桥两条支线全程车，主干每 6/5 分钟一班，两条支线各 12/10 分钟；
+ * - 工作日高峰：再加南翔—罗山路、花桥—罗山路两种小交路；参考站（南翔）早 2 分 30 秒、晚 3 分钟；
+ * - 夜间（21:30 起）：每 6 班里一班嘉定北车只到三林东，进浦三路中间线过夜。
+ * 小交路写进 pattern，按 terminals.routes 的名字生成；排图主体的 core 取南翔—罗山路。 */
 const templates: Record<string, Template> = {
   opening: { id: 'opening', name: '早间过渡', desc: '嘉定北/花桥两条支线往迪士尼，逐渐接近高峰【假设】', pattern: ['big', 'branch'], headway: 600 },
-  morning: { id: 'morning', name: '工作日早高峰', desc: '嘉定北/花桥全程 + 南翔—三林小交路，参考站约2分30秒', pattern: ['big', 'branch', 'shortSL'], headway: 150, peak: true },
+  morning: { id: 'morning', name: '工作日早高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路小交路，参考站约2分30秒', pattern: ['big', 'branch', 'shortNX', 'shortHQ'], headway: 150, peak: true },
   offpeak: { id: 'offpeak', name: '工作日平峰', desc: '嘉定北/花桥全程，主干约6分钟、支线约12分钟', pattern: ['big', 'branch'], headway: 360 },
-  evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔—罗山路小交路，参考站约2分30秒', pattern: ['big', 'branch', 'shortLSH'], headway: 180, peak: true },
+  evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路小交路，参考站约3分钟', pattern: ['big', 'branch', 'shortNX', 'shortHQ', 'big', 'branch'], headway: 180, peak: true },
   weekend: { id: 'weekend', name: '双休日日间', desc: '嘉定北/花桥全程，主干约5分钟、支线约10分钟', pattern: ['big', 'branch'], headway: 300, peak: true },
   closing: { id: 'closing', name: '夜间过渡', desc: '全程车，至末班逐渐放疏【假设】', pattern: ['big', 'branch'], headway: 600 },
+  late: { id: 'late', name: '末班前', desc: '全程车；每三班嘉定北车有一班只到三林东，进浦三路中间线过夜（夜间特殊交路）【假设】', pattern: ['big', 'branch', 'night', 'branch', 'big', 'branch'], headway: 600 },
 };
 const dayPeriods: Record<'weekday' | 'weekend', Period[]> = {
   weekday: [
     // 早间过渡保持 10 分钟一班，让花桥第二班正好落在官方首班 05:37（不是 05:33）。
     { from: H(4), to: H(7), template: 'opening', label: '早间过渡', headway: 600 },
-    { from: H(7), to: H(9, 30), template: 'morning', label: '早高峰' },
-    // 高德截图（2026-11-18）：退峰约到 10:30 前后仍约 3 分钟一班，15 点起逐步加密；官方是区段平均值，故用渐变而非一档 6 分钟。
-    { from: H(9, 30), to: H(10, 30), template: 'offpeak', label: '早高峰退峰', headway: 200, headwayTo: 360 },
-    { from: H(10, 30), to: H(14, 30), template: 'offpeak', label: '平峰' },
-    { from: H(14, 30), to: H(17, 30), template: 'offpeak', label: '晚高峰前升峰', headway: 360, headwayTo: 200 },
-    { from: H(17, 30), to: H(19, 30), template: 'evening', label: '晚高峰' },
-    { from: H(19, 30), to: H(24), template: 'closing', label: '夜间过渡', headway: 480, headwayTo: 720 },
+    { from: H(7), to: H(9, 45), template: 'morning', label: '早高峰' },
+    // 高德（2026-11-18）到站表：东方体育中心 10:27 前仍约 2～3 分钟一班，10:33 起 6 分钟；南翔到东方体育中心约 43 分钟，
+    // 折回南翔是 09:44 起退峰、09:50 已是 6 分。官方是区段平均值，故退峰、升峰用渐变，不用一档。
+    { from: H(9, 45), to: H(9, 55), template: 'offpeak', label: '早高峰退峰', headway: 200, headwayTo: 360 },
+    { from: H(9, 55), to: H(14, 10), template: 'offpeak', label: '平峰' },
+    { from: H(14, 10), to: H(15, 30), template: 'offpeak', label: '晚高峰前升峰', headway: 360, headwayTo: 200 },
+    { from: H(15, 30), to: H(19, 30), template: 'evening', label: '晚高峰' },
+    // 晚间 21:33 起东方体育中心约 3 分、22:00 后约 4～5 分一班（折算到南翔提前 43 分）。
+    { from: H(19, 30), to: H(20, 45), template: 'closing', label: '夜间过渡', headway: 190, headwayTo: 230 },
+    { from: H(20, 45), to: H(21, 30), template: 'closing', label: '夜间过渡', headway: 230, headwayTo: 255 },
+    { from: H(21, 30), to: H(24), template: 'late', label: '末班前', headway: 255, headwayTo: 300 },
   ],
   weekend: [
     { from: H(4), to: H(7), template: 'opening', label: '早间过渡', headway: 650 },
     { from: H(7), to: H(21), template: 'weekend', label: '日间' },
-    { from: H(21), to: H(24), template: 'closing', label: '夜间过渡', headway: 480, headwayTo: 720 },
+    { from: H(20, 45), to: H(24), template: 'closing', label: '夜间过渡', headway: 480, headwayTo: 720 },
   ],
+};
+/** 高峰波的起点按参考站（南翔下行、罗山路上行）起算【假设】。小交路到罗山路，单程约 1 小时，
+ * 默认的“核心区提前一整程”会把波排到首班车上（05:47 嘉定新城两车只隔 10 s），所以直接给起点：
+ * 早高峰 06:45/07:00，晚高峰 15:30；小交路的车头一进核心区就有车接，排图 0 问题、班数贴近高德。 */
+const weekdayPeaks: ServiceData['peaks'] = {
+  morning: { DN: H(6, 45), UP: H(7, 0) },
+  evening: { DN: H(15, 30), UP: H(15, 30) },
 };
 const service = (): ServiceData => ({
   peaks: {}, overrides: [], openingSupplements: [], lateHeadway: 600, standby: [],
@@ -109,7 +119,7 @@ export const LINE11_SIMULATION: SimulationData = {
     dayPeriods, shownPeriods: dayPeriods,
     dwellBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },
     runBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },
-    serviceData: { weekday: service(), weekend: service() },
+    serviceData: { weekday: { ...service(), peaks: weekdayPeaks }, weekend: service() },
     // 【假设】车库整备/出车窗口，不代表新增营业首班。
     opening: { outerAlternation: 0, stockUntil: H(12), redirectFrom: H(5), emptyFeedersFrom: H(20), feederUntil: H(26), stableUntil: H(10), dayStart: H(4), defaultStableDeparture: H(6) },
     outerBandMargin: 0,
@@ -119,11 +129,12 @@ export const LINE11_SIMULATION: SimulationData = {
       trunk: ['JDB', 'DSL'],
       routes: {
         branch: ['HQ', 'DSL'],       // 花桥—迪士尼（白天到花桥）
-        shortSL: ['NX', 'SL'],       // 南翔—三林小交路
-        shortLSH: ['NX', 'LSH'],     // 南翔—罗山路小交路
+        shortNX: ['NX', 'LSH'],      // 南翔—罗山路小交路（主线短交路）
+        shortHQ: ['HQ', 'LSH'],      // 花桥—罗山路小交路（支线短交路）
+        night: ['JDB', 'SLD'],       // 嘉定北—三林东夜间特殊交路，到后进浦三路中间线过夜
       },
-      // 排图主体仍只认一种小交路：选南翔—三林（L11-10 未做部分）。
-      core: ['NX', 'SL'],
+      // 排图主体仍只认一种小交路 core，取南翔—罗山路（与 shortNX 同一条）。
+      core: ['NX', 'LSH'],
       circulate: ['JDB', 'HQ', 'NX', 'SL', 'LSH', 'DSL'],
       depot: { JDB: 'CBL', HQ: 'SSC', NX: 'CBL', SL: 'CYL', LSH: 'CYL', DSL: 'CYL' },
       // 花桥/嘉定北/迪士尼各两条尾轨，三林中间折返线，罗山路两条尾轨。

@@ -880,6 +880,9 @@ export function layoutService(ctx: PlanContext) {
       // morning build-up do not insert another departure within 90 seconds.
       if (Math.abs(t - firstThrough) < 120) { idx++; t = nextSlot(t, 'UP'); continue; }
       const route = namedRoute(kind);
+      // A route that ends short of the westbound reference station (a night run that
+      // stays at its terminus) has no westbound counterpart: its slot is left empty.
+      if (route && !stationPath(route[1], route[0]).includes(UP_REF)) { idx++; t = nextSlot(t, 'UP'); continue; }
       if (route) {
         const stops = atReference('UP', route[1], route[0], UP_REF, t);
         if (!precedesLast('UP', stops)) break;

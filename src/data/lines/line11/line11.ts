@@ -234,7 +234,7 @@ const H = (h: number, m = 0) => h * 3600 + m * 60;
 /** 南翔、真如中间线停车的窗口（驻站热备 from–to；need 不用）【假设】。晚间 21 点前回段：
  * 之后夜间回段车要在南翔中间线折返。 */
 const OFF_PEAK_STORAGE = {
-  weekday: [{ from: H(9, 45), need: H(17), to: H(17) }, { from: H(19, 45), need: H(21), to: H(21) }],
+  weekday: [{ from: H(10), need: H(14), to: H(14) }],
   weekend: [{ from: H(6, 30), need: H(21, 30), to: H(21, 30) }],
 };
 export const OPERATIONS: CoreLineData['OPERATIONS'] = {
@@ -289,20 +289,18 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
     { depot: 'CYL', dir: 'DN', station: 'LSH', service: { terminal: 'DSL', intervalMultiplier: 1 } },
     { depot: 'CYL', dir: 'UP', station: 'LSH', service: { terminal: 'DSL', intervalMultiplier: 1 } },
   ],
-  overnightStabling: [],
+  // 夜间特殊交路（嘉定北—三林东）的车到三林东后进浦三路中间线过夜，次日从那里上行出车【假设】。
+  overnightStabling: [
+    { station: 'PSR', count: 1, departure: 'UP' as const, kind: 'feeder' as const, preserveService: true, nightAfter: H(22, 30) },
+  ],
   // 用户决定（2026-11-14）：南翔、真如中间线除高峰期都停一列车。按驻站热备排：平峰前从
   // 赛车场车辆段（备选城北路）开过去，高峰前回段。窗口钟点按 simulation 的高峰时段留
   // 15–30 分钟余量【假设】；双休日没有高峰，整个日间都停。
   hotStandby: [
     ...(['NX', 'ZR'] as const).map(station => ({
       station, track: 'turnback' as const, berth: 0, depot: 'SSC', incoming: 'DN' as const,
-      alternatives: [{ depot: 'CBL', incoming: 'DN' as const }], windows: OFF_PEAK_STORAGE,
+      alternatives: [{ depot: 'CBL', incoming: 'DN' as const }, { depot: 'CYL', incoming: 'UP' as const }], windows: OFF_PEAK_STORAGE,
     })),
-    // 用户决定（2026-11-14）：三林中间折返线停早高峰跑完的南翔—三林小交路车，停到晚高峰上线。
-    // 三林晚上没有始发，它在中间线换端停着，16:30 起空车上行到南翔，接晚高峰南翔—罗山路
-    // 小交路【假设：去南翔接】。工作日才有三林小交路。
-    { station: 'SL', track: 'turnback' as const, berth: 0, serves: 'NX',
-      windows: { weekday: [{ from: H(9), need: H(16, 30), to: H(17, 30) }], weekend: [] } },
   ],
   platformPassKmh: 45,
   platformStopKmh: Infinity,

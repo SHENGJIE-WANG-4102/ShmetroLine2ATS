@@ -195,7 +195,7 @@
 - 40 站英文站名写进 `STATION_EN`，用上海地铁官方译名，按英文维基 Line 11 (Shanghai Metro) 站表逐个核对。原来是空表，PIS「开往 To」、车站名牌下面都没有英文。
 - 特殊写法：上海汽车城 Shanghai Automobile City、上海赛车场 Shanghai Circuit、嘉定新城 Jiading Xincheng、上海西站 Shanghai West Railway Station、交通大学 Jiao Tong University、上海游泳馆 Shanghai Swimming Center、东方体育中心 Oriental Sports Center、迪士尼 Disney Resort。
 
-## L11-18 运营前巡道车；三林中间线停早高峰车到晚高峰（2026-11-14）
+## L11-18 运营前巡道车；三林中间线停早高峰车到晚高峰（2026-11-14；三林存车一项已被 D213 取消）
 
 - 巡道车（用户决定，L11-04 的实现）：新数据 `timetable.patrols`（出车车场、途经站），排图时生成空车车次，接在终点站的第一趟发车前面，从车场出车。
   - 4 趟：

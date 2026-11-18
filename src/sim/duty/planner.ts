@@ -554,11 +554,11 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   };
   // drafted returns (fixed late runs) are in the yards' counts
   for (const depot of input.fixedEnds.values()) returned.set(depot, (returned.get(depot) ?? 0) + 1);
-  // line storage first: its latest reachable cars after its clock
+  // line storage first: after its clock, the cars that end nearest to it, the latest of those first
   for (const yard of yards.filter(y => y.depot < 0)) {
     while (due(yard) > 0) {
       const car = spare.filter(c => c.trip.next === undefined && !endOf.has(c.trip.id) && arr(c.trip) + 60 >= (yard.after ?? -Infinity))
-        .sort((a, b) => arr(b.trip) - arr(a.trip)).find(c => home(c, yard));
+        .sort((a, b) => distanceTo(yard, a.station) - distanceTo(yard, b.station) || arr(b.trip) - arr(a.trip)).find(c => home(c, yard));
       if (!car) break;
       spare.splice(spare.indexOf(car), 1);
       returned.set(yard.id, (returned.get(yard.id) ?? 0) + 1);

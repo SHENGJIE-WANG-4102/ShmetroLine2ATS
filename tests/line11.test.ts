@@ -193,9 +193,13 @@ describe('line 11 branch, layout and plan', () => {
     expect(up.some(path => path.startsWith('DSL ') && path.endsWith(' HQ'))).toBe(true);
     // the short routes run in the weekday peaks only (official weekend table has no small route)
     if (dayType === 'weekday') {
-      expect(dn.some(path => path.startsWith('NX ') && path.endsWith(' SL'))).toBe(true);
-      expect(up.some(path => path.startsWith('SL ') && path.endsWith(' NX'))).toBe(true);
+      // 用户决定（2026-11-18）：高峰小交路是南翔—罗山路、花桥—罗山路；不再有南翔—三林小交路；夜间有嘉定北—三林东
       expect(dn.some(path => path.startsWith('NX ') && path.endsWith(' LSH'))).toBe(true);
+      expect(dn.some(path => path.startsWith('HQ ') && path.endsWith(' LSH'))).toBe(true);
+      expect(up.some(path => path.startsWith('LSH ') && path.endsWith(' NX'))).toBe(true);
+      expect(up.some(path => path.startsWith('LSH ') && path.endsWith(' HQ'))).toBe(true);
+      expect(dn.some(path => path.startsWith('NX ') && path.endsWith(' SL'))).toBe(false);
+      expect(dn.some(path => path.startsWith('JDB ') && path.endsWith(' SLD'))).toBe(true);
     }
     // every trip calls only at stations on its own way, and never repeats one
     for (const trip of sim.plan.trips.filter(trip => trip.revenue)) {
@@ -224,14 +228,12 @@ describe('line 11 branch, layout and plan', () => {
       expect(sim.plan.trips.filter(trip => trip.revenue && !trip.cancelled && trip.from === served.from && trip.dir === served.dir)
         .every(trip => trip.stops[0].dep >= served.stops[0].dep)).toBe(true);
     }
-    // 三林 keeps the last morning short-route car until it goes up to 南翔 for the evening peak
-    const stored = sim.plan.trips.filter(trip => trip.standby && trip.to === station('SL'));
-    expect(stored).toHaveLength(dayType === 'weekday' ? 1 : 0);
-    for (const trip of stored) {
-      const block = sim.plan.blocks[trip.block], next = sim.plan.trips[block.trips[block.trips.indexOf(trip.id) + 1]];
-      expect(trip.stops.at(-1)!.arr).toBeLessThan(10.5 * 3600);
-      expect([STATIONS[next.from].id, STATIONS[next.to].id, next.revenue]).toEqual(['SL', 'NX', false]);
-      expect(next.stops[0].dep).toBeGreaterThanOrEqual(16.5 * 3600);
-    }
+    // 浦三路中间线过夜一列：夜里最后一批到站的车空车进去，次日清晨空车出来（工作日是嘉定北—三林东夜间交路的车）
+    const PSR = station('PSR');
+    const into = sim.plan.trips.filter(trip => !trip.revenue && !trip.cancelled && trip.to === PSR && trip.stops[0].dep >= 22.5 * 3600);
+    const out = sim.plan.trips.filter(trip => !trip.revenue && !trip.cancelled && trip.from === PSR && trip.stops[0].dep < 6 * 3600);
+    expect(into).toHaveLength(1);
+    expect(out).toHaveLength(1);
+    if (dayType === 'weekday') expect(STATIONS[into[0].from].id).toBe('SLD');
   });
 });
