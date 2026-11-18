@@ -148,7 +148,7 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   sectionCruiseMinKmh: 12, sectionCoastMinKmh: 60, passRunMargin: .16, // 同2号线：通用ATO数值积分预算【假设】
   autoStartDelay: [1, 2], // 【假设】FAM自动发车确认延时
   atoDriverWork: { postLockExtraS: 0, turnbackExtraS: { rear: 0, front: 0 }, turnbackDoorCycles: { rear: 1, front: 1 }, legacyEndChangeS: 45 }, // 【假设】FAM不叠加司机作业；人工换端45秒
-  atoRandomOverrunProbability: .0002, // 【假设】每次进站万分之二，全年独立触发
+  atoRandomOverrunProbability: .00002, // 【假设】每次进站十万分之二（11 号线 8 小时已见 3 次，万分之二偏多，D217）
   // 所有秒数/概率均【假设】，流程依据用户提供的FAM接管口径，不是实线SOP。
   uto: { crewLabel: '随车人员', doorWarningS: 3, turnbackS: 15, wakeLeadS: 900,
     powerS: 20, pantographS: 15, selfTestS: 45, clearS: 30, washEvery: 4, washS: 180,
