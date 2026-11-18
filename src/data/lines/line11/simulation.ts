@@ -12,7 +12,7 @@ const H = (h: number, m = 0) => h * 3600 + m * 60;
  * 小交路写进 pattern，按 terminals.routes 的名字生成；排图主体的 core 取南翔—罗山路。 */
 const templates: Record<string, Template> = {
   opening: { id: 'opening', name: '早间过渡', desc: '嘉定北/花桥两条支线往迪士尼，逐渐接近高峰【假设】', pattern: ['big', 'branch'], headway: 600 },
-  morning: { id: 'morning', name: '工作日早高峰', desc: '嘉定北/花桥全程 + 南翔—罗山路小交路 + 花桥—罗山路（罗山路再出库一趟往迪士尼），参考站约2分30秒', pattern: ['big', 'branch', 'shortNX', 'relayHQ'], headway: 150, peak: true },
+  morning: { id: 'morning', name: '工作日早高峰', desc: '嘉定北/花桥全程 + 南翔—罗山路小交路 + 花桥—罗山路（罗山路再出库一趟往迪士尼），嘉定北与花桥各约 9 班/小时，参考站约2分30秒', pattern: ['big','branch','big','shortNX','relayHQ','branch','big','shortNX'], headway: 150, peak: true },
   offpeak: { id: 'offpeak', name: '工作日平峰', desc: '嘉定北/花桥全程，主干约6分钟、支线约12分钟', pattern: ['big', 'branch'], headway: 360 },
   evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路（两趟都在罗山路再出库一趟往迪士尼），参考站约3分钟', pattern: ['big', 'branch', 'relayNX', 'relayHQ', 'big', 'branch'], headway: 180, peak: true },
   weekend: { id: 'weekend', name: '双休日日间', desc: '嘉定北/花桥全程，主干约5分钟、支线约10分钟', pattern: ['big', 'branch'], headway: 300, peak: true },
