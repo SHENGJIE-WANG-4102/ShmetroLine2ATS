@@ -146,7 +146,9 @@ export const LINE11_SIMULATION: SimulationData = {
       maxPresent: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 3, DSL: 3 },
     },
     firstOrigins, patrols,
-    lastRuns: [{ dir: 'UP', from: 'DSL', to: 'AT', dep: H(22, 25) }], // 官方末班往安亭
+    lastRuns: [{ dir: 'UP', from: 'DSL', to: 'AT', dep: H(22, 25) }, { dir: 'DN', from: 'HQ', to: 'DSL', dep: H(22, 0) }],
+    // 官方末班往迪士尼一列，嘉定新城之后的分钟是花桥 22:00 那趟的（赛车场 22:19 → 嘉定新城 22:23，4 分钟）；嘉定北 22:10 那趟比它早一站间隔
+    columnOwners: [{ column: 'lastE', station: 'JDC', from: 'HQ' }],
     openingGuards: [], closingDepotMoves: [],
   },
 };

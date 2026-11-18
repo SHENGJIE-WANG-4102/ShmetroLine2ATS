@@ -275,6 +275,7 @@ export function officialTimingPoints(dir: TrackDir, from: number, to: number, or
     for (const st of sts) {
       const v = row(st)?.[key];
       if (!v || officialClock(v) < prev || st !== from && declared(st, v)) break;
+      if (st !== from && SIMULATION.timetable.columnOwners?.some(o => o.column === key && STATIONS[st]?.id === o.station && STATIONS[from]?.id !== o.from)) break;
       prev = officialClock(v);
       points.set(st, prev);
     }
@@ -814,6 +815,14 @@ export function layoutService(ctx: PlanContext) {
       t = nextSlot(t, 'DN');
     }
     lastAnchors.push(addTrip('DN', 'big', W, E, lastCurves.DN, true));
+    // a published last train of a named route replaces that route's last stream trip (one route headway before it at most)
+    for (const run of lastRuns) if (run.dir === 'DN') {
+      for (let k = trips.length - 1; k >= 0; k--) {
+        const t = trips[k];
+        if (t.dir === 'DN' && t.from === run.from && t.to === run.to && t.stops[0].dep < run.stops[0].dep && t.stops[0].dep >= run.stops[0].dep - 600) trips.splice(k, 1);
+      }
+      addTrip('DN', 'big', run.from, run.to, run.stops, true);
+    }
   }
   // The closing stream is counted backwards from its official final origin.
   // Only feasible slots are laid out, so no surplus first late train exists.
