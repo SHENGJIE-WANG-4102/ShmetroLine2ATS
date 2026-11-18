@@ -629,6 +629,15 @@ export function layoutService(ctx: PlanContext) {
   const [W, E] = SIMULATION.timetable.terminals.trunk?.map(stationIndex) ?? [0, nS - 1];
   /** a pattern entry that names a route of the line's data: its ends, DN-ward */
   const namedRoute = (kind: string) => SIMULATION.timetable.terminals.routes?.[kind]?.map(stationIndex);
+  /** A named route stops with the published last train of its own terminal: its eastbound
+   * origin may not leave after that station's last eastbound departure, its westbound
+   * arrival may not come after its last westbound one (a minute of slack). Later slots
+   * of the pattern run the trunk route instead. */
+  const routeOpen = (dir: TrackDir, route: number[], stops: PlanStop[]) => {
+    const row = FIRST_LAST.find(r => r.station === STATIONS[route[0]]?.name);
+    const clock = row?.[dir === 'DN' ? 'lastE' : 'lastW'];
+    return !clock || (dir === 'DN' ? stops[0].dep : stops.at(-1)!.arr) <= officialClock(clock) + 60;
+  };
   const DN_REF = stationIndex(SIMULATION.timetable.reference?.DN) >= 0 ? stationIndex(SIMULATION.timetable.reference?.DN) : CORE_W;
   const UP_REF = stationIndex(SIMULATION.timetable.reference?.UP) >= 0 ? stationIndex(SIMULATION.timetable.reference?.UP) : CORE_E;
 
@@ -770,7 +779,8 @@ export function layoutService(ctx: PlanContext) {
       // section still has one departure every 5 minutes (D73).
       if (tpl.openingAlternation && t < OPENING.outerAlternation) kind = idx % 2 === 0 ? 'big' : 'small';
       if (guard === 0) kind = 'big'; // preserve the published PXL 05:25 opener
-      const route = namedRoute(kind);
+      let route = namedRoute(kind);
+      if (route && !routeOpen('DN', route, atReference('DN', route[0], route[1], DN_REF, t))) { route = undefined; kind = 'big'; }
       if (route) {
         const stops = atReference('DN', route[0], route[1], DN_REF, t);
         if (!precedesLast('DN', stops)) break;
@@ -879,7 +889,8 @@ export function layoutService(ctx: PlanContext) {
       // The explicit 06:00 airport train occupies its full path. During
       // morning build-up do not insert another departure within 90 seconds.
       if (Math.abs(t - firstThrough) < 120) { idx++; t = nextSlot(t, 'UP'); continue; }
-      const route = namedRoute(kind);
+      let route = namedRoute(kind);
+      if (route && stationPath(route[1], route[0]).includes(UP_REF) && !routeOpen('UP', route, atReference('UP', route[1], route[0], UP_REF, t))) { route = undefined; kind = 'big'; }
       // A route that ends short of the westbound reference station (a night run that
       // stays at its terminus) has no westbound counterpart: its slot is left empty.
       if (route && !stationPath(route[1], route[0]).includes(UP_REF)) { idx++; t = nextSlot(t, 'UP'); continue; }

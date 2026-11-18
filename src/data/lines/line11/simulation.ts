@@ -64,6 +64,8 @@ const firstOrigins: SimulationData['timetable']['firstOrigins'] = [
   { dir: 'DN', from: 'JDC', to: 'DSL', dep: H(5, 45) },
   // 【假设】官方表南翔 05:45 往迪士尼早于上一站陈翔公路 05:53，是另起的始发；来源按车场出车排
   { dir: 'DN', from: 'NX', to: 'DSL', dep: H(5, 45) },
+  // 【假设】官方表嘉定新城往花桥首班 06:36 晚于马陆 06:28 以后才到，不是 05:20 那趟的延续；按嘉定新城另起的始发排
+  { dir: 'UP', from: 'JDC', to: 'HQ', dep: H(6, 36) },
 ];
 
 /** 用户决定（2026-11-14，L11-04）：首班前 4 趟巡道车，跑完在终点等，接那里的第一趟发车。
