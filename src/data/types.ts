@@ -434,6 +434,9 @@ export interface OfficialHeadway {
         string,
         number | readonly [number, number]
     ][];
+    /** sections (as named in `sections`) whose peak counts follow the Gaode arrival tables instead of the official
+     * average (用户决定 2026-11-18: 高峰以高德为主); the headway test leaves them to the line's own Gaode test */
+    byGaode?: [string, string][];
 }
 
 export interface FirstLastData {
