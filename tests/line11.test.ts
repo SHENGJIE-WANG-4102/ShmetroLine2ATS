@@ -228,6 +228,16 @@ describe('line 11 branch, layout and plan', () => {
       expect(sim.plan.trips.filter(trip => trip.revenue && !trip.cancelled && trip.from === served.from && trip.dir === served.dir)
         .every(trip => trip.stops[0].dep >= served.stops[0].dep)).toBe(true);
     }
+    // 官方首末班（D214）：往安亭末班迪士尼 22:25 发、00:01 到安亭；安亭 05:35 往迪士尼；往花桥首班罗山路 05:25；
+    // 往花桥末班 23:45 到花桥，之后不再有开往花桥的车
+    const revenue = sim.plan.trips.filter(trip => trip.revenue && !trip.cancelled);
+    const clock = (h: number, m: number) => h * 3600 + m * 60;
+    const toAT = revenue.filter(trip => trip.dir === 'UP' && STATIONS[trip.to].id === 'AT');
+    expect(toAT.map(trip => [STATIONS[trip.from].id, trip.stops[0].dep, trip.stops.at(-1)!.arr])).toEqual([['DSL', clock(22, 25), clock(24, 1)]]);
+    expect(revenue.some(trip => trip.dir === 'DN' && STATIONS[trip.from].id === 'AT' && STATIONS[trip.to].id === 'DSL' && trip.stops[0].dep === clock(5, 35))).toBe(true);
+    const toHQ = revenue.filter(trip => trip.dir === 'UP' && STATIONS[trip.to].id === 'HQ');
+    expect(Math.max(...toHQ.map(trip => trip.stops.at(-1)!.arr))).toBeLessThanOrEqual(clock(23, 45) + 60);
+    expect(Math.min(...toHQ.map(trip => trip.stops[0].dep))).toBe(clock(5, 25));
     // 浦三路中间线过夜一列：夜里最后一批到站的车空车进去，次日清晨空车出来（工作日是嘉定北—三林东夜间交路的车）
     const PSR = station('PSR');
     const into = sim.plan.trips.filter(trip => !trip.revenue && !trip.cancelled && trip.to === PSR && trip.stops[0].dep >= 22.5 * 3600);

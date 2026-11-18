@@ -251,7 +251,7 @@ export function overnightPlaces(topo: Topology) {
   });
 }
 
-const FIRST_LAST_COLUMNS = [['firstE', 'DN'], ['firstW', 'UP'], ['lastE', 'DN'], ['lastW', 'UP'], ['lastG', 'DN']] as const;
+const FIRST_LAST_COLUMNS = [['firstE', 'DN'], ['firstW', 'UP'], ['lastE', 'DN'], ['lastW', 'UP'], ['lastG', 'DN'], ['firstW2', 'UP'], ['lastW2', 'UP'], ['lastW3', 'UP']] as const;
 const officialClock = (s: string) => { const [h, m] = s.split(':').map(Number); return h * 3600 + m * 60; };
 
 /** D162 用户决定: a published first / last train keeps the official departure
@@ -670,13 +670,17 @@ export function layoutService(ctx: PlanContext) {
   const lastAnchors: ServiceRequest[] = [];
   // A final candidate that collides with the published curve owns that
   // boundary slot instead. Never publish it and then consume its predecessor.
-  const precedesLast = (dir: TrackDir, stops: PlanStop[]) => {
-    const last = lastCurves[dir];
-    return stops.every(stop => {
-      const following = last.find(call => call.st === stop.st);
-      return !following || stop.dep + MIN_HEADWAY <= following.dep + 1e-6;
-    }) && new DepIndex([{ stops: last, dir }]).clear(stops, dir);
-  };
+  // published last trains that end short of the trunk (往安亭 22:25), each at its official minute
+  const lastRuns = (SIMULATION.timetable.lastRuns ?? []).map(run => {
+    const from = stationIndex(run.from), to = stationIndex(run.to);
+    return { dir: run.dir, from, to, stops: buildStops(ctx, run.dir, from, to, run.dep, true, factorAt) };
+  });
+  const precedesLast = (dir: TrackDir, stops: PlanStop[]) =>
+    [lastCurves[dir], ...lastRuns.filter(run => run.dir === dir).map(run => run.stops)].every(last =>
+      stops.every(stop => {
+        const following = last.find(call => call.st === stop.st);
+        return !following || stop.dep + MIN_HEADWAY <= following.dep + 1e-6;
+      }) && new DepIndex([{ stops: last, dir }]).clear(stops, dir));
   // A peak is a whole-core promise, not an origin departure change. Allow
   // the complete core traversal plus one headway for its leading wave.
   const peaks = periods.filter(p => TEMPLATES[p.template].peak);
@@ -929,6 +933,7 @@ export function layoutService(ctx: PlanContext) {
       t = nextSlot(t, 'UP');
     }
     lastAnchors.push(addTrip('UP', 'big', E, W, lastCurves.UP, true));
+    for (const run of lastRuns) if (run.dir === 'UP') addTrip('UP', 'big', run.from, run.to, run.stops, true);
   }
 
   // Official origin first trains, shared by both day types. Intermediate
@@ -952,6 +957,30 @@ export function layoutService(ctx: PlanContext) {
       }));
       t.stops[k - 1].dep += delay;
       for (const p of t.stops.slice(k)) { p.arr += delay; p.dep += delay; }
+    }
+    // The published first minute is a floor: an origin that would follow a train ahead of it
+    // closer than a headway leaves up to 59 s later (still inside that minute), from the
+    // station before the first shared one.
+    const closer = opener.stops.map((p, k) => ({ k, need: Math.max(0, ...trips.filter(t => t !== opener && t.dir === dir).map(t => {
+      const q = t.stops.find(x => x.st === p.st);
+      return q && q.dep <= p.dep && p.dep - q.dep < MIN_HEADWAY ? MIN_HEADWAY - (p.dep - q.dep) : 0;
+    })) })).filter(x => x.need > 0 && x.k > 0);
+    const delay = Math.max(0, ...closer.map(x => x.need));
+    if (delay > 0 && delay < 60) {
+      opener.stops[closer[0].k - 1].dep += delay;
+      for (const p of opener.stops.slice(closer[0].k)) { p.arr += delay; p.dep += delay; }
+    }
+    // a train behind the origin that is now closer than a headway waits the same way
+    for (const t of trips) {
+      if (t === opener || t.dir !== dir || t.from === from) continue;
+      const short = t.stops.map((q, k) => {
+        const p = opener.stops.find(x => x.st === q.st);
+        return { k, need: p && q.dep >= p.dep && q.dep - p.dep < MIN_HEADWAY ? MIN_HEADWAY - (q.dep - p.dep) : 0 };
+      }).filter(x => x.need > 0 && x.k > 0);
+      if (!short.length) continue;
+      const wait = Math.max(...short.map(x => x.need));
+      t.stops[short[0].k - 1].dep += wait;
+      for (const q of t.stops.slice(short[0].k)) { q.arr += wait; q.dep += wait; }
     }
   }
 

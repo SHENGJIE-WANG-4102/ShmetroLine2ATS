@@ -64,8 +64,10 @@ const firstOrigins: SimulationData['timetable']['firstOrigins'] = [
   { dir: 'DN', from: 'JDC', to: 'DSL', dep: H(5, 45) },
   // 【假设】官方表南翔 05:45 往迪士尼早于上一站陈翔公路 05:53，是另起的始发；来源按车场出车排
   { dir: 'DN', from: 'NX', to: 'DSL', dep: H(5, 45) },
-  // 【假设】官方表嘉定新城往花桥首班 06:36 晚于马陆 06:28 以后才到，不是 05:20 那趟的延续；按嘉定新城另起的始发排
-  { dir: 'UP', from: 'JDC', to: 'HQ', dep: H(6, 36) },
+  // 官方：往花桥首班也从罗山路起，05:25（往嘉定北 05:20 之后）
+  { dir: 'UP', from: 'LSH', to: 'HQ', dep: H(5, 25) },
+  // 官方：安亭 05:35 往迪士尼是始发，车是前一晚往安亭末班（迪士尼 22:25 发、00:01 到）停在安亭中间存车线的那列
+  { dir: 'DN', from: 'AT', to: 'DSL', dep: H(5, 35) },
 ];
 
 /** 用户决定（2026-11-14，L11-04）：首班前 4 趟巡道车，跑完在终点等，接那里的第一趟发车。
@@ -144,6 +146,7 @@ export const LINE11_SIMULATION: SimulationData = {
       maxPresent: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 3, DSL: 3 },
     },
     firstOrigins, patrols,
+    lastRuns: [{ dir: 'UP', from: 'DSL', to: 'AT', dep: H(22, 25) }], // 官方末班往安亭
     openingGuards: [], closingDepotMoves: [],
   },
 };

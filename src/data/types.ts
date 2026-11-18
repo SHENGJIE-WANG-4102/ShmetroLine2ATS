@@ -420,6 +420,10 @@ export interface FirstLastRow {
     lastE: string;
     lastW: string;
     lastG: string;
+    /** further westbound trains of a station that has several (往花桥 / 往安亭) */
+    firstW2?: string;
+    lastW2?: string;
+    lastW3?: string;
 }
 export interface OfficialHeadway {
     name: string;

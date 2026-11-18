@@ -339,8 +339,11 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     return before && after ? { gap: after.at - before.at, span: stream.filter(c => c.at >= before.at && c.at <= after.at) } : undefined;
   };
   const serviceRules = OPERATIONS.depotReturns.filter(r => r.service).map(r => ({ terminal: stationIndex(r.service!.terminal), multiplier: r.service!.intervalMultiplier }));
+  // a run that ends at an overnight storage station is that car's last service: it keeps its end
+  const storesAtEnd = (a: GenTrip) => OPERATIONS.overnightStabling.some(o => stationIndex(o.station) === requestedEnd.get(a.id)!.to);
   const keepsThrough = (a: GenTrip) => {
     const end = requestedEnd.get(a.id)!.to;
+    if (storesAtEnd(a)) return true;
     for (const rule of serviceRules) if (rule.terminal === end) {
       // the last train that reaches a protected terminal is the published last service: nothing follows to measure a gap
       const at = requestedEnd.get(a.id)!.at;

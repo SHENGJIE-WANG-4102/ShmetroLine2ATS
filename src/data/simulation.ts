@@ -68,6 +68,8 @@ export interface TimetableData {
     depot: Record<string, string>; capacity: Record<string, number>; maxPresent: Record<string, number>;
   };
   firstOrigins: { dir: TrackDir; from: string; to: string; dep: number }[];
+  /** published last trains that end short of the stream's route (往安亭 末班): one revenue trip each, at the official minute */
+  lastRuns?: { dir: TrackDir; from: string; to: string; dep: number }[];
   openingGuards: { station: string; dir: TrackDir; until: number }[];
   closingDepotMoves: { station: string; dir: TrackDir; depot: string }[];
   /** Pre-service track patrols (巡道车): out of `depot` before the first trains, empty and

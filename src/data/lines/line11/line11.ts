@@ -291,7 +291,8 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   ],
   // 夜间特殊交路（嘉定北—三林东）的车到三林东后进浦三路中间线过夜，次日从那里上行出车【假设】。
   overnightStabling: [
-    { station: 'PSR', count: 1, departure: 'UP' as const, kind: 'feeder' as const, preserveService: true, nightAfter: H(22, 30) },
+    { station: 'AT', count: 1, departure: 'DN' as const, kind: 'feeder' as const, preserveService: true, nightAfter: H(23) },
+    { station: 'PSR', count: 1, departure: 'DN' as const, kind: 'feeder' as const, preserveService: true, nightAfter: H(22, 30) },
   ],
   // 用户决定（2026-11-14）：南翔、真如中间线除高峰期都停一列车。按驻站热备排：平峰前从
   // 赛车场车辆段（备选城北路）开过去，高峰前回段。窗口钟点按 simulation 的高峰时段留
