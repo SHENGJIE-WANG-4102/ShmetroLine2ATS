@@ -13,13 +13,13 @@ const UNRELIABLE = new Set(['东方体育中心 0', '三林东 0']);
 function parse() {
   const found: Record<string, number[][]> = {};
   let station = '', morning = true;
-  for (const line of readFileSync(FILE, 'utf8').split('\n')) {
+  for (const line of String(readFileSync(FILE)).split('\n')) {
     if (line.startsWith('## 补充')) morning = false;
     const head = line.match(/^#{2,3} (秀沿路|东方体育中心|三林东)/);
     if (head) { station = head[1]; continue; }
     if (!station) continue;
     const body = morning && /^\d\d:\d\d /.test(line) ? line : !morning && /^- \d\d:\d\d–/.test(line) ? line.split('：')[1] ?? '' : '';
-    const times = (body.match(/\d\d:\d\d/g) ?? []).map(x => { const [h, m] = x.split(':').map(Number); return h * 60 + m; });
+    const times = (body.match(/\d\d:\d\d/g) ?? []).map((x: string) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; });
     if (!times.length) continue;
     const list = found[station] ??= [];
     if (morning) { if (!list.length) list.push([]); list[0].push(...times); } else list.push(times);
