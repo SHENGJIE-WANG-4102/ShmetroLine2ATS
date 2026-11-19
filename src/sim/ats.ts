@@ -848,7 +848,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     tr.intervalWait = tr.manual || sim.t >= closeAt ? intervalDepartureHold(sim, tr, st) : undefined;
     if (tr.intervalWait) return;
     if (closing) return;
-    if (tr.doorsOpen && !tr.manual && sim.t >= closeAt) {
+    if (tr.doorsOpen && !tr.manual && !tr.atoDriver && sim.t >= closeAt) {
       if(!utoDoorWarningReady(sim,tr))return;
       // a car door that does not close (vehicle.ts)
       if (st.doors && doorCloseHold(sim, tr)) return;

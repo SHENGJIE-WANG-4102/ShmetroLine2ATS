@@ -163,3 +163,18 @@ describe('paper AM driver work',()=>{
   expect(am.closes.at(-1)!.departure!-am.closes.at(-1)!.locked).toBeLessThan(4+post);
  });
 });
+
+describe('player-driven AM door work',()=>{
+ it('leaves the doors for the player to close: no automatic closing at the planned time',()=>{
+  const {sim,tr}=fixture('AM');tr.atoDriver=true;tr.dwellUntil=tr.depReadyAt=sim.t+40;
+  tr.tasks[0]={...tr.tasks[0],dep:sim.t+40} as typeof tr.tasks[0];
+  for(let i=0;i<500;i++)sim.step();
+  expect(tr.doorsOpen).toBe(true);expect(tr.doorMotion).toBeUndefined();
+ });
+ it('still closes automatically for a simulated AM driver',()=>{
+  const {sim,tr}=fixture('AM');tr.dwellUntil=tr.depReadyAt=sim.t+40;
+  tr.tasks[0]={...tr.tasks[0],dep:sim.t+40} as typeof tr.tasks[0];
+  for(let i=0;i<500;i++)sim.step();
+  expect(tr.doorsOpen).toBe(false);
+ });
+});
