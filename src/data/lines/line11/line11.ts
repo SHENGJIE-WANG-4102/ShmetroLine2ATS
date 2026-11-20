@@ -304,6 +304,8 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
       alternatives: [{ depot: 'CBL', incoming: 'DN' as const }, { depot: 'CYL', incoming: 'UP' as const }], windows: OFF_PEAK_STORAGE,
     })),
   ],
+  // 用户决定（2026-11-21）：早高峰结束（模板 09:45）前不回库，也就不会一边空车回库一边空车出库。
+  noDepotReturnBefore: '09:45',
   platformPassKmh: 45,
   platformStopKmh: Infinity,
   depotDoorTests: { CBL: { beforeSignal: 5 }, SSC: { beforeSignal: 5 }, CYL: { beforeSignal: 5 } }, // 【假设】未建库内试验线
