@@ -20,7 +20,7 @@ import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
 import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, depotLeadTasks, TEMPLATES, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/current';
 import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
-import { DOOR_CLOSE_S, MIN_DWELL, regulatedDwell, meanRange, plannedCloseBudgetAt, COUNTDOWN_LEAD_S, driverCloseDraw } from './calibration';
+import { DOOR_CLOSE_S, MIN_DWELL, regulatedDwell, meanRange, plannedCloseBudget, COUNTDOWN_LEAD_S, driverCloseDraw, driverDepartureDelayS } from './calibration';
 import { PERF, atoStopReady } from './dynamics';
 import { BYPASS_EXTRA, PSL_EXTRA } from './psd';
 import { newHalt, rootCause, type ArsWait, type HaltCode, type WaitAlternative } from './halt';
@@ -832,7 +832,7 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     const closing = tr.doorMotion?.kind === 'closing';
     if (tr.doorsOpen && !tr.doorsAwait && !closing) boardWhileOpen(sim, tr, p, st, dt);
     // 站台折返: alighting done, the train changes ends with its doors open
-    if (tr.doorsOpen && !tr.doorsAwait && platformTurn(topo, tr, st) && sim.t >= tr.dwellUntil - plannedCloseBudgetAt(st.station)) { turnOnPlatform(sim, tr, st); return; }
+    if (tr.doorsOpen && !tr.doorsAwait && platformTurn(topo, tr, st) && sim.t >= tr.dwellUntil - plannedCloseBudget()) { turnOnPlatform(sim, tr, st); return; }
     // the driver works the doors (driverDoor) and leaves once they are closed and locked
     if (tr.doorsAwait || tr.doorSide) return;
     const held = tr.hold || ps.hold;
@@ -840,10 +840,10 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
     // Keep the original diagram closing slot; the shorter physical sequence
     // releases early, and ATS spends that gain in the next section.
     const closeExtra = ps.psd === 'bypass' ? BYPASS_EXTRA : ps.psdLinkFault || ps.psd === 'pslOpen' ? PSL_EXTRA : 0;
-    // driverCloseRule: the driver closes a drawn time before the countdown's zero (dwellUntil less its mean lead)
-    const draw = driverCloseDraw(sim.config.seed, tr.id, tr.arrivedAt, st.station);
-    const closeAt = draw ? Math.max(tr.dwellUntil - COUNTDOWN_LEAD_S - draw.closeS, tr.depReadyAt - draw.leadS - draw.closeS) - closeExtra
-      : Math.max(tr.dwellUntil - plannedCloseBudgetAt(st.station) - closeExtra,
+    // driverCloseRule: the driver closes at a drawn countdown remaining (zero = dwellUntil less its mean lead)
+    const draw = driverCloseDraw(sim.config.seed, tr.id, tr.arrivedAt);
+    const closeAt = draw ? Math.max(tr.dwellUntil - COUNTDOWN_LEAD_S - draw.remainingS, tr.depReadyAt - driverDepartureDelayS(draw)) - closeExtra
+      : Math.max(tr.dwellUntil - plannedCloseBudget() - closeExtra,
         tr.depReadyAt - DOOR_CLOSE_S - meanRange(OPERATIONS.autoStartDelay) - closeExtra);
     tr.intervalWait = tr.manual || sim.t >= closeAt ? intervalDepartureHold(sim, tr, st) : undefined;
     if (tr.intervalWait) return;
@@ -864,8 +864,8 @@ export function updateTrainTasks(sim: Sim, tr: Train, dt = 0.1) {
       const displayAt = dwellDepartureAt(tr);
       const extra = closeDoors(sim, tr, p);
       if (extra < 0) return;
-      // driverCloseRule: closing by the countdown is early on purpose; the train still leaves on time
-      setDepartureReadyAt(tr, Math.max(sim.t + DOOR_CLOSE_S + extra, tr.autoStartAt ?? 0, draw ? tr.dwellUntil - COUNTDOWN_LEAD_S + draw.leadS : 0));
+      // driverCloseRule: the driver leaves a drawn time after the lamp, which lights after the doors lock
+      setDepartureReadyAt(tr, Math.max(sim.t + DOOR_CLOSE_S + extra, tr.autoStartAt ?? 0, draw ? sim.t + extra + driverDepartureDelayS(draw) : 0));
       tr.departureDisplay = { stop: st, at: displayAt, readyAt: tr.dwellUntil, side: platformSide(sim, tr, p) };
     }
     if (tr.doorsOpen || !psdSafe(ps) || sim.t < (tr.manual ? tr.doorLockedAt ?? 0 : tr.dwellUntil)) return;
@@ -1273,7 +1273,7 @@ export function atoButton(sim: Sim, tr: Train, button: 'f' | 'g', down: boolean)
  * A later ATS change to dwellUntil supplies a new target without UI state feedback. */
 export function dwellDepartureAt(tr: Train): number {
   const display = tr.departureDisplay;
-  // a driver leaves a few seconds after the countdown shows zero (driverCloseRule)
+  // the driver leaves some seconds after the countdown shows zero (driverCloseRule)
   return tr.phase === 'dwell' && display?.readyAt === tr.dwellUntil
     ? display.at ?? tr.dwellUntil - COUNTDOWN_LEAD_S : tr.dwellUntil - COUNTDOWN_LEAD_S;
 }
@@ -1310,10 +1310,10 @@ export function driverDoor(sim: Sim, tr: Train, side: 'L' | 'R'): { ok: boolean;
     const displayAt = dwellDepartureAt(tr);
     const extra = closeDoors(sim, tr, p);
     if (extra < 0) return { ok: false, msg: '站台门无法关闭锁紧，等待车站处理（互锁解除）' };
-    // driverCloseRule: the simulated driver closed early by the countdown and still leaves on time
-    const draw = simulatedAmDriver(tr) && st ? driverCloseDraw(sim.config.seed, tr.id, tr.arrivedAt, st.station) : undefined;
+    // driverCloseRule: the simulated driver leaves a drawn time after the lamp, which lights after the doors lock
+    const draw = simulatedAmDriver(tr) && st ? driverCloseDraw(sim.config.seed, tr.id, tr.arrivedAt) : undefined;
     setDepartureReadyAt(tr, Math.max(sim.t + DOOR_CLOSE_S + extra,simulatedAmDriver(tr)?tr.autoStartAt??0:0,
-      draw ? tr.dwellUntil - COUNTDOWN_LEAD_S + draw.leadS : 0));
+      draw ? sim.t + extra + driverDepartureDelayS(draw) : 0));
     if ((tr.manual || tr.atoDriver) && st)
       tr.departureDisplay = { stop: st, at: displayAt, readyAt: tr.dwellUntil, side: plat };
     return { ok: true, msg: `${word(side)}车门开始关闭${extra ? '，站台门由站务人员确认关闭' : ''}` };

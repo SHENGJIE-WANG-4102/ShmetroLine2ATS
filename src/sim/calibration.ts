@@ -40,29 +40,38 @@ export function originStandAt(dayType: DayType, t: number): number {
  const p=periods.find(x=>t>=x.from&&t<x.to) ?? (t<periods[0].from?periods[0]:periods[periods.length-1]);
  return SIMULATION.timetable.templates[p.template]?.peak?0:stand;
 }
-/** Seconds the departure countdown shows zero before the planned departure (driverCloseRule). */
-export const COUNTDOWN_LEAD_S = C.driverCloseRule ? meanRange(C.driverCloseRule.countdownLeadS) : 0;
+const RULE = C.driverCloseRule;
+/** Seconds from the start of closing to the train moving, on average (closing, lamp delay, lamp-to-start). */
+const MEAN_DEPARTURE_DELAY_S = RULE ? DOOR_CLOSE_S + RULE.lampDelayS + meanRange(RULE.startAfterLampS) : 0;
+/** Mean seconds of countdown remaining when the doors start closing: a flat band, plus a late tail whose
+ * density falls linearly to zero `overrunMaxS` after zero. */
+const MEAN_CLOSE_REMAINING_S = RULE
+  ? (1 - RULE.lateProbability) * meanRange([RULE.typicalToS, RULE.closeFromS])
+    + RULE.lateProbability * (-RULE.overrunMaxS + (RULE.typicalToS + RULE.overrunMaxS) * 2 / 3)
+  : 0;
+/** Seconds the departure countdown shows zero before the planned (mean) departure (driverCloseRule). */
+export const COUNTDOWN_LEAD_S = MEAN_DEPARTURE_DELAY_S - MEAN_CLOSE_REMAINING_S;
 /** The (simulated) driver leaves by the countdown, never as soon as the doors lock. */
-export const DRIVER_WAITS_COUNTDOWN = !!C.driverCloseRule;
-function closeRange(station: number): [number, number] {
- const rule=C.driverCloseRule!, fixed=rule.fixedCloseS?.[STATIONS[station]?.id ?? ''];
- return fixed!==undefined?[fixed,fixed]:(STATIONS[station]?.dwell ?? 0)>=rule.longDwellS?rule.longCloseS:rule.closeS;
+export const DRIVER_WAITS_COUNTDOWN = !!RULE;
+/** Mean seconds before the planned departure that the doors start closing. */
+export function plannedCloseBudget(): number {
+ return RULE ? MEAN_DEPARTURE_DELAY_S : PLANNED_CLOSE_BUDGET;
 }
-/** Mean seconds before the planned departure that the doors start closing at this station. */
-export function plannedCloseBudgetAt(station: number): number {
- return C.driverCloseRule ? COUNTDOWN_LEAD_S+meanRange(closeRange(station)) : PLANNED_CLOSE_BUDGET;
-}
-/** This stop's driver: seconds before the countdown's zero that the doors close, and after
- * it that the train moves. A pure function of the stop (seed, train, arrival), so a
+/** This stop's driver: seconds of countdown remaining when the doors start closing (negative: after
+ * zero) and seconds from the lamp to moving. A pure function of the stop (seed, train, arrival), so a
  * replay draws the same values without any stored state. */
-export function driverCloseDraw(seed: number, train: number, arrivedAt: number, station: number): { closeS: number; leadS: number } | undefined {
- const rule=C.driverCloseRule;
- if (!rule) return undefined;
+export function driverCloseDraw(seed: number, train: number, arrivedAt: number): { remainingS: number; startS: number } | undefined {
+ if (!RULE) return undefined;
  let h=2166136261;
- for (const c of `${train}|${Math.round(arrivedAt*10)}|${station}`) h=Math.imul(h^c.charCodeAt(0),16777619);
+ for (const c of `${train}|${Math.round(arrivedAt*10)}|`) h=Math.imul(h^c.charCodeAt(0),16777619);
  const r=dayRandom(seed,h>>>0); r(); r();
- const [a,b]=closeRange(station), [c,d]=rule.countdownLeadS;
- return { closeS: a+r()*(b-a), leadS: c+r()*(d-c) };
+ const late=r()<RULE.lateProbability, u=r(), [lo,hi]=RULE.startAfterLampS;
+ const remainingS=late?-RULE.overrunMaxS+(RULE.typicalToS+RULE.overrunMaxS)*Math.sqrt(u):RULE.typicalToS+u*(RULE.closeFromS-RULE.typicalToS);
+ return { remainingS, startS: lo+r()*(hi-lo) };
+}
+/** Seconds from the start of closing until this driver moves. */
+export function driverDepartureDelayS(draw: { startS: number }): number {
+ return DOOR_CLOSE_S + RULE!.lampDelayS + draw.startS;
 }
 export const MIN_DWELL = C.minDwell; // D73保留的停站下限；物理门序列改用DOOR_CYCLE期望值
 export const MAX_EARLY_HOLD = C.maxEarlyHold;

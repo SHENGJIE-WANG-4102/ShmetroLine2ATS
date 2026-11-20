@@ -100,12 +100,13 @@ export const LINE11_SIMULATION: SimulationData = {
       weekday: { stationWeights: [], amplitude: 0, morning: 8, evening: 18, width: 2 },
       weekend: { stationWeights: [], amplitude: 0, morning: 8, evening: 18, width: 2 },
     },
-    // 用户决定（2026-11-15，L11-03）：开门起倒计时至少 20 s，到 0 后约 7 s 起动，开门起最短 27 s；加开门约 3 s，停稳到起动最短约 30 s
-    minDwell: 27,
-    // 用户决定（2026-11-15）：司机看发车倒计时关门，每站随机：一般站剩 5–15 s 关，大站剩 15–25 s 关，
-    // 曹杨路换司机固定剩 10 s 关；倒计时到 0 后 5–10 s 起动。早了晚了由 ATO 按图调速追回。
-    // 哪些站算「大站」【假设】：图定停站 ≥ 40 s（上海西站、真如、东方体育中心、徐家汇）。
-    driverCloseRule: { countdownLeadS: [5, 10], closeS: [5, 15], longCloseS: [15, 25], longDwellS: 40, fixedCloseS: { CYL: 10 } }, // CYL：曹杨路车站代码
+    // 用户决定（2026-11-15，L11-03）：TDT 最短 20 s，开门到位起算。D220：最短图定停站 = 停稳到门开好约 4.4 s
+    // + TDT 20 s + 倒计时归零到平均起动（COUNTDOWN_LEAD_S，约 14.7 s）≈ 39 s。
+    minDwell: 39,
+    // 用户决定（2026-11-21，D220）：TDT 开门到位起算，剩 12 s 起可关门，最晚归零后 10 s（显示 --）；关门约 6 s，
+    // 关门完成后 5 s 站台端门内发车指示灯亮绿灯，绿灯后 6–15 s 起步。关门时刻多数在剩 12–5 s，
+    // 20% 的概率更晚（密度线性减小到归零后 10 s）【假设：概率】；曹杨路和其他站同一规则。
+    driverCloseRule: { closeFromS: 12, typicalToS: 5, lateProbability: .2, overrunMaxS: 10, lampDelayS: 5, startAfterLampS: [6, 15] },
   },
   gradient: { ...LINE14_SIMULATION.gradient, depths: {}, river: null }, // 【假设】缺11号线纵断面，按平坦隧道处理
   holiday: { calendar: [], returnRuns: [], closure: null, surges: [] },
