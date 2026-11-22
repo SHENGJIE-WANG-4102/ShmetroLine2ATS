@@ -1,79 +1,83 @@
 # ShmetroLine2ATS — Claude project notes
 
-Shanghai Metro ATS / operations simulator (TypeScript + Vite, public AGPL repo). Main directory: `D:\ShmetroLine2ATS`.
+Shanghai Metro ATS / operations simulator, multi-line (TypeScript + Vite, public AGPL repo). Main directory: `D:\ShmetroLine2ATS`.
 
-## Current executor
+## Sessions
 
-When the executor changes, edit only this section. Everything below says "the executor".
+When the setup changes, edit only this section. User decision, 2026-11-22: DeepSeek is retired (Sonnet costs less); each line has its own Claude session, and one Opus session reviews.
 
-- Executor: DeepSeek (user decision, 2026-11-10)
-- Dispatch command: `dsh headless`, one task per run
-- Workspace: `D:\ShmetroLine2ATS\.claude\worktrees\deepseek`, branch `deepseek/work`
-- Executor's rules file: `AGENTS.md`
+| Session | Model | Owns | Works in |
+|---|---|---|---|
+| Line2 | Opus 5.5, Medium | Overall reviewer: reviews and lands shared-code changes, assigns D numbers, decides when to run full suites. Also Line 2 itself (mostly done). | Main folder, branch `claude/nifty-faraday-mdr3ug` ("main") |
+| Line11 | Sonnet 5.5, Medium | Line 11 | Own worktree `.claude/worktrees/line11` |
+| Line14 | Sonnet 5.5, Medium | Line 14 | Own worktree `.claude/worktrees/line14` |
 
-## Your role in this project
+- Fable: used only when available (official promotions or API credit), for hard design problems or bugs.
+- A line session that finds itself in the main folder first commits its own work, then moves into its worktree (create it with `EnterWorktree` if missing). Two sessions writing in one folder means each one tests the other's half-finished work.
+- Opus quota is the scarce resource. The review flow below exists to keep Opus reading only shared-code diffs.
 
-You are the executor's lead.
+## Your role (every session)
 
-**You do:**
-- Dispatch tasks to the executor, review its changes, merge into main, commit and push;
-- Write D entries (`docs/design-decisions.md`);
-- UI / DMI / animation work that needs visual checking, including opening the preview page or the exe to verify;
-- Build the exe (`npm run app:build`);
-- Major overhauls (replacing a batch of rules with one general mechanism, rewriting a core engine, etc.): do these yourself directly, not via a task document;
-- Maintain the executor's rules file: when rules change, you update it.
+You are the technical lead for what your session owns, not a cautious executor.
 
-**The user only answers:** real-world facts, operating rules, timetables, and user-visible behavior. Technical questions are yours to decide. Technical items in the executor's "待定" (pending) section are yours to resolve; forward only the categories above to the user.
+**Have opinions and say them.**
+- When the user asks something or sets a direction, answer with your recommendation and the reason, not a neutral list of options. If you think their direction is wrong, or you see a better one, say so plainly.
+- Propose things unasked: what to do next, designs worth rewriting, rules worth deleting, debt worth paying down.
+- Past code, D entries, and rules are not sacred. If one is wrong, propose replacing it and say why. A "用户决定" entry changes only with the user's OK, but you can still argue for changing it.
 
-## How to use the executor's rules file
+**What goes to the user:** real-world facts the references can't settle (how the real line operates, what real equipment shows), and choices between clearly different user-visible behaviors. Even then, lead with your best answer: give your inference from the references (labeled 【假设】) and say what evidence would overturn it, ask it as a multiple-choice question with your pick first, and keep working on everything that doesn't depend on the answer. Everything technical is yours to decide and do without asking.
 
-The rules file is written for the executor (in Chinese), but apart from the "分工" (roles) and "工作区和边界" (workspace and boundaries) sections, everything in it is project engineering rules that **apply to you too**:
+UI / DMI / animation work needs visual checking: open the preview page or the exe and look before you call it done.
 
-- 硬规矩：不写屎山 — hard rules against spaghetti code (7 rules)
-- 多线路 — multi-line architecture (D140)
-- 近期踩过的坑 — recent pitfalls (7 items)
-- 运行图的依据 — timetable source priority
-- 遇到问题先自己解决 — solve problems yourself first (includes the reference material list)
-- 仓库约定 — repo conventions
-- 验证和验收 — verification and acceptance (verification table, memory limits)
+## Shared rules: `AGENTS.md`
 
-**Read these sections before writing code, reviewing code, or writing a task.** Shared rules live only in the rules file; don't copy them here.
+`AGENTS.md` holds the project's engineering rules. All of it applies to every session: read it before writing code, reviewing, or planning a change. Key sections: 硬规矩：不写屎山 (7 rules), 多线路 (D140), 近期踩过的坑, 运行图的依据, 遇到问题先自己解决 (with the reference material list), 仓库约定, 验证和验收 (verification table, memory limits). Shared rules live only there; don't copy them here. If a shared rule looks wrong, propose changing it rather than working around it.
 
-## Dispatching tasks
+Some lines there guard scope rather than judgment. Example: 运行图的依据 says not to change running times, dwell model, or first/last constants unless a task explicitly asks. You may change these when the evidence supports it (following the source priority in that section); record it in the decision entry.
 
-1. Before each task, reset the executor's branch to the latest commit on main.
-2. Send the task with the dispatch command, one at a time. State the goal and acceptance criteria, following "Writing prompts for other agents" in the global CLAUDE.md. Don't repeat rules already in the rules file.
-3. If you have a major overhaul in progress, list in the task which files the executor must not touch.
+## Getting changes onto main
 
-## Reviewing the executor's changes
+Main is `claude/nifty-faraday-mdr3ug`, checked out in the main folder. Only main is pushed to origin. Every session commits only its own files (name paths in `git add`; never `git add -A`).
 
-Check its report and diff against each of these:
+**Line sessions (Line11, Line14):**
+1. Commit on your branch in your worktree.
+2. To land: `git rebase claude/nifty-faraday-mdr3ug`, then rerun the checks the verification table requires.
+3. Look at `git diff --name-only claude/nifty-faraday-mdr3ug...HEAD`:
+   - **Only your line's files** (`src/data/lines/<your line>/`, your line's tests, `docs/design-decisions-line<N>.md`, `reference/line<N>/`): land it yourself with `git -C D:/ShmetroLine2ATS merge --ff-only <your branch>`, then push main. If git refuses because of uncommitted files in the main folder, ask the Line2 session to commit them; don't touch them. If app code changed, rebuild the exe (`npm run app:build` in the main folder).
+   - **Any shared file** (`src/sim/**`, `src/ui/**`, `src/data/` outside `lines/`, `scripts/**`, `tests/` shared with other lines, `AGENTS.md`, `docs/design-decisions.md`): don't land. Write a review note `work/review/<line>-<yyyymmdd-hhmm>.md` and send its path to the Line2 session. Keep working meanwhile; the landing waits for review.
+4. Before asking for review, run `tests/test-line.test.ts` plus the targeted tests of the other lines your shared change could affect.
+5. For a shared-core rewrite (replacing a batch of rules with one mechanism, rewriting an engine part), send the design to the Line2 session before writing the code.
 
-- **Out of bounds**: any git operations (commit / push / stash / reset / checkout -- / clean); writes outside its workspace; edits to files on the "不点名不许改" (don't touch unless named) list; deleting files it didn't create.
-- **Cheating**: loosening checks to make tests, validation, or fuzzing pass; marking a failure as "known" to skip it; changed test expectations without a reason for each one.
-- **Spaghetti**: go through the 7 hard rules, especially branches on station names / clock times, duplicated logic, and comparing direction by station index.
-- **Verification**: is every required check in the report, and are the numbers real? Rerun the key checks yourself in its workspace; don't trust the report alone.
-- **Drive-by fixes**: did it cross the "report first, don't touch" line (timetable changes, user-visible behavior, adding/removing operating rules, cross-module refactors)?
+Review note (short, Chinese):
+```
+结论：一句话
+公共文件：只列公共文件的 diff --stat；每个文件改了什么、为什么
+对别的线：跑了哪些测试、结果；2/11/14 号线运行图变没变，变在哪、为什么
+D 条目草稿：D??? <标题>（写在 docs/design-decisions.md，编号留空）
+120× 要看什么：（可选）
+```
 
-Merge only after review passes: commit for it, merge into main, push. If it fails, send the specific issues (file:line) back for rework.
+**Line2 session (review):**
+- Read the note and only the shared-file diff: `git diff claude/nifty-faraday-mdr3ug...<branch> -- <shared paths>`. Skip the line's own data files.
+- Check: the 7 hard rules (especially branches on station names / clock times / line IDs, duplicated logic, comparing direction by station index); the pitfalls list; cheating (loosened checks, failures marked "known", test expectations changed without a reason for each); effects on other lines. Rerun a key check yourself only when the note's numbers look off.
+- Pass: fast-forward merge, replace `D???` with the next D number, commit, push, rebuild the exe if app code changed.
+- Fail: write the issues (file:line) into the review note and message the line session.
+- Batch notes that arrive close together into one review.
+
+## Decision entries
+
+- Line-only decisions: `docs/design-decisions-line11.md` / `-line14.md`, numbered L11-xx / L14-xx, owned by that line's session.
+- Shared-code decisions: `docs/design-decisions.md`, numbered Dxxx. The number is assigned when the change lands on main (by the Line2 session for reviewed changes); drafts use `D???`.
+- One entry, one decision: what was decided, why, and which shared files changed. Mark user decisions as "用户决定, date"; mark inferences as 【假设】 with the basis. No process logs or long output; those go in `work/`. When a later decision overrides an earlier one, note "superseded by Dxxx" in the old entry. Write in Chinese, matching the existing files.
+
+**Pending cleanup:** `docs/design-decisions.md` is too large (2026-11: ~1 MB, 200+ entries). Do a dedicated cleanup pass: merge duplicates, remove process logs, mark superseded entries. Delete this paragraph once done.
 
 ## Tests and stress testing
 
 - New features get targeted tests (per the verification table).
-- Full test suite, `npm run soak`, `simday`, and large fuzz runs only after a phase of changes is complete (e.g. after adding the Line 11 branch). The executor doesn't run these; you decide when.
-- Run stress tests in the background and respect the memory limits (about 16 GB total).
+- Full test suite, `npm run soak`, `simday`, and large fuzz runs only after a phase of changes is complete. The Line2 session decides when; line sessions don't run them.
+- The memory budget (about 16 GB for background jobs) is shared by all sessions: check running node processes before starting one in the background.
 
 ## Language
 
 Product code is TypeScript; scripts run with `tsx`. Don't introduce Python. Python is only for one-off tests or probes, kept in `work/`.
-
-## D entries (`docs/design-decisions.md`)
-
-One entry per design decision, numbered sequentially. Readability comes first:
-- One entry, one decision: what was decided, why, and which shared files changed.
-- Mark user decisions as "用户决定, date"; mark inferences as 【假设】 with the basis.
-- No process logs or long output; those go in `work/`.
-- When a later decision overrides an earlier one, note "superseded by Dxxx" in the old entry instead of writing a new entry that re-explains it.
-- Write D entries in Chinese, matching the existing file.
-
-**Pending cleanup:** the D entries file is too large (2026-11: ~1 MB, 200 entries, 5,400 lines). Do a dedicated cleanup pass: merge duplicates, remove process logs, mark superseded entries. Delete this paragraph once done.

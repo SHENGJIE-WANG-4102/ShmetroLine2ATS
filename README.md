@@ -93,7 +93,7 @@ npm run typecheck   # app and scripts/ projects
 npx vitest run tests/driver.test.ts tests/dmi.test.ts tests/stopview.test.ts
 ```
 
-Run the relevant test files for a change. Timetable edits additionally need both day-type plan validators, official first/last checks and the Gaode count comparison. See [CLAUDE.md](CLAUDE.md) for how work is split and reviewed, and [AGENTS.md](AGENTS.md) for the executor's repository constraints and verification rules.
+Run the relevant test files for a change. Timetable edits additionally need both day-type plan validators, official first/last checks and the Gaode count comparison. See [CLAUDE.md](CLAUDE.md) for how work is split and reviewed, and [AGENTS.md](AGENTS.md) for the shared engineering and verification rules.
 
 ## License
 
