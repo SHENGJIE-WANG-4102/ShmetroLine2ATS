@@ -28,7 +28,7 @@ import { originStandAt } from '../calibration';
 import { OPERATIONS, STATIONS } from '../../data/current';
 import { ahead } from '../topology';
 import { matchPool } from './pool';
-import { createMoves, THROUGH_MIN, dutyDebugOn, dutyDebug, setTrace, getTrace, T, fmt, type Car, type Want, type Yard, type LeadBooking } from './moves';
+import { createMoves, THROUGH_MIN, dutyDebugOn, dutyDebug, setTrace, getTrace, T, fmt, type Car, type Want, type Yard, type LeadBooking, type RunOn } from './moves';
 
 export { dutyDebug };
 
@@ -42,6 +42,8 @@ export interface DutyInput {
   periods: Period[];
   /** published first/last service: never retimed or rerouted */
   locked: ReadonlySet<number>;
+  /** where a move's run is part of the trip before or after it (moves.ts RunOn) */
+  runOn?: Omit<RunOn, 'locked'>;
   /** departures whose car comes from a yard by a draft (fixed / standby) */
   reservedStarts: ReadonlyMap<number, number>;
   /** arrivals whose car goes to a yard / a stable berth by a draft */
@@ -84,7 +86,7 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   // (a published departure, the official first or last train, keeps its minute: no stand is asked of the car before it)
   const turnNeed = (st: number, d: GenTrip) => minTurn(st) + (d.revenue && !locked.has(d.id) ? originStandAt(ctx.dayType, d.stops[0].dep) : 0);
   const issues: PlanIssue[] = [];
-  const mv = createMoves(ctx, trips, periods);
+  const mv = createMoves(ctx, trips, periods, { runOn: input.runOn && { ...input.runOn, locked } });
   const { lineEnd, arr, dep, live, services, leavingFrom, throughMin, waitLimit, index, slot, lastService, POSITIONING, startOf, endOf, link,
     standbyPlaces, reserve, yards, safe, exits, inbound, outbound, addExit, addInbound, position, feed, distanceTo, dropHeld, releasable, homeBy } = mv;
   /** the requested runs, before any duty joins or leaves one partway */
@@ -152,43 +154,35 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       admit: (car, want) => turnAllowed(car.trip, want.trip) && (car.trip.dir === want.trip.dir || reserve(T, arr(car.trip), want.at)),
     });
     for (const [id, car] of result.pairs) link(car.trip, trips[id]);
-    // D173: at a line end a car a few seconds short of the turn takes the
-    // departure moved later within MAX_DIAGRAM_SHIFT_S (of its requested
-    // time); a yard car instead would leave this one standing, and every
-    // turn after it queueing. The departure keeps its order on the platform,
-    // its path, and the turn or return at its other end.
-    // The origin stand is wanted, not required: a car that clears the physical turnback but not the stand
-    // takes the departure standing shorter, rather than leave a depot car to run it.
-    for (const want of result.unmet.slice()) {
-      const d = want.trip;
-      if (locked.has(d.id)) continue;
-      const short = result.spare.filter(c => c.trip.dir !== d.dir && arr(c.trip) + minTurn(T) <= dep(d) + 1e-6 && arr(c.trip) + turnNeed(T, d) > dep(d))
-        .sort((x, y) => arr(y.trip) - arr(x.trip))[0];
-      if (!short || !turnAllowed(short.trip, d, false) || !reserve(T, arr(short.trip), dep(d))) continue;
-      link(short.trip, d);
-      result.spare.splice(result.spare.indexOf(short), 1);
-      result.unmet.splice(result.unmet.indexOf(want), 1);
-    }
-    if (lineEnd(T)) for (const want of result.unmet.slice()) {
+    // A car that turns at its station just short of a departure takes it nevertheless, rather than leave a depot car to run it.
+    // First with the stand shortened: the origin stand is wanted, not required, only the physical turn is. Then (D173),
+    // at a line end, with the departure moved later by the stand it lacks, within MAX_DIAGRAM_SHIFT_S of its requested
+    // time; the departure keeps its order on the platform, its path, and the turn or return at its other end.
+    for (const late of lineEnd(T) ? [false, true] : [false]) for (const want of result.unmet.slice()) {
       const d = want.trip, turn = turnNeed(T, d);
       if (locked.has(d.id)) continue;
-      const late = result.spare.filter(c => c.trip.dir !== d.dir && arr(c.trip) + turn > dep(d) && arr(c.trip) + turn <= dep(d) + MAX_DIAGRAM_SHIFT_S)
-        .sort((x, y) => arr(x.trip) - arr(y.trip))[0];
-      if (!late) continue;
-      const by = arr(late.trip) + turn - dep(d);
-      if (Math.abs(dep(d) + by - (input.requestedDeps?.[d.id] ?? dep(d))) > MAX_DIAGRAM_SHIFT_S) continue;
-      if ((leavingFrom.get(T) ?? []).some(t => t > dep(d) + 1e-6 && t <= dep(d) + by)) continue;
-      const before = d.stops, shifted = before.map(p => ({ ...p, arr: p.arr + by, dep: p.dep + by }));
-      if (!index.clear(shifted, d.dir, MIN_HEADWAY, before)) continue;
-      const after = d.next !== undefined ? trips[d.next] : undefined;
-      if (after && dep(after) < arr(d) + by + (after.dir === d.dir ? THROUGH_MIN : minTurn(d.to))) continue;
-      d.stops = shifted;
-      if (!turnAllowed(late.trip, d) || !reserve(T, arr(late.trip), dep(d))) { d.stops = before; continue; }
-      index.remove({ dir: d.dir, stops: before }); index.add(d);
-      const list = leavingFrom.get(T)!;
-      list[list.indexOf(before[0].dep)] = dep(d);
-      link(late.trip, d);
-      result.spare.splice(result.spare.indexOf(late), 1);
+      const near = result.spare.filter(c => c.trip.dir !== d.dir && arr(c.trip) + turn > dep(d)
+        && (late ? arr(c.trip) + turn <= dep(d) + MAX_DIAGRAM_SHIFT_S : arr(c.trip) + minTurn(T) <= dep(d) + 1e-6));
+      const car = near.sort((x, y) => late ? arr(x.trip) - arr(y.trip) : arr(y.trip) - arr(x.trip))[0];
+      if (!car) continue;
+      const by = late ? arr(car.trip) + turn - dep(d) : 0, before = d.stops;
+      if (late) {
+        if (Math.abs(dep(d) + by - (input.requestedDeps?.[d.id] ?? dep(d))) > MAX_DIAGRAM_SHIFT_S) continue;
+        if ((leavingFrom.get(T) ?? []).some(t => t > dep(d) + 1e-6 && t <= dep(d) + by)) continue;
+        const shifted = before.map(p => ({ ...p, arr: p.arr + by, dep: p.dep + by }));
+        if (!index.clear(shifted, d.dir, MIN_HEADWAY, before)) continue;
+        const after = d.next !== undefined ? trips[d.next] : undefined;
+        if (after && dep(after) < arr(d) + by + (after.dir === d.dir ? THROUGH_MIN : minTurn(d.to))) continue;
+        d.stops = shifted;
+      }
+      if (!turnAllowed(car.trip, d, late) || !reserve(T, arr(car.trip), dep(d))) { d.stops = before; continue; }
+      if (late) {
+        index.remove({ dir: d.dir, stops: before }); index.add(d);
+        const list = leavingFrom.get(T)!;
+        list[list.indexOf(before[0].dep)] = dep(d);
+      }
+      link(car.trip, d);
+      result.spare.splice(result.spare.indexOf(car), 1);
       result.unmet.splice(result.unmet.indexOf(want), 1);
     }
     if (dutyDebugOn()) {

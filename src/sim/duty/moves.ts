@@ -77,9 +77,15 @@ const routeTables = new WeakMap<PlanContext['topo'], RouteTable>();
 /** a stationed standby arrives within this of its window's start (s) 【假设】L14-03：最多后移 1 小时 */
 const STANDBY_SLIP = 3600;
 
+/** 调车并入载客车次: where a car's move carries passengers in the direction of the trip before it, that trip is
+ * run on (`extend`: 回库延伸, a car going home ends its last trip at the depot's entry station); where a move is
+ * followed at once by a trip in its own direction, that trip starts earlier (`prefix`: 出库直达, 赛车场→嘉定新城
+ * and 嘉定新城→迪士尼 run as 赛车场→迪士尼). Each window is on the move's clock; `locked` trips are never changed. */
+export interface RunOn { extend?: { from: number; to: number }; prefix?: { from: number; to: number }; locked: ReadonlySet<number> }
+
 /** `notBefore`: no yard exit or move may start earlier (a plan changed while the day runs); `added`: the
- * duties of added services (加开, duty/overlay.ts) */
-export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[], opts: { notBefore?: number; added?: boolean } = {}) {
+ * duties of added services (加开, duty/overlay.ts); `runOn`: see RunOn */
+export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[], opts: { notBefore?: number; added?: boolean; runOn?: RunOn } = {}) {
   const { topo } = ctx;
   const notBefore = opts.notBefore ?? -Infinity;
   const E = topo.stations.length - 1;
@@ -139,6 +145,35 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const startOf = new Map<number, Block['start']>();
   const endOf = new Map<number, Block['end']>();
   const link = (a: GenTrip, d: GenTrip) => { a.next = d.id; d.prev = a.id; };
+  // ---- 调车并入载客车次 (RunOn)
+  const asRequested = new Map(trips.map(t => [t.id, { from: t.from, to: t.to }]));
+  /** a request still as asked (not cut by the duty), neither locked nor a standby's, and `at` inside `window` */
+  const foldable = (t: GenTrip, window: { from: number; to: number } | undefined, at: number) => {
+    const was = asRequested.get(t.id);
+    return !!window && !!was && at >= window.from && at < window.to && t.from === was.from && t.to === was.to
+      && !opts.runOn!.locked.has(t.id) && !t.standby;
+  };
+  /** `a` run on in its own direction to `to`: its stops, when it is never cut short (the stations it serves stay served)
+   * and keeps the headway; the trip is not changed (`extend` does) */
+  const extension = (a: GenTrip, to: number): PlanStop[] | undefined => {
+    if (a.stops.some(p => p.st === to) || !ahead(a.dir, a.to, to)) return undefined;
+    const stops = buildStops(ctx, a.dir, a.from, to, dep(a), true, factor);
+    if (!index.clear(stops, a.dir, MIN_HEADWAY, a.stops)) return undefined;
+    stops.at(-1)!.dep = stops.at(-1)!.arr;
+    return stops;
+  };
+  const extend = (a: GenTrip, to: number, stops: PlanStop[]) => {
+    index.remove(a);
+    a.to = to; a.kind = 'wd'; a.stops = stops;
+    index.add(a);
+  };
+  /** the move `run` (ending where `d` starts, in its direction) becomes the first leg of `d` */
+  const foldFront = (d: GenTrip, run: PlanStop[]) => {
+    index.remove(d);
+    d.stops = [...run.slice(0, -1), { ...d.stops[0], arr: run.at(-1)!.arr }, ...d.stops.slice(1)];
+    d.from = run[0].st;
+    index.add(d);
+  };
   // ---- terminal places: one occupancy calendar per station
   /** `dep`: the departure (`to` adds the platform's clearing time) */
   const places = new Map<number, { from: number; to: number; dep: number }[]>();
@@ -407,9 +442,22 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     if (turnX && !turnbackAt(topo, X, a.dir) || turnP && !turnbackAt(topo, P, dir)) return undefined;
     const earliest = arr(a) + (turnX ? minTurn(X) : throughMin(X, a.dir, arr(a)));
     const latest = dep(d) - (turnP ? minTurn(P) : throughMin(P, d.dir, dep(d)));
-    if (latest - earliest < 60) return undefined;
     if (!T('held', releasable(a.id))) return undefined;
     const held = inbound.find(m => m.car === a.id);
+    // a car running on is the same train: `a` itself goes on to P
+    const runOn = !turnX && foldable(a, opts.runOn?.extend, arr(a)) ? extension(a, P) : undefined;
+    if (runOn) {
+      const reach = runOn.at(-1)!.arr, whole = asTrip(dir, a.from, P, runOn);
+      if (T('time', reach <= latest + 1e-6) && T('waitP', dep(d) - reach <= waitLimit(P, turnP, reach)) && T('safeP', safe(whole, d))
+        && (!turnP || T('placeP', reserve(P, reach, dep(d), false)) && T('frontP', frontTurnClear(ctx, live(), { dir, to: P, stops: runOn }, dep(d), new Set([a.id, d.id]))))) {
+        if (turnP) reserve(P, reach, dep(d));
+        extend(a, P, runOn);
+        link(a, d);
+        if (held) dropInbound(inbound.indexOf(held));
+        return a;
+      }
+    }
+    if (latest - earliest < 60) return undefined;
     // a run on (no turn) is the same train as `a` at X, and as `d` at P
     const own = [...(turnX ? [] : [a.stops.at(-1)!]), ...(turnP ? [] : d.stops)];
     const move = fitBefore(dir, X, P, earliest, latest, own.length ? own : undefined, stops => T('outer', outerQuiet(stops))
@@ -422,8 +470,12 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     if (!move) return undefined;
     if (turnX) reserve(X, arr(a), move.stops[0].dep);
     if (turnP) reserve(P, move.stops.at(-1)!.arr, dep(d));
-    const trip = addMove(dir, X, P, move.stops, move.revenue);
-    link(a, trip); link(trip, d);
+    // a move into a departure in its own direction is that departure started earlier
+    const folded = !turnP && foldable(d, opts.runOn?.prefix, move.stops[0].dep);
+    if (folded) foldFront(d, move.stops);
+    const trip = folded ? d : addMove(dir, X, P, move.stops, move.revenue);
+    link(a, trip);
+    if (!folded) link(trip, d);
     if (held) dropInbound(inbound.indexOf(held));
     return trip;
   };
@@ -658,8 +710,10 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
           && (!turnP || reserve(P, stops.at(-1)!.arr, dep(d), false)));
       if (!move) return false;
       if (turnP) reserve(P, move.stops.at(-1)!.arr, dep(d));
-      const trip = addMove(yard.dir, yard.station, P, move.stops, move.revenue);
-      link(trip, d);
+      const folded = !turnP && foldable(d, opts.runOn?.prefix, move.stops[0].dep);
+      if (folded) foldFront(d, move.stops);
+      const trip = folded ? d : addMove(yard.dir, yard.station, P, move.stops, move.revenue);
+      if (!folded) link(trip, d);
       startOf.set(trip.id, { kind: 'stable', station: yard.station, berth: yard.berth });
       addExit({ yard: yard.id, at: dep(trip) });
       return true;
@@ -692,8 +746,10 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       && T('reverse', portalReversal(topo, depot, 'exit', dir, depotStartTime(ctx, depot, { dir, stops })) !== 'no'));
     if (!move) return false;
     if (dir !== d.dir) reserve(P, move.stops.at(-1)!.arr, dep(d));
-    const trip = addMove(dir, from, P, move.stops, move.revenue);
-    link(trip, d);
+    const folded = dir === d.dir && foldable(d, opts.runOn?.prefix, move.stops[0].dep);
+    if (folded) foldFront(d, move.stops);
+    const trip = folded ? d : addMove(dir, from, P, move.stops, move.revenue);
+    if (!folded) link(trip, d);
     leaveYard(yard, trip);
     return true;
   };
@@ -761,6 +817,15 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     // (the entry must lie ahead: on a branched line a station off that way is not merely behind)
     if (en === X || !ahead(dir, X, en)) return false;
     if (topo.depots[depot].portals.entry[dir].reverse && portalReversal(topo, depot, 'entry', dir, arr(a)) !== 'yes' && homeViaTurn(car, yard)) return true;
+    // 回库延伸: the car's last trip runs on to the entry, in its own direction (no move of its own)
+    const runOn = a.dir === dir && foldable(a, opts.runOn?.extend, arr(a)) ? extension(a, en) : undefined;
+    if (runOn && T('peakHome', runOn.at(-1)!.arr >= homeFrom()) && entryFits(depot, dir, en, runOn)
+      && T('reverse', portalReversal(topo, depot, 'entry', dir, runOn.at(-1)!.arr) !== 'no')) {
+      if (dry) return true;
+      extend(a, en, runOn);
+      enterYard(depot, a);
+      return true;
+    }
     // (no entry before the end of the morning peak: a turning car stands on until then)
     const probe = moveStops(dir, X, en, 0), run = probe ? probe.stops.at(-1)!.arr - probe.stops[0].dep : 0;
     const move = fitOutOf(a, X, dir, en, homeFrom() - run, turnX => arr(a) + waitLimit(X, turnX, arr(a), a),

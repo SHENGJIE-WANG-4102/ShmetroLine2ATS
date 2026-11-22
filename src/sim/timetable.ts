@@ -1550,6 +1550,10 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
   const anchors = new Set([...published, ...fixedDraft.anchors, ...locked]);
   const stableStarts = new Map(requests.filter(r => r.stableBerth !== undefined).map(r => [r.id, r.stableBerth!]));
   let requested: number[] = [];
+  // 调车并入载客车次 (moves.ts RunOn): the cars going home, the pull-outs and the cars brought across a terminal that
+  // carry passengers in the direction of the trip before or after them are part of that trip
+  const positioning = SIMULATION.timetable.positioningRevenue;
+  const runOn = { extend: SIMULATION.timetable.truncateHome, prefix: typeof positioning === 'object' ? positioning : undefined };
   const draft = (homeFirst?: ReadonlySet<number>, matchHomes = false, rebalance: Pick<DutyInput, 'borrow' | 'deliver' | 'donors' | 'reference'> = {}) => {
     const drafts: GenTrip[] = [];
     for (const request of requests) {
@@ -1567,7 +1571,7 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
     }
     requested = drafts.map(trip => trip.stops[0].dep);
     spaceServiceDepartures(drafts, anchors, requested);
-    return { drafts, ...planDuties({ ctx, trips: drafts, periods, locked, reservedStarts, fixedEnds, stableStarts, homeFirst, matchHomes, requestedDeps: requested, ...rebalance }) };
+    return { drafts, ...planDuties({ ctx, trips: drafts, periods, locked, reservedStarts, fixedEnds, stableStarts, homeFirst, matchHomes, requestedDeps: requested, runOn, ...rebalance }) };
   };
   // Yard rebalancing (用户决定 2026-11-13): the first pass also probes. A
   // departure no yard can supply for want of a car borrows one at the nearest
@@ -1593,40 +1597,10 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
     if (open(pass)) { const matched = draft(homeFirst, true, rebalance); if (open(matched) < open(pass)) pass = matched; }
     return pass;
   };
-  let pass = solve();
-  // 调车并入载客车次: a run that carries passengers (the cars going home, the pull-outs, the cars brought across a
-  // terminal) in the direction of the trip before it is that trip run on (回库延伸: a car going home ends its last
-  // trip at the depot's entry station); one that is followed at once by a trip in its own direction is that trip
-  // started earlier (出库直达: 赛车场→嘉定新城 and 嘉定新城→迪士尼 run as 赛车场→迪士尼). The day is then drafted again
-  const window = SIMULATION.timetable.truncateHome, through = SIMULATION.timetable.positioningRevenue;
-  const within = (move: GenTrip, w: { from: number; to: number } | undefined) => !!w && move.stops[0].dep >= w.from && move.stops[0].dep < w.to;
-  const absorbed = new Set<GenTrip>();
-  let merged = 0;
-  // (the run out of a standby's place is no one's trip run on: the car stands there first)
-  const moves = pass.drafts.slice(requests.length).filter(move => move.prev === undefined || !pass.drafts[move.prev].standby);
-  for (const move of moves) {
-    const last = move.prev !== undefined && move.prev < requests.length ? requests[move.prev] : undefined;
-    if (!last || last.locked || locked.has(last.id) || !within(move, window)) continue;
-    if (move.dir !== last.dir && !ctx.topo.depots.some((_, d) => entryStation(ctx.topo, d, move.dir) === move.to)) continue;
-    // (a trip is only run on, never cut short: the stations it serves stay served)
-    const stops = last.stops.some(p => p.st === move.to) || !ahead(last.dir, last.to, move.to) ? undefined
-      : buildStops(ctx, last.dir, last.from, move.to, last.stops[0].dep, true, (t: number) => dwellFactorAt(ctx.dayType, t));
-    if (!stops || !new DepIndex(requests.filter(r => r !== last)).clear(stops, last.dir, MIN_HEADWAY, last.stops)) continue;
-    stops.at(-1)!.dep = stops.at(-1)!.arr;
-    last.to = move.to; last.kind = 'wd'; last.stops = stops; absorbed.add(move); merged++;
-  }
-  if (typeof through === 'object') for (const move of moves) {
-    const next = move.next !== undefined && move.next < requests.length ? requests[move.next] : undefined;
-    if (absorbed.has(move) || !next || next.locked || locked.has(next.id) || next.dir !== move.dir || next.from !== move.to || !within(move, through)) continue;
-    next.stops = [...move.stops.slice(0, -1), { ...next.stops[0], arr: move.stops.at(-1)!.arr }, ...next.stops.slice(1)];
-    next.from = move.from; merged++;
-  }
-  if (merged) pass = solve();
-  return finish(pass);
+  return finish(solve());
 
   function finish(pass: ReturnType<typeof draft>): Plan {
   const { drafts, blocks, issues } = pass;
-  const positioning = SIMULATION.timetable.positioningRevenue;
   // (the runs out to and back from a stationed hot standby stay empty: the car is no passenger service)
   const standbyRun = (trip: GenTrip) => trip.standby || (trip.prev !== undefined && !!drafts[trip.prev]?.standby);
   const carries = (trip: GenTrip) => typeof positioning === 'object' && !standbyRun(trip) && trip.prev !== undefined && trip.stops[0].dep >= positioning.from && trip.stops[0].dep < positioning.to;
