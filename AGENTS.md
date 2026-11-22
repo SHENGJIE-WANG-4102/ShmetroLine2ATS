@@ -142,7 +142,7 @@ C. <怎么做>：<效果、影响、代价>
 | 改了什么 | 必须跑 | 通过标准 |
 |---|---|---|
 | 任何代码 | `npx tsc --noEmit` | 0 error（`src/data/lines/line14/` 下已知的红不算，但数量不能变多） |
-| 任何代码或文档 | `npm run check:rules` | 输出 `check-rules: clean`。白名单（`scripts/check-rules.ts`）只许减不许加；要加先在交审说明里写理由 |
+| 任何代码或文档 | `npm run check:rules` | 输出 `check-rules: clean`。白名单（`scripts/rules.ts`）只许减不许加；要加先在交审说明里写理由 |
 | 任何代码 | 改动模块对应的单测文件，例如 `npx vitest run tests/driver.test.ts` | 全过 |
 | 运行图 | `npx tsx scripts/validate-plan.ts weekday` 和 `weekend` | 两种日型 0 error |
 | 运行图 | `npx tsx scripts/firstlast.ts` | 首末班和改前一致，或在任务允许的偏差内 |

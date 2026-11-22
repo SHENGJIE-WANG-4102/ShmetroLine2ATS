@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkText } from '../scripts/check-rules';
+import { checkText } from '../scripts/rules';
 
 /** Each rule catches a planted violation and lets the allowed form through. */
 describe('check-rules', () => {

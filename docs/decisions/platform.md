@@ -432,6 +432,6 @@ validate-plan两日型、firstlast、gaode-compare的完整输出与基线逐字
 - 审查 A6/B4：`ats.ts`、`cmdpanel.ts`、`topology.ts` 里有 10 处 `dir === 'DN' ? a > b : a < b` 式的里程比较。支线各成一段里程（D140、L11-06），里程更大不等于在前方：11 号线上，花桥支线的车往东看，嘉定北一段的车站和车辆段都会被算成「前方」。
 - `topology.ts` 新增 `chainAhead(direction, from, to)`：返回沿线的带符号距离，两处互不可达时返回 null（两条支线之间，或支线和它不经过的那段主线之间）。支线一侧的位置按 `joins.interM` 平移到汇入的那段主线上再比较，主线一侧要过汇入站（`joins.<方向>.at` 的道岔，或支线在汇入站自己的站台）才算可达。没有支线的线路和原来逐条一致。
 - 换掉的地方：`stationsAhead`、`nearestDepot`、`fittingDepot`、`depotsAhead`、救援的尾轨判断和过标判断、出站占用判断（`ats.ts`），调度面板的跳停站列表、救援后车列表和列车方向（`cmdpanel.ts`，方向改用 `travelDirection`），D223 的调车换端信号选择（`topology.ts`）。同一 link 内按 `dir === 1` 比偏移不算方向判断，不改。
-- 新增 `scripts/check-rules.ts`（`npm run check:rules`），把 AGENTS.md 能机器判断的规矩固化：直接 import 线路目录、`LINE_ID` 比较、`src/` 里的 `process.env`、模型名、按序号或里程比方向、`src/sim` 运行期 `throw`、`it.skip`/`it.only`。白名单按文件加行内片段写，不按行号；方向一项只剩 `topologyOrder.ts` 无支线时的兜底；throw 一项列了建图和诊断包读入，D207 的两处仍在白名单里待改。
-- 公共文件：`src/sim/topology.ts`、`src/sim/ats.ts`、`src/ui/cmdpanel.ts`、`scripts/check-rules.ts`、`package.json`、`AGENTS.md`（第 7 条和验证表）；测试 `tests/chain-ahead.test.ts`（testbranch 线）、`tests/check-rules.test.ts`。
+- 新增 `npm run check:rules`（规则表 `scripts/rules.ts`，入口 `scripts/check-rules.ts`），把 AGENTS.md 能机器判断的规矩固化：直接 import 线路目录、`LINE_ID` 比较、`src/` 里的 `process.env`、模型名、按序号或里程比方向、`src/sim` 运行期 `throw`、`it.skip`/`it.only`。白名单按文件加行内片段写，不按行号；方向一项只剩 `topologyOrder.ts` 无支线时的兜底；throw 一项列了建图和诊断包读入，D207 的两处仍在白名单里待改。
+- 公共文件：`src/sim/topology.ts`、`src/sim/ats.ts`、`src/ui/cmdpanel.ts`、`scripts/rules.ts`、`scripts/check-rules.ts`、`package.json`、`AGENTS.md`（第 7 条和验证表）；测试 `tests/chain-ahead.test.ts`（testbranch 线）、`tests/check-rules.test.ts`。
 
