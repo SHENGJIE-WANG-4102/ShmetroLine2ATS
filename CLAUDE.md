@@ -42,7 +42,7 @@ Main is `claude/nifty-faraday-mdr3ug`, checked out in the main folder. Only main
 2. To land: `git rebase claude/nifty-faraday-mdr3ug`, then rerun the checks the verification table requires.
 3. Look at `git diff --name-only claude/nifty-faraday-mdr3ug...HEAD`:
    - **Only your line's files** (`src/data/lines/<your line>/`, your line's tests, `docs/design-decisions-line<N>.md`, `reference/line<N>/`): land it yourself with `git -C D:/ShmetroLine2ATS merge --ff-only <your branch>`, then push main. If git refuses because of uncommitted files in the main folder, ask the Line2 session to commit them; don't touch them. If app code changed, rebuild the exe (`npm run app:build` in the main folder).
-   - **Any shared file** (`src/sim/**`, `src/ui/**`, `src/data/` outside `lines/`, `scripts/**`, `tests/` shared with other lines, `AGENTS.md`, `docs/design-decisions.md`): don't land. Write a review note `work/review/<line>-<yyyymmdd-hhmm>.md` and send its path to the Line2 session. Keep working meanwhile; the landing waits for review.
+   - **Any shared file** (`src/sim/**`, `src/ui/**`, `src/data/` outside `lines/`, `scripts/**`, `tests/` shared with other lines, `AGENTS.md`, `docs/design-decisions.md`, `docs/decisions/**`): don't land. Write a review note `work/review/<line>-<yyyymmdd-hhmm>.md` and send its path to the Line2 session. Keep working meanwhile; the landing waits for review.
 4. Before asking for review, run `tests/test-line.test.ts` plus the targeted tests of the other lines your shared change could affect.
 5. For a shared-core rewrite (replacing a batch of rules with one mechanism, rewriting an engine part), send the design to the Line2 session before writing the code.
 
@@ -51,7 +51,7 @@ Review note (short, Chinese):
 结论：一句话
 公共文件：只列公共文件的 diff --stat；每个文件改了什么、为什么
 对别的线：跑了哪些测试、结果；2/11/14 号线运行图变没变，变在哪、为什么
-D 条目草稿：D??? <标题>（写在 docs/design-decisions.md，编号留空）
+D 条目草稿：D??? <标题>（写在 docs/decisions/<主题>.md 末尾，编号留空）
 120× 要看什么：（可选）
 ```
 
@@ -65,10 +65,10 @@ D 条目草稿：D??? <标题>（写在 docs/design-decisions.md，编号留空�
 ## Decision entries
 
 - Line-only decisions: `docs/design-decisions-line11.md` / `-line14.md`, numbered L11-xx / L14-xx, owned by that line's session.
-- Shared-code decisions: `docs/design-decisions.md`, numbered Dxxx. The number is assigned when the change lands on main (by the Line2 session for reviewed changes); drafts use `D???`.
+- Shared-code decisions: numbered Dxxx. `docs/design-decisions.md` is the index (one row per entry: number, title, topic, status); the entry text goes at the end of the matching topic file in `docs/decisions/`, fully superseded entries move to `docs/decisions/archive.md`. The number is assigned when the change lands on main (by the Line2 session for reviewed changes); drafts use `D???`.
 - One entry, one decision: what was decided, why, and which shared files changed. Mark user decisions as "用户决定, date"; mark inferences as 【假设】 with the basis. No process logs or long output; those go in `work/`. When a later decision overrides an earlier one, note "superseded by Dxxx" in the old entry. Write in Chinese, matching the existing files.
 
-**Pending cleanup:** `docs/design-decisions.md` is too large (2026-11: ~1 MB, 200+ entries). Do a dedicated cleanup pass: merge duplicates, remove process logs, mark superseded entries. Delete this paragraph once done.
+**Pending cleanup:** split into topic files with an index (2026-11-22), but entries are still verbatim: `timetable.md` and `rolling-stock.md` are ~300 KB each, mostly process logs inside a few entries (D142, D138, D73, D74, D137, D173…). Next pass: cut each such entry down to the decision that is current now, move the logs to `archive.md`. Delete this paragraph once done.
 
 ## Tests and stress testing
 

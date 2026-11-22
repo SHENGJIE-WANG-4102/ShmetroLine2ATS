@@ -83,7 +83,7 @@
    - `reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md`：线路和车辆资料。
    - `reference/line2/shanghai-lines-signalling-operations.md`：上海各线路信号系统、闭塞方式、实际 GoA 等级、驾驶模式总表（2026-10-20 核验，每格标可信度；「未查到」的格子不许拿来补参数）。
    - `reference/timetable-gaode/`：高德时刻表原始数据，抓取时间写在每个文件头里。
-   - `docs/design-decisions.md`（D 条目）：以前的决定和理由，动相关逻辑前先搜一遍。
+   - `docs/design-decisions.md`（D 条目索引，正文按主题在 `docs/decisions/`）：以前的决定和理由，动相关逻辑前先搜一遍。
    - `docs/layout-pdf.md`、`docs/signalling-model.md`：配线建模和信号模型说明。
    - `docs/field/recordings.md`、`docs/field/field-2026-10-16-pis.md`：实地录音和 PIS 实拍的测量结果。
    - `src/data/lines/line2/`：2号线的车站、配线、运营常量、官方首末班、运行图表、音频库。
@@ -122,7 +122,7 @@ C. <怎么做>：<效果、影响、代价>
 - 代码、注释、文档、测试里不写任何 AI 模型名称。
 - 录音和音频不入库：`public/sounds/` 下放切片，在 `.gitignore` 里加规则；原始素材放 `work/`（已 ignore）。含乘客人声的转写也不入库。
 - 照片：`reference/dmi/` 入库，其他新照片先问用户能不能公开。
-- 设计决定写进 `docs/design-decisions.md`，按 D 编号顺延。推断标【假设】，用户的决定写明「用户决定」。
+- 设计决定写进 `docs/decisions/` 下对应主题文件末尾，按 D 编号顺延，并在索引 `docs/design-decisions.md` 末尾加一行。推断标【假设】，用户的决定写明「用户决定」。
 - 一次性的探针、日志放 `work/`（已 ignore），不要往 `scripts/` 里堆。`scripts/` 只放会反复用的工具。
 - 新加的机制要带单测：规则层面的断言（对每种日型都成立的性质），不写死车次号、车数。
 - 产品代码（`src/`）里不许留调试用的环境变量开关（`process.env.X`、`process?.env.X`）。探针放 `work/`。
