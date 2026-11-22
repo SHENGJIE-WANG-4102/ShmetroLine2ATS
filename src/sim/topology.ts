@@ -1734,7 +1734,7 @@ export function buildTopology(): Topology {
       const target = berths.find(b => b.link === store.link && b.dir === -d);
       if (!target) continue;
       const signal = signals.filter(s => s.station === st && s.role === 'rev' && s.dir === -d
-        && links[s.link].track === incoming && ahead(incoming, chains[st], s.chain)
+        && links[s.link].track === incoming && (incoming === 'DN' ? s.chain > chains[st] : s.chain < chains[st])
         && reach(s.link,s.dir,Infinity,(lid,dir) => lid === target.link && dir === target.dir))
         .sort((a,b) => Math.abs(a.chain-chains[st])-Math.abs(b.chain-chains[st]))[0];
       if (!signal) continue;

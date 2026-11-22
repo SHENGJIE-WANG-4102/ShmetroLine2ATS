@@ -180,9 +180,9 @@ const sidings: SidingDef[] = [
 const loops: CoreLineData['LAYOUT']['loops'] = [
   // 安亭：站西两正线之间一条中间折返/存车线，两端双Y接两正线，
   // 车挡在两端道岔外侧的短尽头。
-  { id: 'AT', name: '安亭中间存车线', station: 3, west: -420, east: -160 },
+  { id: 'AT', name: '安亭中间存车线', station: 3, west: -420, east: -160, localEntryShunt: true, turnback: true },
   // 浦三路、云锦路：站内两正线之间中间线，两端双Y接两正线，两端短车挡。
-  { id: 'PSR', name: '浦三路中间存车线', station: 33, west: -210, east: 210 },
+  { id: 'PSR', name: '浦三路中间存车线', station: 33, west: -210, east: 210, localEntryShunt: true, turnback: true },
   { id: 'YJL', name: '云锦路中间存车线', station: 28, west: -210, east: 210 },
   // 三林：站内中间折返线，两座岛式站台夹中间线，两端各一组交叉渡线接两正线；
   // 这两组渡线已由 loop 的双Y生成，不再另列 crossovers。
