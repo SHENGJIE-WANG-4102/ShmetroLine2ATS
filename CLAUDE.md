@@ -68,7 +68,7 @@ D 条目草稿：D??? <标题>（写在 docs/decisions/<主题>.md 末尾，编�
 - Shared-code decisions: numbered Dxxx. `docs/design-decisions.md` is the index (one row per entry: number, title, topic, status); the entry text goes at the end of the matching topic file in `docs/decisions/`, fully superseded entries move to `docs/decisions/archive.md`. The number is assigned when the change lands on main (by the Line2 session for reviewed changes); drafts use `D???`.
 - One entry, one decision: what was decided, why, and which shared files changed. Mark user decisions as "用户决定, date"; mark inferences as 【假设】 with the basis. No process logs or long output; those go in `work/`. When a later decision overrides an earlier one, note "superseded by Dxxx" in the old entry. Write in Chinese, matching the existing files.
 
-**Pending cleanup:** split into topic files with an index (2026-11-22), but entries are still verbatim: `timetable.md` and `rolling-stock.md` are ~300 KB each, mostly process logs inside a few entries (D142, D138, D73, D74, D137, D173…). Next pass: cut each such entry down to the decision that is current now, move the logs to `archive.md`. Delete this paragraph once done.
+**Pending cleanup:** split into topic files with an index, and the ten largest entries (D142, D138, D73, D74, D137, D173, D135, D115, D166, D122) cut down to the current decision with a status line; their full text is in `docs/decisions/logs.md` (2026-11-22). Still open: `timetable.md` (~180 KB) has many 5–10 KB entries, and status lines of entries after D190 were never cross-checked against later entries. Delete this paragraph once done.
 
 ## Tests and stress testing
 
