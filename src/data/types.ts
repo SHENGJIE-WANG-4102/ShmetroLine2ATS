@@ -304,6 +304,11 @@ export interface CoreLineData {
     /** No car enters a depot before this clock (end of the morning peak): cars that pulled out keep
      * working through the peak; balancing moves wait for the day or the night. */
     noDepotReturnBefore?: string;
+    /** Longest a turning car may stand on an intermediate station's own middle track (s), by station id;
+     * the track holds one car (the plan's place calendar), so only one car stands there at a time. */
+    longStand?: Record<string, number>;
+    /** Longest a departure's clock may move once the service is laid out (s); absent: 20. */
+    diagramShiftS?: number;
     depotReturns: {
         depot: string;
         dir: "UP" | "DN";
@@ -342,8 +347,8 @@ export interface CoreLineData {
         firstReady?: boolean;
         /** A stored spare with no yard source: the last train to arrive here in a window (from
          * `from`, before `need`) stays; from `need` it runs empty to this station and works the
-         * first departure there. */
-        serves?: string;
+         * first departure there. Several stations: the one the day's trains leave the most room at. */
+        serves?: string | readonly string[];
     }[];
     /** Preferred rear turnback track by station id (berth name); others are alternatives. */
     mainTurnback?: Record<string, string>;

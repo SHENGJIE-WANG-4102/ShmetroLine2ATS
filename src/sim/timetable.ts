@@ -1423,8 +1423,58 @@ function buildPlan(ctx: PlanContext): Plan {
   const { requests, periods, firstService: published, issues: layoutIssues } = layoutService(ctx);
   const fixedDraft = CARRY_MOVES ? draftFixedPassengerSupply(ctx, requests, published, ctx.fixedRuns ?? FIXED_LATE_TRAINS) : {pairs: [], anchors: [], starts:new Map<number,number>(), issues: []};
   const patrols = draftPatrols(ctx, requests);
-  return buildPoolPlan(ctx, requests, periods, published, [...layoutIssues, ...patrols.issues], fixedDraft,
+  const standbyIssues = draftStoredStandby(ctx, requests);
+  return buildPoolPlan(ctx, requests, periods, published, [...layoutIssues, ...patrols.issues, ...standbyIssues], fixedDraft,
     new Map([...fixedDraft.starts, ...patrols.starts]), patrols.chains);
+}
+
+/** 驻站备车 (a hotStandby place with `serves`, no yard source): in each window the first trip past the place that
+ * runs the way opposite to the car's departure ends there (a short route: its stations beyond lose one train) and the
+ * car turns onto the place's track; from `need` it takes a departure at the station it serves (the place itself, or
+ * empty to the next one). Where that station has none (真如 serves 上海西站 up or 枫桥路 down), one is added where the
+ * trains are furthest apart, running on like the train after it. */
+function draftStoredStandby(ctx: PlanContext, requests: ServiceRequest[]) {
+  const factor = (t: number) => dwellFactorAt(ctx.dayType, t);
+  const index = new DepIndex(requests);
+  const issues: PlanIssue[] = [], ended = new Set<ServiceRequest>();
+  const at = (r: ServiceRequest, st: number) => r.stops.findIndex(p => p.st === st && p.stop);
+  for (const place of hotStandbyPlaces(ctx.topo)) {
+    if (!place.serves || place.depot) continue;
+    const P = place.station;
+    for (const window of standbyWindows(ctx.dayType, place)) {
+      const fail = (why: string) => issues.push({ severity: place.optional ? 'warn' : 'error', code: 'UNASSIGNED', t: window.from, text: `${STATIONS[P].name}存车：${why}` });
+      const serves = [place.serves].flat().map(stationIndex);
+      // the way the car goes on: a departure the stations it serves already have, else one added where the trains are furthest apart
+      const own = requests.filter(r => r.revenue && !r.patrol && serves.includes(r.from) && r.stops[0].dep >= window.need).sort((x, y) => x.stops[0].dep - y.stops[0].dep)[0];
+      let best: { trip: ServiceRequest; score: number } | undefined;
+      if (!own) for (const S of serves) {
+        for (const dir of S === P ? ['DN', 'UP'] as const : [ahead('DN', P, S) ? 'DN' as const : 'UP' as const]) {
+          const passing = requests.filter(r => r.revenue && r.dir === dir && at(r, S) >= 0 && at(r, S) < r.stops.length - 1).map(r => ({ r, t: r.stops[at(r, S)].dep }));
+          for (let t = window.need + 600; t < window.need + 3600; t += 30) {
+            const next = passing.filter(x => x.t >= t).sort((x, y) => x.t - y.t)[0]?.r;
+            if (!next) break;
+            const stops = buildStops(ctx, dir, S, next.to, t, true, factor);
+            if (!index.clear(stops, dir, MIN_HEADWAY)) continue;
+            const score = Math.min(...passing.map(x => Math.abs(x.t - t)));
+            if (!best || score > best.score) best = { score, trip: { id: -1, dir, kind: next.kind, from: S, to: next.to, stops, revenue: true } };
+          }
+        }
+        if (!best) { fail('备车出站后没有可并入的发车时隙'); }
+      }
+      const leaves = own?.dir ?? best?.trip.dir;
+      if (!leaves) continue;
+      // it turns on the place's track: it arrives the way the departure does not go
+      const car = requests.filter(r => r.revenue && !r.locked && !r.patrol && r.dir !== leaves && !ended.has(r) && at(r, P) > 0 && at(r, P) < r.stops.length - 1 && r.stops[at(r, P)].arr >= window.from)
+        .sort((x, y) => x.stops[at(x, P)].arr - y.stops[at(y, P)].arr)[0];
+      if (!car) { fail('窗口内没有可在此终到的车次'); continue; }
+      const k = at(car, P);
+      car.stops = car.stops.slice(0, k + 1).map(p => ({ ...p }));
+      car.stops[k].dep = car.stops[k].arr;
+      car.to = P; car.kind = 'small'; ended.add(car);
+      if (best) { best.trip.id = requests.length; requests.push(best.trip); index.add(best.trip); }
+    }
+  }
+  return issues;
 }
 
 /** Pre-service track patrols (SIMULATION.timetable.patrols, 巡道车): each runs empty out of its
@@ -1527,24 +1577,61 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
   // is the day's plan: whatever it still cannot cover is reported, not swapped
   // for another plan. With the usual stock no departure fails, nothing is
   // borrowed and the first pass is the plain one.
-  let pass = draft(undefined, false, { borrow: true });
-  const lent = pass.ledger.lent;
-  const rebalance = lent.length ? { deliver: lent.map(l => ({ depot: l.depot, before: l.at })), donors: pass.ledger.spare, reference: pass.ledger.leads } : {};
-  if (lent.length) pass = draft(undefined, false, rebalance);
-  // A car the day left without a home goes home first in a second pass,
-  // before the exits it collided with are fitted (D178: no cross-yard
-  // lending; a car with no room nearby runs home empty after the service).
-  const homeFirst = pass.ledger.homeless.length ? new Set(pass.ledger.homeless) : undefined;
-  if (homeFirst) pass = draft(homeFirst, false, rebalance);
-  // The evening cars go home in the balanced order (depotReturns); when that
-  // leaves a yard's count open, they are matched to the yards' counts.
-  const open = (p: typeof pass) => p.ledger.exits.reduce((sum, n, d) => sum + Math.abs(n - p.ledger.returns[d]), 0);
-  if (open(pass)) { const matched = draft(homeFirst, true, rebalance); if (open(matched) < open(pass)) pass = matched; }
+  const solve = () => {
+    let pass = draft(undefined, false, { borrow: true });
+    const lent = pass.ledger.lent;
+    const rebalance = lent.length ? { deliver: lent.map(l => ({ depot: l.depot, before: l.at })), donors: pass.ledger.spare, reference: pass.ledger.leads } : {};
+    if (lent.length) pass = draft(undefined, false, rebalance);
+    // A car the day left without a home goes home first in a second pass,
+    // before the exits it collided with are fitted (D178: no cross-yard
+    // lending; a car with no room nearby runs home empty after the service).
+    const homeFirst = pass.ledger.homeless.length ? new Set(pass.ledger.homeless) : undefined;
+    if (homeFirst) pass = draft(homeFirst, false, rebalance);
+    // The evening cars go home in the balanced order (depotReturns); when that
+    // leaves a yard's count open, they are matched to the yards' counts.
+    const open = (p: typeof pass) => p.ledger.exits.reduce((sum, n, d) => sum + Math.abs(n - p.ledger.returns[d]), 0);
+    if (open(pass)) { const matched = draft(homeFirst, true, rebalance); if (open(matched) < open(pass)) pass = matched; }
+    return pass;
+  };
+  let pass = solve();
+  // 调车并入载客车次: a run that carries passengers (the cars going home, the pull-outs, the cars brought across a
+  // terminal) in the direction of the trip before it is that trip run on (回库延伸: a car going home ends its last
+  // trip at the depot's entry station); one that is followed at once by a trip in its own direction is that trip
+  // started earlier (出库直达: 赛车场→嘉定新城 and 嘉定新城→迪士尼 run as 赛车场→迪士尼). The day is then drafted again
+  const window = SIMULATION.timetable.truncateHome, through = SIMULATION.timetable.positioningRevenue;
+  const within = (move: GenTrip, w: { from: number; to: number } | undefined) => !!w && move.stops[0].dep >= w.from && move.stops[0].dep < w.to;
+  const absorbed = new Set<GenTrip>();
+  let merged = 0;
+  // (the run out of a standby's place is no one's trip run on: the car stands there first)
+  const moves = pass.drafts.slice(requests.length).filter(move => move.prev === undefined || !pass.drafts[move.prev].standby);
+  for (const move of moves) {
+    const last = move.prev !== undefined && move.prev < requests.length ? requests[move.prev] : undefined;
+    if (!last || last.locked || locked.has(last.id) || !within(move, window)) continue;
+    if (move.dir !== last.dir && !ctx.topo.depots.some((_, d) => entryStation(ctx.topo, d, move.dir) === move.to)) continue;
+    // (a trip is only run on, never cut short: the stations it serves stay served)
+    const stops = last.stops.some(p => p.st === move.to) || !ahead(last.dir, last.to, move.to) ? undefined
+      : buildStops(ctx, last.dir, last.from, move.to, last.stops[0].dep, true, (t: number) => dwellFactorAt(ctx.dayType, t));
+    if (!stops || !new DepIndex(requests.filter(r => r !== last)).clear(stops, last.dir, MIN_HEADWAY, last.stops)) continue;
+    stops.at(-1)!.dep = stops.at(-1)!.arr;
+    last.to = move.to; last.kind = 'wd'; last.stops = stops; absorbed.add(move); merged++;
+  }
+  if (typeof through === 'object') for (const move of moves) {
+    const next = move.next !== undefined && move.next < requests.length ? requests[move.next] : undefined;
+    if (absorbed.has(move) || !next || next.locked || locked.has(next.id) || next.dir !== move.dir || next.from !== move.to || !within(move, through)) continue;
+    next.stops = [...move.stops.slice(0, -1), { ...next.stops[0], arr: move.stops.at(-1)!.arr }, ...next.stops.slice(1)];
+    next.from = move.from; merged++;
+  }
+  if (merged) pass = solve();
   return finish(pass);
 
   function finish(pass: ReturnType<typeof draft>): Plan {
   const { drafts, blocks, issues } = pass;
-  if (SIMULATION.timetable.positioningRevenue === false) for (const trip of drafts.slice(requests.length)) {
+  const positioning = SIMULATION.timetable.positioningRevenue;
+  // (the runs out to and back from a stationed hot standby stay empty: the car is no passenger service)
+  const standbyRun = (trip: GenTrip) => trip.standby || (trip.prev !== undefined && !!drafts[trip.prev]?.standby);
+  const carries = (trip: GenTrip) => typeof positioning === 'object' && !standbyRun(trip) && trip.prev !== undefined && trip.stops[0].dep >= positioning.from && trip.stops[0].dep < positioning.to;
+  if (positioning === false || typeof positioning === 'object') for (const trip of drafts.slice(requests.length)) {
+    if (carries(trip)) continue;
     trip.revenue = false;
     if (trip.kind === 'ins' || trip.kind === 'wd') trip.kind = 'empty';
   }
@@ -1711,8 +1798,8 @@ export function spaceServiceDepartures(trips: GenTrip[], protectedIds: Set<numbe
   }
 }
 
-/** Only clock shifts are permitted once the service has been laid out. */
-export const MAX_DIAGRAM_SHIFT_S = 20;
+/** Only clock shifts are permitted once the service has been laid out (s; OPERATIONS.diagramShiftS: the line's own budget). */
+export const MAX_DIAGRAM_SHIFT_S = OPERATIONS.diagramShiftS ?? 20;
 const TIMING_ROUNDS = 64;
 function resolveTimingConflicts(ctx: PlanContext, trips: GenTrip[], blocks: Block[], protectedIds: Set<number>, serviceDepartures: Map<GenTrip, number>) {
   const original = trips.map(t => serviceDepartures.get(t) ?? t.stops[0].dep);

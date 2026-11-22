@@ -81,7 +81,8 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   const carOf = (id: number) => { let t = trips[id]; while (t.id >= firstAdded && t.prev !== undefined) t = trips[t.prev]; return t.id; };
   const { topo } = ctx;
   /** a turn into `d` at `st`: the turnback plus, off-peak, the origin platform stand (OPERATIONS.originStandS) */
-  const turnNeed = (st: number, d: GenTrip) => minTurn(st) + (d.revenue ? originStandAt(ctx.dayType, d.stops[0].dep) : 0);
+  // (a published departure, the official first or last train, keeps its minute: no stand is asked of the car before it)
+  const turnNeed = (st: number, d: GenTrip) => minTurn(st) + (d.revenue && !locked.has(d.id) ? originStandAt(ctx.dayType, d.stops[0].dep) : 0);
   const issues: PlanIssue[] = [];
   const mv = createMoves(ctx, trips, periods);
   const { lineEnd, arr, dep, live, services, leavingFrom, throughMin, waitLimit, index, slot, lastService, POSITIONING, startOf, endOf, link,
@@ -99,7 +100,8 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   for (const [id, berth] of input.stableStarts) startOf.set(id, { kind: 'stable', station: topo.berths[berth].station, berth });
   // stored spares (hotStandby places with `serves`) take their car and departure before the pools
   for (const place of hotStandbyPlaces(topo)) if (place.serves && !place.depot) for (const window of standbyWindows(ctx.dayType, place)) {
-    const reason = mv.storedSpare({ station: place.station, serves: stationIndex(place.serves) }, window);
+    const reasons = [place.serves].flat().map(serves => mv.storedSpare({ station: place.station, serves: stationIndex(serves) }, window));
+    const reason = reasons.includes(undefined) ? undefined : reasons[0];
     if (reason) issues.push({ severity: place.optional ? 'warn' : 'error', code: 'UNASSIGNED', t: window.from,
       text: `${STATIONS[place.station].name}存车无可行${reason}时隙，未开行该存车运用` });
   }
@@ -130,10 +132,10 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     const cars: Car[] = arrivals.filter(a => !nightCars.includes(a)).map(a => ({ id: a.id, ready: arr(a) + THROUGH_MIN, trip: a, station: T }));
     const wants: Want[] = departures.map(d => ({ id: d.id, at: dep(d), trip: d, station: T }));
     hotStandby(T, cars, wants);
-    const turnAllowed = (a: GenTrip, d: GenTrip) => {
+    const turnAllowed = (a: GenTrip, d: GenTrip, stand = true) => {
       const wait = dep(d) - arr(a);
       if (a.dir === d.dir) return wait >= throughMin(T, a.dir, arr(a)) - 1e-6 && wait <= THROUGH_WAIT && safe(a, d);
-      return !!turnbackAt(topo, T, a.dir) && wait >= turnNeed(T, d) - 1e-6 && safe(a, d)
+      return !!turnbackAt(topo, T, a.dir) && wait >= (stand ? turnNeed(T, d) : minTurn(T)) - 1e-6 && safe(a, d)
         && frontTurnClear(ctx, live(), a, dep(d), new Set([a.id, d.id]));
     };
     // published arrivals turn first, into the first departure they can make
@@ -155,6 +157,18 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
     // time); a yard car instead would leave this one standing, and every
     // turn after it queueing. The departure keeps its order on the platform,
     // its path, and the turn or return at its other end.
+    // The origin stand is wanted, not required: a car that clears the physical turnback but not the stand
+    // takes the departure standing shorter, rather than leave a depot car to run it.
+    for (const want of result.unmet.slice()) {
+      const d = want.trip;
+      if (locked.has(d.id)) continue;
+      const short = result.spare.filter(c => c.trip.dir !== d.dir && arr(c.trip) + minTurn(T) <= dep(d) + 1e-6 && arr(c.trip) + turnNeed(T, d) > dep(d))
+        .sort((x, y) => arr(y.trip) - arr(x.trip))[0];
+      if (!short || !turnAllowed(short.trip, d, false) || !reserve(T, arr(short.trip), dep(d))) continue;
+      link(short.trip, d);
+      result.spare.splice(result.spare.indexOf(short), 1);
+      result.unmet.splice(result.unmet.indexOf(want), 1);
+    }
     if (lineEnd(T)) for (const want of result.unmet.slice()) {
       const d = want.trip, turn = turnNeed(T, d);
       if (locked.has(d.id)) continue;

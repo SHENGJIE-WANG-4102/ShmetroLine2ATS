@@ -33,8 +33,10 @@ export interface TimetableData {
   };
   /** Common timing reference inside the core; absence retains terminal references. */
   reference?: Partial<Record<TrackDir, string>>;
-  /** Depot positioning follows stopping timings without taking passengers. */
-  positioningRevenue?: boolean;
+  /** Depot positioning moves follow stopping timings without taking passengers (false), or only outside
+   * a clock window: a move that follows a trip and departs in [from, to) carries passengers; a pull-out, a standby's run and one
+   * outside the window run empty. */
+  positioningRevenue?: boolean | { from: number; to: number };
   /** Whether scheduled mainline stock moves must carry after opening. */
   carryMainlineMoves?: boolean;
   /** Keep every scheduled passenger origin and destination through circulation. */
@@ -82,6 +84,10 @@ export interface TimetableData {
    * passing every station along `via` (changing ends at each inner station), then waiting at
    * the last one for the first departure there, which the car then works. */
   patrols?: { depot: string; via: string[] }[];
+  /** 截短回库: a car's run home that would start in [from, to) is made by its last passenger trip instead:
+   * that trip ends at the depot's entry station (cut short, or run on to it), where it sets down and goes in,
+   * rather than reaching its own end and running back empty. */
+  truncateHome?: { from: number; to: number };
 }
 
 export type TrainWindow = { from: string; to: string; fromOffset?: number; toOffset?: number };

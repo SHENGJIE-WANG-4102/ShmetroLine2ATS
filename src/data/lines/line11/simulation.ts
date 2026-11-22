@@ -124,7 +124,7 @@ export const LINE11_SIMULATION: SimulationData = {
   topology: { wrapAfter: 'SL' },
   instructor: { previousIds: {}, events: [], scenarios: [] },
   timetable: {
-    carryMainlineMoves: true, positioningRevenue: false, preserveRevenueRoutes: true,
+    carryMainlineMoves: true, positioningRevenue: { from: H(7), to: H(21) }, preserveRevenueRoutes: true, truncateHome: { from: H(7), to: H(19) },
     templates,
     dayPeriods, shownPeriods: dayPeriods,
     dwellBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },

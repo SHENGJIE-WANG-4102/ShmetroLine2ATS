@@ -121,7 +121,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     // a car brought to an intermediate station's own turnback tracks for a departure (`car` unset) waits there for its
     // slot, up to MAX_LAYOVER: a peak stream leaves no gap to run it in just before (D210)
     : ownTracks(st) && !addedTrip(car) ? (car ? lineEndStand(st, at) : Math.max(MAX_LAYOVER, lineEndStand(st, at)))
-    : minTurn(st) + INTERMEDIATE_WAIT;
+    : minTurn(st) + Math.max(INTERMEDIATE_WAIT, OPERATIONS.longStand?.[STATIONS[st].id] ?? 0);
   const openers = openingAnchors(services);
   const index = new DepIndex(services);
   /** last service departure per station and direction */
@@ -536,6 +536,20 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
       && arr(t) >= window.from && arr(t) < window.need).sort((a, b) => Number(arr(b) > lastOut) - Number(arr(a) > lastOut) || arr(b) - arr(a));
     const a = arrivals[0];
     if (!a) return '到达车';
+    // (the place itself: the car stands on its track and takes a departure from there, no run between)
+    if (P === S) {
+      for (const d of services.filter(t => !t.cancelled && t.from === P && t.prev === undefined && !startOf.has(t.id) && dep(t) >= window.need)
+        .sort((x, y) => dep(x) - dep(y)).slice(0, 12)) {
+        const turn = a.dir !== d.dir;
+        if (turn && !turnbackAt(topo, P, a.dir) || dep(d) - arr(a) < (turn ? minTurn(P) : throughMin(P, d.dir, dep(d)))) continue;
+        if (!T('safeP', safe(a, d)) || !T('placeP', reserve(P, arr(a), dep(d), false))) continue;
+        reserve(P, arr(a), dep(d));
+        a.standby = true;
+        link(a, d);
+        return undefined;
+      }
+      return `在${STATIONS[P].name}接车`;
+    }
     const dir = toward(P, S);
     if (!dir) return `去${STATIONS[S].name}的路线`;
     const turnX = a.dir !== dir;

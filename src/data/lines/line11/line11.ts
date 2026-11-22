@@ -274,7 +274,7 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   lastBigWestboundArrival: H(24, 0),
   peakCoreHeadway: 120, // 官方 南翔—三林 早高峰往三林 平均2分
   minTurnback: { HQ: 240, JDB: 240, DSL: 300, NX: 240, SL: 300, LSH: 240, AT: 240 }, // 【假设】按尾轨/中间线作业加余量
-  // 用户决定（2026-11-15）：始发站平峰在站台停 180 s（开门候车），高峰看排图；站台上站这么久算正常折返作业，不算长候班
+  // 用户决定（2026-11-15）：始发站平峰在站台停（开门候车），高峰看排图；站台上站这么久算正常折返作业，不算长候班
   originStandS: 180,
   longWaitPlatformStations: ['NX'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）
   platformTurnClear: {},
@@ -295,15 +295,18 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
     { station: 'AT', count: 1, departure: 'DN' as const, kind: 'feeder' as const, preserveService: true, nightAfter: H(23) },
     { station: 'PSR', count: 1, departure: 'DN' as const, kind: 'feeder' as const, preserveService: true, nightAfter: H(22, 30) },
   ],
-  // 用户决定（2026-11-14）：南翔、真如中间线除高峰期都停一列车。按驻站热备排：平峰前从
-  // 赛车场车辆段（备选城北路）开过去，高峰前回段。窗口钟点按 simulation 的高峰时段留
-  // 15–30 分钟余量【假设】；双休日没有高峰，整个日间都停。
+  // 用户决定（2026-11-14）：南翔、真如中间线除高峰期都停一列车。2026-11-22 用户更正停法：不从车辆段出车、也不回段——
+  // 窗口开始时一趟上行车在这里终到（真如是特定终到交路），停中间线；窗口结束后南翔接南翔的发车，真如空车开到
+  // 上海西站（上行）或枫桥路（下行）投入载客。窗口钟点按 simulation 的高峰时段留 15–30 分钟余量【假设】；
+  // 双休日没有高峰，整个日间都停。
   hotStandby: [
-    ...(['NX', 'ZR'] as const).map(station => ({
-      station, track: 'turnback' as const, berth: 0, depot: 'SSC', incoming: 'DN' as const,
-      alternatives: [{ depot: 'CBL', incoming: 'DN' as const }, { depot: 'CYL', incoming: 'UP' as const }], windows: OFF_PEAK_STORAGE,
-    })),
+    { station: 'NX', track: 'turnback' as const, berth: 0, serves: 'NX', windows: OFF_PEAK_STORAGE },
+    { station: 'ZR', track: 'turnback' as const, berth: 0, serves: ['SXZ', 'FQL'], windows: OFF_PEAK_STORAGE },
   ],
+  // 用户决定（2026-11-22）：南翔中间线只能停 1 列。晚高峰前没活的小交路车停在中间线等发车，不在正线上空放来回【等待上限为假设】。
+  longStand: { NX: H(2) },
+  // 11 号线时分只对官方首末班（2026-11-15）：迪士尼晚间折返差 21 s 就要从库里出车，排图可把发车挪 25 s【假设】
+  diagramShiftS: 25,
   // 用户决定（2026-11-21）：早高峰结束（模板 09:45）前不回库，也就不会一边空车回库一边空车出库。
   noDepotReturnBefore: '09:45',
   platformPassKmh: 45,
