@@ -391,6 +391,8 @@ npx tsx scripts/fuzz-day.ts 103 --level 3 --wind 1 --density 3:4 --day-type week
 
 ## D200 司机按发车倒计时关门（线路数据 driverCloseRule）（2026-11-15，用户决定）
 
+> 状态（2026-11-22 核对）：字段已由 D220 换成 `closeFromS` / `typicalToS` / `lateProbability` / `overrunMaxS` / `lampDelayS` / `startAfterLampS`，不再分大站、一般站，倒计时归零到起步不再是固定抽样；「每站一次纯函数抽样、不加状态」的做法照旧。
+
 - 起因：11 号线司机看倒计时（TDT/DMI）关门，倒计时到 0 后过几秒才起动（L11-21）。原来的门流程是按图定关门预算倒推关门、锁闭后立刻放行，倒计时到 0 就是起动时刻。
 - 做法：新增可选的 `SIMULATION.calibration.driverCloseRule`，没有这项的线路行为不变。
   - 每站抽一次：关门时刻（倒计时剩几秒，按一般/大站/固定站取范围）和到 0 后起动的秒数。抽样是车次、到站时刻、车站的纯函数（`driverCloseDraw`，用 `dayRandom` 独立流），不加任何状态，回放一致，不用进 `DAY_STATE`。
@@ -402,6 +404,8 @@ npx tsx scripts/fuzz-day.ts 103 --level 3 --wind 1 --density 3:4 --day-type week
 - 验证：见 L11-21；2 号线、14 号线没有这项数据，路径不变，相关测试全过。
 
 ## D202 用户 11-16 试驾反馈：人工车停站显示、站台门动作、退行停车窗、随机过标残留、进路线（2026-11-16）
+
+> 状态（2026-11-22 核对）：末条「069-4056 卡在龙阳路始发前，待修」已由 D203 修好。
 
 - **人工驾驶车门锁闭后 DMI 停靠变 NO、停站倒计时消失、对标特写没了、出发不亮**：人工车门一锁闭，ATS 就把这次停站算结束（`ats.ts` 放行），车其实还没动。
   - `computeDmi`：还站在刚放行的停车点（`departureDisplay` 已放行、车头没离开站台、停稳）时，对标误差按这个停车点算（`berthError`），停靠、对标特写照旧。

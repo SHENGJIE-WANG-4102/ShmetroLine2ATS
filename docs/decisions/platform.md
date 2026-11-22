@@ -375,6 +375,8 @@ validate-plan两日型、firstlast、gaode-compare的完整输出与基线逐字
 
 ## D192 审计复核：站台门转换表外的请求不再让软件崩，Sim 字段全部登记跨日归属，按当天编号的报警不带到第二天（2026-11-13）
 
+> 状态（2026-11-22 核对）：「没修的红」`operating-day` 两条已由 D194 修好。
+
 外部审计报告里的两条风险，复核后处理。
 
 - **运行中 throw**：`psd.ts go()` 碰到转换表里没有的请求（只有 open↔pslOpen：站台门还开着时再做一次 PSL 开门）会抛异常，worker 一崩整个软件就没了。正常运营没找到触发现场，调度操作能碰到。改成记完整性违例（A 级报警，测试和压测照样算违例），门保持原状态，下一次关门在表里，不会卡住。`src/sim` 其它 throw 逐个看过：都在建拓扑、排图（Sim 构造）、脚本里，运行中走不到。
@@ -386,6 +388,8 @@ validate-plan两日型、firstlast、gaode-compare的完整输出与基线逐字
 - 验证：`tsc` 0 error；随机压测 3 例两天（`work/fuzz-audit1/`）全部 pass、0 违例。
 
 ## D193 每步提速（结果逐位不变）：预热 04:00→18:00 约快 19%（2026-11-13）
+
+> 状态（2026-11-22 核对）：「剩下的」资源仲裁提速已由 D195 做了一部分（逐位不变的缓存），增量仲裁仍未做。
 
 起因：开始时刻前的预热推演是单线程从 04:00 一步步推，选傍晚要等几分钟；预热缓存按整套配置认，改一个变量就失效（用户指出）。所以要的是通用的每步提速。分段存档方案（每半小时存一份、不绑开始时刻）用户定为下策，先不做。
 
@@ -411,6 +415,8 @@ validate-plan两日型、firstlast、gaode-compare的完整输出与基线逐字
 - 动了公共文件：`src/sim/resourceArbitration.ts`、`ats.ts`、`interlocking.ts`、`protection.ts`、`timetable.ts`；新增 `tests/arbitration-caches.test.ts`、`tests/arbitration-caches-carry.test.ts`。
 
 ## D207 审计小项：worker 崩溃可见、去掉 DUTY_DEBUG 环境开关、scripts 进类型检查、simday 跨平台（2026-11-18，用户决定）
+
+> 状态（2026-11-22 核对）：「没做」的两处 `throw`（`timetable.ts` 缺过夜泊位、无可用过夜出车任务）2026-11-22 核对仍在，未改成报警加降级。
 - 来源 `docs/audit-2026-11-16.md` 的 A1、A2、A4、A10、A7（模型名）。
 - worker 崩溃：`worker.ts` 的 tick、消息处理、`start` 和未处理的 Promise 拒绝都有兜底。出异常后冻结世界，向界面发 `crash`（出错位置、错误文字、诊断包），之后只处理 `diagnostics` 导出和 `init/restart`。界面弹出关不掉的对话框（`crashDialog.ts`）：导出诊断、重新载入。worker 加载失败（`error`/`messageerror`）走同一个对话框，没有诊断包。
 - 没做：`timetable.ts` 里两处 `throw`（缺过夜泊位、无可用过夜出车任务）仍是 throw，现在会被兜住并报崩溃，但还没改成「报警加降级」，留作后续。
