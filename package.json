@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "check:rules": "tsx scripts/check-rules.ts",
     "test": "vitest run && node --test scripts/soak-runner.test.mjs",
     "soak": "node scripts/soak.mjs",
     "soak:quick": "node scripts/soak.mjs --quick",

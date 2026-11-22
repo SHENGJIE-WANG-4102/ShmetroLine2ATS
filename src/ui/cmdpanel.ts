@@ -23,6 +23,7 @@ import { LINE, STATIONS, LINE_INFO, DIRECTIONS, OPERATIONS, supportsSignalSystem
 import { PERF } from '../sim/dynamics';
 import { SEC, SW, SIGF, PLT, SIG_ASPECT, type TrackDir, type TrainSnap } from '../sim/model';
 import { turnbackAt, exitStation, effectiveEnd, OVERLAY_PRESETS } from '../sim/timetable';
+import { chainAhead, travelDirection } from '../sim/topology';
 import { fmtTime, fmtDelay } from './theme';
 import { StopView } from './stopview';
 import { Dmi } from './dmi';
@@ -357,9 +358,7 @@ export class CommandPanel {
 
   // ---------------------------------------------------------------- train
   private trainDir(t: TrainSnap): TrackDir {
-    const l = this.store.topo.links[t.link];
-    const east = t.dir === 1 ? l.chainB >= l.chainA : l.chainA > l.chainB;
-    return east ? 'DN' : 'UP';
+    return travelDirection(this.store.topo, t);
   }
 
   private renderTrain(id: number) {
@@ -422,7 +421,8 @@ export class CommandPanel {
       }
     }));
     const dir = this.trainDir(t0);
-    const ahead = topo.stations.filter((s) => (dir === 'DN' ? s.chain > t0.chain + 20 : s.chain < t0.chain - 20)).sort((a, b) => (dir === 'DN' ? a.chain - b.chain : b.chain - a.chain));
+    const ahead = topo.stations.map((s) => ({ s, gap: chainAhead(dir, t0.chain, s.chain) ?? -Infinity })).filter(({ gap }) => gap > 20)
+      .sort((a, b) => a.gap - b.gap).map(({ s }) => s);
     // The simulator checks the actual route, including an already completed
     // turn; station-centre chainage cannot decide whether that route exists.
     const tbOpts = topo.stations.filter((s) => turnbackAt(topo, s.index, 'DN') || turnbackAt(topo, s.index, 'UP'));
@@ -452,9 +452,9 @@ export class CommandPanel {
     flow.append(h('div', { class: 'form' }, h('label', {}, '人工折返'), tbSel,
       this.btn('折返', () => tbSel.value && void confirmAndSend(this.store, { title: `列车 ${formatTrainNumber(t0.svc, t0.trip, true)} 人工折返于 ${STATIONS[Number(tbSel.value)].name}`, cmd: { c: 'turnback', train: id, station: Number(tbSel.value) }, detail: '列车在折返站清客折返，按调整车次接续反方向运营。' }), 'primary')));
     if (t0.failed) {
-      const behind = this.store.snap!.trains.filter((x) => x.id !== id && this.trainDir(x) === dir && (dir === 'DN' ? x.chain < t0.chain : x.chain > t0.chain))
-        .sort((a, b) => Math.abs(a.chain - t0.chain) - Math.abs(b.chain - t0.chain)).slice(0, 4);
-      const rs = h('select', {}, ...behind.map((x) => h('option', { value: x.id }, `${formatTrainNumber(x.svc, x.trip, true)}（后方 ${Math.round(Math.abs(x.chain - t0.chain))}m）`))) as HTMLSelectElement;
+      const behind = this.store.snap!.trains.filter((x) => x.id !== id && this.trainDir(x) === dir && (chainAhead(dir, t0.chain, x.chain) ?? 0) < 0)
+        .sort((a, b) => chainAhead(dir, t0.chain, b.chain)! - chainAhead(dir, t0.chain, a.chain)!).slice(0, 4);
+      const rs = h('select', {}, ...behind.map((x) => h('option', { value: x.id }, `${formatTrainNumber(x.svc, x.trip, true)}（后方 ${Math.round(-chainAhead(dir, t0.chain, x.chain)!)}m）`))) as HTMLSelectElement;
       flow.append(h('div', { class: 'sect-title' }, '故障救援'));
       flow.append(h('div', { class: 'form' }, h('label', {}, '救援列车'), rs,
         this.btn('组织救援', () => rs.value && void confirmAndSend(this.store, { title: `组织列车 ${rs.selectedOptions[0]?.textContent} 救援故障列车 ${formatTrainNumber(t0.svc, t0.trip, true)}`, cmd: { c: 'rescue', failed: id, rescuer: Number(rs.value) }, critical: true, detail: '救援列车清客后以RM模式接近连挂（≤3km/h），推送故障车至前方站清客后回段。' }), 'danger')));

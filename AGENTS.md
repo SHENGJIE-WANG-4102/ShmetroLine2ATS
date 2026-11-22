@@ -24,7 +24,7 @@
 4. **通用规则不许按工作日、双休日分开写。** 两种日型的差别只能体现在数据里。
 5. **同一件事只写一处。** 动手前先找现成的函数，比如车辆段进出用 `depotMoves`，过夜泊位用 `overnightHolds`，泊位占用用 `storageOccupancy`。现成的不够用就扩展它，不要在别处再抄一份相似的逻辑；现成的设计本身不对，就重写它、删掉旧的，不要在旧的上面越补越多。
 6. **修根因，不打补丁。** 不要先排完、再校验、再按报错去补。规则不对就改规则本身。
-7. **新代码不许拿车站序号比方向。** 不要再写 `dir === 'DN' ? a < b : a > b` 这类判断，「谁在前方」「到没到某站」统一走 `src/sim/topology.ts` 里的方向辅助函数（还没有就先在那里加一个，比如 `ahead(dir, a, b)`）。老代码不用专门去改，碰到哪处顺手换掉。将来要支持支线、环线、共线，只需要改这一个函数（用户决定，2026-10-20）。
+7. **不许拿车站序号或里程比方向。** 不要写 `dir === 'DN' ? a < b : a > b` 这类判断：在支线上，里程更大不等于在前方。「谁在前方」「到没到某站」统一走 `src/sim/topology.ts` 的方向辅助函数：车站之间用 `ahead(dir, a, b)`，里程位置之间用 `chainAhead(dir, from, to)`（返回带符号的沿线距离，两处互不可达时为 null），列车自己的行车方向用 `travelDirection`。同一 link 内按 `dir === 1` 比偏移不算。`npm run check:rules` 会抓这类写法，2026-11-23 起主线上一处不剩。
 
 ## 多线路（D140，2026-10-24）
 
@@ -142,6 +142,7 @@ C. <怎么做>：<效果、影响、代价>
 | 改了什么 | 必须跑 | 通过标准 |
 |---|---|---|
 | 任何代码 | `npx tsc --noEmit` | 0 error（`src/data/lines/line14/` 下已知的红不算，但数量不能变多） |
+| 任何代码或文档 | `npm run check:rules` | 输出 `check-rules: clean`。白名单（`scripts/check-rules.ts`）只许减不许加；要加先在交审说明里写理由 |
 | 任何代码 | 改动模块对应的单测文件，例如 `npx vitest run tests/driver.test.ts` | 全过 |
 | 运行图 | `npx tsx scripts/validate-plan.ts weekday` 和 `weekend` | 两种日型 0 error |
 | 运行图 | `npx tsx scripts/firstlast.ts` | 首末班和改前一致，或在任务允许的偏差内 |

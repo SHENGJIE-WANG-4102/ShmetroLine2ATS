@@ -264,3 +264,4 @@
 | D224 | [中间线存车不再被误认为已在换端位（2026-11-22）](decisions/rolling-stock.md) | 车底 | 「未解」的 `duty-balance` 库存偏移两例已由 D225 修好。 |
 | D225 | [回段配车按总代价最小分配（2026-11-22）](decisions/rolling-stock.md) | 车底 |  |
 | D226 | [调车并入载客车次在排班器里一遍完成（2026-11-22）](decisions/rolling-stock.md) | 车底 |  |
+| D227 | [里程位置的方向判断统一走 `chainAhead`；规则检查脚本（2026-11-23）](decisions/platform.md) | 平台 |  |

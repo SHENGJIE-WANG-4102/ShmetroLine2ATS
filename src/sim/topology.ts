@@ -1737,7 +1737,7 @@ export function buildTopology(): Topology {
       if (!target) continue;
       // the nearest reverse signal whose clearing point (train plus margin beyond it) lies on plain track
       const spot = signals.filter(s => s.station === st && s.role === 'rev' && s.dir === -d
-        && links[s.link].track === incoming && (incoming === 'DN' ? s.chain > chains[st] : s.chain < chains[st])
+        && links[s.link].track === incoming && (chainAhead(incoming, chains[st], s.chain) ?? 0) > 0
         && reach(s.link,s.dir,Infinity,(lid,dir) => lid === target.link && dir === target.dir))
         .sort((a,b) => Math.abs(a.chain-chains[st])-Math.abs(b.chain-chains[st]))
         .map(s => {
@@ -2206,6 +2206,78 @@ export function linkEnds(topo: Topology, l: TLink): [NodePos, NodePos] {
   const B = topo.nodes[l.b].pos;
   for (const a of A) for (const b of B) if (a.row === b.row) return [a, b];
   return [A[0], B[0]];
+}
+
+/** One run of stations on the chainage axis (a branch is a run of its own, listed before the run
+ * it joins). A joining run continues on its plain pieces past its last station, chainage being
+ * the distance run, to the turnouts on the joined run's mains. */
+interface ChainRun {
+  lo: number;
+  hi: number;
+  join?: { run: number; shift: number; onto: Record<'DN' | 'UP', number> };
+}
+let chainRunCache: { stations: typeof STATIONS; runs: ChainRun[] } | null = null;
+
+function chainRuns(): ChainRun[] {
+  if (chainRunCache?.stations === STATIONS) return chainRunCache.runs;
+  const chains = stationChainages();
+  const starts = STATIONS.flatMap((station, i) => i === 0 || station.interM === null ? [i] : []);
+  const runs: ChainRun[] = starts.map((start, r) => {
+    const last = (starts[r + 1] ?? STATIONS.length) - 1, joins = STATIONS[last].joins;
+    const run: ChainRun = { lo: chains[start], hi: chains[last] };
+    if (joins) {
+      const at = STATIONS.findIndex(station => station.id === joins.station);
+      run.join = {
+        run: starts.reduce((found, s, r) => s <= at ? r : found, 0),
+        // a point on the plain pieces lies interM - (chain - hi) short of the join station's centre
+        shift: chains[at] - joins.interM - chains[last],
+        // where the branch's track meets the main, or the branch's own face at the join station
+        onto: { DN: Math.min(chains[at] + joins.DN.at, chains[at]), UP: Math.min(chains[at] + joins.UP.at, chains[at]) },
+      };
+      run.hi += joins.interM;
+    }
+    return run;
+  });
+  chainRunCache = { stations: STATIONS, runs };
+  return runs;
+}
+
+function runOfChain(runs: readonly ChainRun[], chain: number): number {
+  let run = 0;
+  while (run + 1 < runs.length && chain > (runs[run].hi + runs[run + 1].lo) / 2) run++;
+  return run;
+}
+
+/** Signed distance from chainage `from` to chainage `to` running `direction`: positive when `to`
+ * lies ahead, negative when behind, null when neither can be reached from the other (two
+ * branches, or a branch and the part of the line it does not run onto). Callers never compare
+ * chainages by direction themselves: across a branch, a larger chainage is not further DN. */
+export function chainAhead(direction: 'DN' | 'UP', from: number, to: number): number | null {
+  const runs = chainRuns();
+  const lift = (chain: number, run: number, target: number): number | null => {
+    for (let at = chain; ; ) {
+      if (run === target) return at;
+      const join = runs[run].join;
+      if (!join) return null;
+      at += join.shift; run = join.run;
+    }
+  };
+  const a = runOfChain(runs, from), b = runOfChain(runs, to);
+  const signed = (f: number, t: number) => direction === 'DN' ? t - f : f - t;
+  if (a === b) return signed(from, to);
+  // the point on the joining side is lifted onto the other's run; the other must lie on the
+  // part of that run the branch runs onto (from the join station on; within the join station
+  // positions on the branch's track and the main's compare by chainage)
+  const onto = (chain: number, joinedFrom: number, joinedTo: number) => {
+    let run = joinedFrom;
+    while (runs[run].join && runs[run].join!.run !== joinedTo) run = runs[run].join!.run;
+    return chain >= runs[run].join!.onto[direction] - 1;
+  };
+  const fromLifted = lift(from, a, b);
+  if (fromLifted !== null) return onto(to, a, b) ? signed(fromLifted, to) : null;
+  const toLifted = lift(to, b, a);
+  if (toLifted !== null) return onto(from, b, a) ? signed(from, toLifted) : null;
+  return null;
 }
 
 /** chainage of a point on a link */
