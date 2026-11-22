@@ -110,18 +110,18 @@
 | D69 | [回段换端的逆向径路保护](decisions/track-signalling.md) | 信号 |  |
 | D70 | [热备车：线路两端平峰各留一列](decisions/archive.md) | 已取代 | 已取代 → D148、D178 |
 | D71 | [实地录音：测量与车站音效](decisions/ui-audio.md) | 界面 |  |
-| D72 | [运行图结构：150秒早高峰、晚间收小交路、官方首班与广兰路过夜](decisions/timetable.md) | 运行图 | 见状态行：过夜部分已废弃：广兰路不存车（D170），正线不过夜（D178）；21:00 后 180→480 s… |
+| D72 | [运行图结构：150秒早高峰、晚间收小交路、官方首班与广兰路过夜](decisions/timetable.md) | 运行图 | 首班与编图规则现行；过夜部分废弃（D170/D178），夜间插值由 D81 取代 |
 | D73 | [运行时分、分时段停站与官方末班标定（用户决定）](decisions/timetable.md) | 运行图 | 大部分已被后来的条目取代，只剩下面「仍有效」的几项（过程记录见 logs.md） |
 | D74 | [按图运行等级：夜间慢走行、正常停站与首班图定修正（用户决定）](decisions/timetable.md) | 运行图 | 「按图运行等级」的机制现行；夜间巡航 −7.5 km/h 已由 D121 取代（D134），首班的图定区间修正 `FIRST_TRAIN_DIAGRAM_RUN_ADJUST_S` 已删，首末班改为 D162 逐站按官方分钟定点；晚间运行等级和停站后来按录音重标（D163）（过程记录见 logs.md） |
 | D75 | [广兰路中间线折返间隔：早间开班改由龙阳路分担](decisions/timetable.md) | 运行图 |  |
-| D76 | [高德到站表自动采集与完整性校验](decisions/timetable.md) | 运行图 |  |
+| D76 | [高德到站表自动采集与完整性校验](decisions/timetable.md) | 运行图 | 现行采集口径 |
 | D77 | [高德时刻逐车配对及西段守恒检查](decisions/timetable.md) | 运行图 |  |
-| D78 | [东段区间车核验口径](decisions/timetable.md) | 运行图 |  |
-| D79 | [高德工作日早高峰：分方向开班、退出及车底接续](decisions/timetable.md) | 运行图 |  |
+| D78 | [东段区间车核验口径](decisions/timetable.md) | 运行图 | 采集分析口径；东段交路未确认，不改运行图 |
+| D79 | [高德工作日早高峰：分方向开班、退出及车底接续](decisions/timetable.md) | 运行图 | 结构重试由 D83 取代；时段间隔按 D173 重排 |
 | D80 | [高德工作日晚高峰：分方向进入及东行延续](decisions/timetable.md) | 运行图 |  |
-| D81 | [高德工作日夜间：四分钟核心及龙阳路载客出入段](decisions/timetable.md) | 运行图 |  |
+| D81 | [高德工作日夜间：四分钟核心及龙阳路载客出入段](decisions/timetable.md) | 运行图 | 工作日夜间 240 s 现行；末班后多铺一趟由 D83 取代 |
 | D82 | [远东大道共用出入段线：出段换端车先出，回段车在站台外等](decisions/rolling-stock.md) | 车底 |  |
-| D83 | [运行图整理：先分配终端资源，再创建车次](decisions/timetable.md) | 运行图 |  |
+| D83 | [运行图整理：先分配终端资源，再创建车次](decisions/timetable.md) | 运行图 | 先定请求后建车次现行；终端配车部分由 D178/D184 替代 |
 | D84 | [界面时段按乘客看到的钟点显示](decisions/ui-audio.md) | 界面 |  |
 | D85 | [车厢视频校准：关门提示频率容差与停稳上下文](decisions/ui-audio.md) | 界面 |  |
 | D86 | [10-16 实拍 PIS：两种硬件、分页和真实终点](decisions/ui-audio.md) | 界面 |  |
@@ -164,10 +164,10 @@
 | D123 | [北新泾上行 06:30 窗口少 3 列：接受](decisions/timetable.md) | 运行图 |  |
 | D124 | [现场资料对照与录音入口：长区间预算调速受近扫限制](decisions/timetable.md) | 运行图 |  |
 | D125 | [运行图依据改优先级：官方首末班 > 实地录音/PIS > 高德（只看车数）](decisions/timetable.md) | 运行图 |  |
-| D126 | [门声重算、区间预算改用完整任务距离；严格验收未全通过](decisions/timetable.md) | 运行图 |  |
+| D126 | [门声重算、区间预算改用完整任务距离；严格验收未全通过](decisions/timetable.md) | 运行图 | 完整任务距离现行；ETA 见 D127，富余口径见 D137/D173 |
 | D127 | [沿任务路径静态限速积分ETA，消除局部低限速外推](decisions/onboard.md) | 车载 |  |
 | D128 | [10/22晚试玩：退行路径、模式切换、CM推荐速度及统一发车时钟](decisions/onboard.md) | 车载 |  |
-| D129 | [现有录音覆盖审计、条件富余与现场文档归档](decisions/timetable.md) | 运行图 |  |
+| D129 | [现有录音覆盖审计、条件富余与现场文档归档](decisions/timetable.md) | 运行图 | 分析与资料整理；条件富余未采用 |
 | D130 | [DMI 按 10/21 实拍校正布局；HOLD 与 CM 推荐速度显示](decisions/ui-audio.md) | 界面 |  |
 | D131 | [车内关门使用选定提示音及机械声，完整保留6.25秒](decisions/ui-audio.md) | 界面 |  |
 | D132 | [人工到站不动换向器；门使能按停车位置给出](decisions/onboard.md) | 车载 |  |
@@ -177,7 +177,7 @@
 | D136 | [海天三路—机场60限速及高架预算调查（触发首末班停点）](decisions/timetable.md) | 运行图 || 60 km/h 限速现行；runMargin 已由 D137/D173 固定区间富余替代 |
 | D137 | [固定区间富余秒数（用户决定，2026-10-23）](decisions/timetable.md) | 运行图 | 「固定秒数、全线一个值」现行（过程记录见 logs.md） |
 | D138 | [早高峰停站和折返按 2 号线 DTO 论文对照（2026-10-23，10-24 定稿）](decisions/timetable.md) | 运行图 | 图定停站公式和 AM 司机作业的结构现行；AM 锁门后多 20 s 已改为约 5 s（D179，用户决定），后来的停站调整见 D163、D173（过程记录见 logs.md） |
-| D139 | [两处首末班超差诊断：有限候选未通过，不应用（2026-10-24）](decisions/timetable.md) | 运行图 |  |
+| D139 | [两处首末班超差诊断：有限候选未通过，不应用（2026-10-24）](decisions/timetable.md) | 运行图 | 诊断，已由 D162 解决 |
 | D140 | [线路组选线骨架与虚构测试线（2026-10-24）](decisions/platform.md) | 平台 |  |
 | D141 | [基线九条红测与长测试排查（2026-10-24）](decisions/platform.md) | 平台 |  |
 | D142 | [出入段与泊位统一仲裁（用户批准设计与五条规则 2026-10-24，10-26 收尾）](decisions/rolling-stock.md) | 车底 | 现行，实现在 `src/sim/resourceArbitration.ts`；后续改动见 D174、D182、D195（过程记录见 logs.md） |
@@ -202,13 +202,13 @@
 | D161 | [DMI 消息栏只留有依据的字样（2026-11-01）](decisions/ui-audio.md) | 界面 |  |
 | D162 | [首末班车逐站按官方分钟定点（2026-11-01，用户决定）](decisions/timetable.md) | 运行图 |  |
 | D163 | [工作日晚间运行等级和停站按录音标定（2026-11-01，用户决定）](decisions/timetable.md) | 运行图 |  |
-| D165 | [浦东机场站后折返按视频标定（2026-11-02）](decisions/timetable.md) | 运行图 |  |
+| D165 | [浦东机场站后折返按视频标定（2026-11-02）](decisions/timetable.md) | 运行图 | 现行；近位/深位后由 D171 扩到蟠祥路、淞虹路 |
 | D166 | [2 号线车底接续、载客出入段与跨日存车（2026-11-02）](decisions/rolling-stock.md) | 车底 | 跨日存车、创新中路中间线热备已被 D178 取代（正线不过夜、中途热备取消）；创新中路中间线后来改作出入段换端（D203）（过程记录见 logs.md） |
 | D167 | [侧式站台画在正线外侧；华夏东路改侧式（2026-11-02）](decisions/ui-audio.md) | 界面 |  |
 | D168 | [2 号线上下行名称更正（2026-11-02，用户决定）](decisions/ui-audio.md) | 界面 |  |
 | D169 | [DMI 按 11-02 机场实拍改（2026-11-02，用户实拍）](decisions/ui-audio.md) | 界面 |  |
 | D170 | [广兰路不存车及检修库占用（2026-11-02）](decisions/rolling-stock.md) | 车底 |  |
-| D171 | [11-02区间、关门链、站后折返及公共参考钟（2026-11-02）](decisions/timetable.md) | 运行图 |  |
+| D171 | [11-02区间、关门链、站后折返及公共参考钟（2026-11-02）](decisions/timetable.md) | 运行图 | 现行；默认余量 22.5→18.7 s（D173） |
 | D172 | [救援恢复、分段清客及134/16601/16602旧链（2026-11-02）](decisions/operations.md) | 调度 |  |
 | D173 | [接手收尾：低客流停站、收车格、救援、机场晚间供车、ATO 计坡度与软起停、按官方间隔重排运行图（2026-11-03～04）](decisions/timetable.md) | 运行图 | 现行（过程记录见 logs.md） |
 | D174 | [性能第一批：结果逐位不变的优化（2026-11-04）](decisions/platform.md) | 平台 |  |
