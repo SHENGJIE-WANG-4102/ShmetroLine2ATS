@@ -170,9 +170,15 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   /** the move `run` (ending where `d` starts, in its direction) becomes the first leg of `d` */
   const foldFront = (d: GenTrip, run: PlanStop[]) => {
     index.remove(d);
+    const from = leavingFrom.get(d.from)!;
+    from.splice(from.indexOf(dep(d)), 1);
     d.stops = [...run.slice(0, -1), { ...d.stops[0], arr: run.at(-1)!.arr }, ...d.stops.slice(1)];
     d.from = run[0].st;
     index.add(d);
+    const list = leavingFrom.get(d.from) ?? [];
+    const at = list.findIndex(t => t > dep(d));
+    list.splice(at < 0 ? list.length : at, 0, dep(d));
+    leavingFrom.set(d.from, list);
   };
   // ---- terminal places: one occupancy calendar per station
   /** `dep`: the departure (`to` adds the platform's clearing time) */
@@ -471,7 +477,8 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
     if (turnX) reserve(X, arr(a), move.stops[0].dep);
     if (turnP) reserve(P, move.stops.at(-1)!.arr, dep(d));
     // a move into a departure in its own direction is that departure started earlier
-    const folded = !turnP && foldable(d, opts.runOn?.prefix, move.stops[0].dep);
+    // (not the run out of a standby's place: the car stands there first)
+    const folded = !turnP && !a.standby && foldable(d, opts.runOn?.prefix, move.stops[0].dep);
     if (folded) foldFront(d, move.stops);
     const trip = folded ? d : addMove(dir, X, P, move.stops, move.revenue);
     link(a, trip);
