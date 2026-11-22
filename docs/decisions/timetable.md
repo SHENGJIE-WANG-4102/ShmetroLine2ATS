@@ -406,6 +406,8 @@ D41候选24日中全部12个最高故障例通过，但进博会无故障例发�
 
 ## D121 取消平台限速后重新标定慢运行等级
 
+> 状态（2026-11-22 核对）：文中统一 `runMargin=0.20` 已被 D137 换成每区间固定富余 `sectionRunAllowanceS`（现值 18.7 s，D173）；表中走行数字是当时口径。3/4 级目标降低 6.5/9.5 km/h 的标定以 `dynamics.ts::levelBand` 现值为准。
+
 2026-10-22，按 `docs/handoff-playtest-1022.md` 末尾「第二次审查」。取代D120对新增首末班误差直接保留的处理：取消平台限速时，慢等级的惰行段省时比等级1/2更多，不能只用统一走行余量解释。仍保持统一 `runMargin=0.20`、通过走行余量0.16、无限停站平台限速及通过45km/h，不加逐区间／按等级余量表，不动停站、首末班常量、服务时段与开班数据。
 
 只重新标定 `dynamics.ts::levelBand` 的两个【假设】参数：3级巡航目标降低5→6.5km/h，4级7.5→9.5km/h；惰行带均保留10km/h，1/2级不动。依据仍是D74正常短停站下恢复原慢等级全线规划走行总量，并非实测的现实等级参数。计划和实跑共用既有 `levelAccel`，不调整制动／ATP曲线。优先保留原惰行带，只调两个目标降低量；隔离扫描过88组参数，16组满足双向±10s的组合，四种惰行带组合的高德结果均为8格／98，不为单个统计窗继续扭参数。
@@ -607,6 +609,8 @@ grep命中的12文件单测首跑425过/6败（`after-tests.log`），未跑全�
 - 公共文件：`src/sim/{dynamics,movement,model,engine,state,operatingDay}.ts`、`src/data/vvvf.ts`、`src/ui/{vvvf,audio,side}.ts`、`scripts/audio/field-model.ts`；测试 `tests/{ato-profile,driver,field-calibration,calibration,operating-day,vvvf}.test.ts`。
 
 ## D136 海天三路—机场60限速及高架预算调查（触发首末班停点）
+
+> 状态（2026-11-22 核对）：海天三路—机场双向 60 km/h 限速仍有效；文中 `runMargin=.1760` 已被 D137 换成每区间固定富余 `sectionRunAllowanceS`（现值 18.7 s，D173），验证数字是当时口径。
 
 2026-10-23，执行 `docs/handoff-runtime-and-diagram.md` 的“第一部分补充”。用户确认海天三路↔浦东1号2号航站楼双向60km/h；`stationChainages()`算得站中心里程59653/61940m，已在 `src/data/line2.ts` 的 `SPEED_LIMITS` 添加范围。按既有拓扑逻辑两正线均生效，机场既有55等更低限速继续取较小者。没有改 `runMargin=.1760`、阻力、停站、运行等级、首末班常量、控制器或排车规则；没有开第二部分。
 

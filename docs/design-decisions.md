@@ -90,7 +90,7 @@
 | D49 | [定点班车与站台通过限速](decisions/timetable.md) | 运行图 |  |
 | D50 | [高峰间隔与运行时分重新标定](decisions/archive.md) | 已取代 | 已取代 → D72 |
 | D51 | [早高峰晚点：道岔防护信号与终点站先到先发](decisions/operations.md) | 调度 |  |
-| D52 | [ATO（有司机）作为CBTC下的DTO降级模式](decisions/onboard.md) | 车载 |  |
+| D52 | [ATO（有司机）作为CBTC下的DTO降级模式](decisions/onboard.md) | 车载 || AM-C 降级模式现行；换端/发车常量已由 D138 的 atoDriverWork、autoStartDelay 替代 |
 | D53 | [审计修正：客流倍数、追踪间隔硬约束、实际仿真倍率](decisions/timetable.md) | 运行图 |  |
 | D54 | [审计修正：区故解、运行中故障、启动时间、ZC紧急制动](decisions/track-signalling.md) | 信号 |  |
 | D55 | [人工驾驶：JRETS/TSW键位、倍率限制、司机开关门、对标近景与评分](decisions/onboard.md) | 车载 |  |
@@ -158,8 +158,8 @@
 | D117 | [关门开始与门锁闭分开发布，声音按关门开始触发](decisions/ui-audio.md) | 界面 |  |
 | D118 | [按现有交路列报站、补唐镇终到，并逐份复核原录音](decisions/ui-audio.md) | 界面 |  |
 | D119 | [10/22试玩：司机门控、退行、ATO启动、DMI队列与区间富余](decisions/onboard.md) | 车载 | 见状态行：`sectionEta` 名义加减速估计已由 D127 取代… |
-| D120 | [试玩审查修正：统一走行余量、停站目标与起步条件](decisions/onboard.md) | 车载 |  |
-| D121 | [取消平台限速后重新标定慢运行等级](decisions/timetable.md) | 运行图 |  |
+| D120 | [试玩审查修正：统一走行余量、停站目标与起步条件](decisions/onboard.md) | 车载 || 停站目标与起步条件现行；runMargin 已由 D137/D173 固定区间富余替代 |
+| D121 | [取消平台限速后重新标定慢运行等级](decisions/timetable.md) | 运行图 || 3/4 级标定现行；runMargin 已由 D137/D173 固定区间富余替代 |
 | D122 | [夜间 60 km/h 假说与机场晚间备车试算（2026-10-22，只试算，未改生产代码）](decisions/timetable.md) | 运行图 | 结论是「不改」，保留 D121 的等级参数和当时的机场运用；晚间运行等级后来按录音重标（D163），机场晚间车底运用由 D178 重写（过程记录见 logs.md） |
 | D123 | [北新泾上行 06:30 窗口少 3 列：接受](decisions/timetable.md) | 运行图 |  |
 | D124 | [现场资料对照与录音入口：长区间预算调速受近扫限制](decisions/timetable.md) | 运行图 |  |
@@ -174,7 +174,7 @@
 | D133 | [末班换乘不互相等候（用户决定）](decisions/timetable.md) | 运行图 |  |
 | D134 | [【假设】盘点后的用户决定；已被替代的假设](decisions/platform.md) | 平台 |  |
 | D135 | [改造后录音复测、ATO 区间阶段与统一富余重标（2026-10-23）](decisions/timetable.md) | 运行图 | ATO 区间阶段（牵引、连续保速、惰行、制动）的结构现行；富余比例 `runMargin = .176` 已由 D137 改成固定秒数，停车形状后来改为 D173 的软停车（过程记录见 logs.md） |
-| D136 | [海天三路—机场60限速及高架预算调查（触发首末班停点）](decisions/timetable.md) | 运行图 |  |
+| D136 | [海天三路—机场60限速及高架预算调查（触发首末班停点）](decisions/timetable.md) | 运行图 || 60 km/h 限速现行；runMargin 已由 D137/D173 固定区间富余替代 |
 | D137 | [固定区间富余秒数（用户决定，2026-10-23）](decisions/timetable.md) | 运行图 | 「固定秒数、全线一个值」现行（过程记录见 logs.md） |
 | D138 | [早高峰停站和折返按 2 号线 DTO 论文对照（2026-10-23，10-24 定稿）](decisions/timetable.md) | 运行图 | 图定停站公式和 AM 司机作业的结构现行；AM 锁门后多 20 s 已改为约 5 s（D179，用户决定），后来的停站调整见 D163、D173（过程记录见 logs.md） |
 | D139 | [两处首末班超差诊断：有限候选未通过，不应用（2026-10-24）](decisions/timetable.md) | 运行图 |  |
