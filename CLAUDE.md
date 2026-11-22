@@ -33,8 +33,6 @@ UI / DMI / animation work needs visual checking: open the preview page or the ex
 
 `AGENTS.md` holds the project's engineering rules. All of it applies to every session: read it before writing code, reviewing, or planning a change. Key sections: 硬规矩：不写屎山 (7 rules), 多线路 (D140), 近期踩过的坑, 运行图的依据, 遇到问题先自己解决 (with the reference material list), 仓库约定, 验证和验收 (verification table, memory limits). Shared rules live only there; don't copy them here. If a shared rule looks wrong, propose changing it rather than working around it.
 
-Some lines there guard scope rather than judgment. Example: 运行图的依据 says not to change running times, dwell model, or first/last constants unless a task explicitly asks. You may change these when the evidence supports it (following the source priority in that section); record it in the decision entry.
-
 ## Getting changes onto main
 
 Main is `claude/nifty-faraday-mdr3ug`, checked out in the main folder. Only main is pushed to origin. Every session commits only its own files (name paths in `git add`; never `git add -A`).
