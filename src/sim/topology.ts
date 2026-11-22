@@ -214,8 +214,10 @@ export function occupiedTurnbackBerth(topo: Topology, station: number, point: Tr
   const primary = turnbackBerthsForConsist(topo, station, requested, coupled);
   // An explicit deep cab change keeps that role. Otherwise an already-entered
   // ordinary track still fixes its normal point even after an earlier choice.
+  // (a middle track beside the platforms counts only when the task asks for it, D203: a car stored on
+  // it that leaves by a shunt elsewhere is not already at its change of ends)
   const candidates = coupled ? primary : [...primary,
-    ...topo.stations[station].turnbackBerths.filter(id => !primary.includes(id))];
+    ...topo.stations[station].turnbackBerths.filter(id => !primary.includes(id) && !topo.berths[id].beside)];
   // (anywhere in a tail stands for its turnback point only for a turn at the station: a move bound
   // for a change of ends beyond it, on a depot's 牵出线, merely runs through)
   const tailTurn = primary.some(id => topo.stations[station].turnbackBerths.includes(id));
