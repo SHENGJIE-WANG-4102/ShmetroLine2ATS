@@ -1798,8 +1798,8 @@ export function spaceServiceDepartures(trips: GenTrip[], protectedIds: Set<numbe
   }
 }
 
-/** Only clock shifts are permitted once the service has been laid out (s; OPERATIONS.diagramShiftS: the line's own budget). */
-export const MAX_DIAGRAM_SHIFT_S = OPERATIONS.diagramShiftS ?? 20;
+/** Only clock shifts are permitted once the service has been laid out (s). */
+export const MAX_DIAGRAM_SHIFT_S = 20;
 const TIMING_ROUNDS = 64;
 function resolveTimingConflicts(ctx: PlanContext, trips: GenTrip[], blocks: Block[], protectedIds: Set<number>, serviceDepartures: Map<GenTrip, number>) {
   const original = trips.map(t => serviceDepartures.get(t) ?? t.stops[0].dep);

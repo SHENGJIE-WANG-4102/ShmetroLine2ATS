@@ -307,8 +307,6 @@ export interface CoreLineData {
     /** Longest a turning car may stand on an intermediate station's own middle track (s), by station id;
      * the track holds one car (the plan's place calendar), so only one car stands there at a time. */
     longStand?: Record<string, number>;
-    /** Longest a departure's clock may move once the service is laid out (s); absent: 20. */
-    diagramShiftS?: number;
     depotReturns: {
         depot: string;
         dir: "UP" | "DN";

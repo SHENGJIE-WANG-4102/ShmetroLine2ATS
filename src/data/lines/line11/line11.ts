@@ -305,8 +305,6 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   ],
   // 用户决定（2026-11-22）：南翔中间线只能停 1 列。晚高峰前没活的小交路车停在中间线等发车，不在正线上空放来回【等待上限为假设】。
   longStand: { NX: H(2) },
-  // 11 号线时分只对官方首末班（2026-11-15）：迪士尼晚间折返差 21 s 就要从库里出车，排图可把发车挪 25 s【假设】
-  diagramShiftS: 25,
   // 用户决定（2026-11-21）：早高峰结束（模板 09:45）前不回库，也就不会一边空车回库一边空车出库。
   noDepotReturnBefore: '09:45',
   platformPassKmh: 45,
