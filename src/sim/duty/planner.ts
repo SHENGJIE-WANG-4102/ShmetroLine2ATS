@@ -586,13 +586,12 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   const homing = spare.filter(c => c.trip.next === undefined && !endOf.has(c.trip.id)).sort((a, b) => arr(a.trip) - arr(b.trip));
   const later = new Map(depots.map(y => [y.id, homing.filter(c => nearest(c.station) === y.id).length]));
   // Each yard ends the day at its own count: first find, without committing,
-  // the yards each car can still reach, and match the cars to the cars each
-  // yard is owed (augmenting paths), nearest first. A car whose match no
+  // the ways home each car still has, and match the cars to the cars each
+  // yard is owed at the least total cost (D225). A car whose match no
   // longer fits when its turn comes falls back to the balanced order below.
-  const reach = new Map<Car, Yard[]>();
   const matched = new Map<Car, Yard>();
   const rematch = (all: Car[]) => {
-    reach.clear(); matched.clear();
+    matched.clear();
     // An idle morning car goes to its nearest yard whatever the counts
     // (idleNearest): it is no car to match, and the count it fills there is
     // not offered to the others.
@@ -603,34 +602,24 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
       return !y;
     });
     mv.dry = true;
-    // a car's yards, fewest extra moves first (straight in, then a move, then
-    // a cut run), then the nearest
-    for (const car of rest) {
-      const cost = new Map<Yard, number>();
+    // a way home costs its extra moves (straight in, a move, a cut run; one
+    // across the core more than any local one), then its length, counting
+    // more the later the car (an early one still runs in service, a late one
+    // runs empty): of two cars at one place, the earlier takes the farther yard
+    const costs = rest.map(car => {
+      const cost = new Map<number, number>();
       for (const y of depots) for (const across of [false, true]) {
         mv.viaCore = across;
         const c = directReturn(car, y) ? 0 : home(car, y) ? 1 : trimEnd(car, y) ? 2 : undefined;
-        if (c !== undefined) { cost.set(y, Math.min(c, cost.get(y) ?? c)); break; }
+        if (c !== undefined) { cost.set(y.id, (c + (across ? 3 : 0)) * 1e6 + distanceTo(y, car.station) * (1 + arr(car.trip) / 86400)); break; }
       }
-      reach.set(car, [...cost.keys()].sort((a, b) => cost.get(a)! - cost.get(b)! || distanceTo(a, car.station) - distanceTo(b, car.station)));
-    }
+      return cost;
+    });
     mv.dry = false; mv.viaCore = true;
-    const slots = new Map(depots.map(y => [y.id, Math.max(0, due(y) - (idle.get(y.id) ?? 0))]));
-    const holders = new Map<number, Car[]>(depots.map(y => [y.id, []]));
-    const assign = (car: Car, seen: Set<number>): boolean => {
-      for (const y of reach.get(car)!) {
-        if (seen.has(y.id)) continue;
-        seen.add(y.id);
-        const list = holders.get(y.id)!;
-        const other = list.length < slots.get(y.id)! ? undefined : list.find(o => assign(o, seen));
-        if (list.length >= slots.get(y.id)! && !other) continue;
-        if (other) list.splice(list.indexOf(other), 1);
-        list.push(car); matched.set(car, y);
-        return true;
-      }
-      return false;
-    };
-    for (const car of rest.slice().sort((a, b) => reach.get(a)!.length - reach.get(b)!.length)) assign(car, new Set());
+    const slots = depots.map(y => Math.max(0, due(y) - (idle.get(y.id) ?? 0)));
+    const pick = assignLeastCost(costs.map(c => depots.map(y => c.get(y.id))), slots);
+    pick.forEach((k, i) => { if (k >= 0) matched.set(rest[i], depots[k]); });
+    if (dutyDebugOn()) rest.forEach((car, i) => dutyDebug.push(`match ${fmt(arr(car.trip))} ${STATIONS[car.station].id} ${car.trip.dir} → ${pick[i] < 0 ? '-' : depots[pick[i]].name} costs ${depots.map(y => `${y.name}:${costs[i].get(y.id) ?? '-'}`).join(' ')} slots ${slots.join(',')}`));
   };
   if (input.matchHomes) rematch(homing);
   for (const [i, car] of homing.entries()) {
@@ -695,3 +684,38 @@ export function planDuties(input: DutyInput): { blocks: Block[]; issues: PlanIss
   return { blocks, issues, ledger };
 }
 
+/** Least-cost assignment of items to bins (successive shortest paths): as
+ * many items as the bins' `slots` can take, then the least total cost.
+ * `cost[i][k]` undefined: item i cannot go to bin k. Returns each item's bin, or -1. */
+function assignLeastCost(cost: (number | undefined)[][], slots: number[]): number[] {
+  const n = cost.length, m = slots.length, S = n + m, Z = S + 1;
+  const to: number[] = [], cap: number[] = [], w: number[] = [], adj: number[][] = Array.from({ length: Z + 1 }, () => []);
+  const edge = (a: number, b: number, c: number, x: number) => {
+    adj[a].push(to.length); to.push(b); cap.push(c); w.push(x);
+    adj[b].push(to.length); to.push(a); cap.push(0); w.push(-x);
+  };
+  for (let i = 0; i < n; i++) {
+    edge(S, i, 1, 0);
+    for (let k = 0; k < m; k++) if (cost[i][k] !== undefined) edge(i, n + k, 1, cost[i][k]!);
+  }
+  for (let k = 0; k < m; k++) if (slots[k] > 0) edge(n + k, Z, slots[k], 0);
+  for (;;) {
+    // Bellman-Ford (queue): residual costs may be negative
+    const dist = new Array<number>(Z + 1).fill(Infinity), via = new Array<number>(Z + 1).fill(-1), queued = new Array<boolean>(Z + 1).fill(false);
+    dist[S] = 0;
+    const queue = [S];
+    for (let h = 0; h < queue.length; h++) {
+      const a = queue[h]; queued[a] = false;
+      for (const e of adj[a]) if (cap[e] > 0 && dist[a] + w[e] < dist[to[e]]) {
+        dist[to[e]] = dist[a] + w[e]; via[to[e]] = e;
+        if (!queued[to[e]]) { queued[to[e]] = true; queue.push(to[e]); }
+      }
+    }
+    if (dist[Z] === Infinity) break;
+    for (let v = Z; v !== S; v = to[via[v] ^ 1]) { cap[via[v]]--; cap[via[v] ^ 1]++; }
+  }
+  return cost.map((_, i) => {
+    const e = adj[i].find(x => to[x] >= n && to[x] < S && cap[x] === 0 && w[x] >= 0);
+    return e === undefined ? -1 : to[e] - n;
+  });
+}
