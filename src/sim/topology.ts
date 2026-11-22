@@ -1733,14 +1733,18 @@ export function buildTopology(): Topology {
       const d: Dir = incoming === 'DN' ? 1 : -1;
       const target = berths.find(b => b.link === store.link && b.dir === -d);
       if (!target) continue;
-      const signal = signals.filter(s => s.station === st && s.role === 'rev' && s.dir === -d
+      // the nearest reverse signal whose clearing point (train plus margin beyond it) lies on plain track
+      const spot = signals.filter(s => s.station === st && s.role === 'rev' && s.dir === -d
         && links[s.link].track === incoming && (incoming === 'DN' ? s.chain > chains[st] : s.chain < chains[st])
         && reach(s.link,s.dir,Infinity,(lid,dir) => lid === target.link && dir === target.dir))
-        .sort((a,b) => Math.abs(a.chain-chains[st])-Math.abs(b.chain-chains[st]))[0];
-      if (!signal) continue;
-      const chain = signal.chain + d * (LINE_INFO.trainLength + 2 * SIGNAL_MARGIN);
-      const lid = mainLinks[incoming].find(id => links[id].chainA < chain && chain < links[id].chainB);
-      if (lid === undefined || sections[links[lid].section].kind !== 'plain') continue;
+        .sort((a,b) => Math.abs(a.chain-chains[st])-Math.abs(b.chain-chains[st]))
+        .map(s => {
+          const chain = s.chain + d * (LINE_INFO.trainLength + 2 * SIGNAL_MARGIN);
+          return { chain, lid: mainLinks[incoming].find(id => links[id].chainA < chain && chain < links[id].chainB) };
+        })
+        .find(c => c.lid !== undefined && sections[links[c.lid].section].kind === 'plain');
+      if (!spot) continue;
+      const { chain, lid } = spot as { chain: number; lid: number };
       const berth = addBerth({ kind:'shunt', link:lid, offset:chain-links[lid].chainA, dir:d,
         platform:-1, station:st, depot:-1, reverse:true, maxLength:LINE_INFO.trainLength,
         name:`${STATIONS[st].name}${incoming}调车换端` });
