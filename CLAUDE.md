@@ -4,17 +4,17 @@ Shanghai Metro ATS / operations simulator, multi-line (TypeScript + Vite, public
 
 ## Sessions
 
-When the setup changes, edit only this section. User decision, 2026-11-22: DeepSeek is retired (Sonnet costs less); each line has its own Claude session, and one Opus session reviews.
+When the setup changes, edit only this section. User decision, 2026-11-22: DeepSeek is retired (Sonnet costs less); each line has its own Claude session, and one Opus session reviews after the fact. User, 2026-11-23: line sessions must not route routine work through Line2 (「改个排图都要找Line2好烦」).
 
 | Session | Model | Owns | Works in |
 |---|---|---|---|
-| Line2 | Opus 5.5, Medium | Overall reviewer: reviews and lands shared-code changes, assigns D numbers, decides when to run full suites. Also Line 2 itself (mostly done). | Main folder, branch `claude/nifty-faraday-mdr3ug` ("main") |
+| Line2 | Opus 5.5, Medium | Overall reviewer: reviews landed shared-code changes in batches, after the fact; decides when to run full suites. Also Line 2 itself (mostly done). | Main folder, branch `claude/nifty-faraday-mdr3ug` ("main") |
 | Line11 | Sonnet 5.5, Medium | Line 11 | Own worktree `.claude/worktrees/line11` |
 | Line14 | Sonnet 5.5, Medium | Line 14 | Own worktree `.claude/worktrees/line14` |
 
 - Fable: used only when available (official promotions or API credit), for hard design problems or bugs.
 - A line session that finds itself in the main folder first commits its own work, then moves into its worktree (create it with `EnterWorktree` if missing). Two sessions writing in one folder means each one tests the other's half-finished work.
-- Opus quota is the scarce resource. The review flow below exists to keep Opus reading only shared-code diffs.
+- Opus quota is the scarce resource, and the user's attention is scarcer. Line sessions own their work end to end, shared code included; Opus review is never a gate.
 
 ## Your role (every session)
 
@@ -37,35 +37,24 @@ UI / DMI / animation work needs visual checking: open the preview page or the ex
 
 Main is `claude/nifty-faraday-mdr3ug`, checked out in the main folder. Only main is pushed to origin. Every session commits only its own files (name paths in `git add`; never `git add -A`).
 
-**Line sessions (Line11, Line14):**
+**Whoever makes a change lands it**: commit, merge into main, push, and rebuild the exe if app code changed (`npm run app:build` in the main folder). Nobody hands a commit, push, or build to another session.
+
+**Line sessions (Line11, Line14)** land everything themselves, shared code included:
 1. Commit on your branch in your worktree.
-2. To land: `git rebase claude/nifty-faraday-mdr3ug`, then rerun the checks the verification table requires.
-3. Look at `git diff --name-only claude/nifty-faraday-mdr3ug...HEAD`:
-   - **Only your line's files** (`src/data/lines/<your line>/`, your line's tests, `docs/design-decisions-line<N>.md`, `reference/line<N>/`): land it yourself with `git -C D:/ShmetroLine2ATS merge --ff-only <your branch>`, then push main. If git refuses because of uncommitted files in the main folder, ask the Line2 session to commit them; don't touch them. If app code changed, rebuild the exe (`npm run app:build` in the main folder).
-   - **Any shared file** (`src/sim/**`, `src/ui/**`, `src/data/` outside `lines/`, `scripts/**`, `tests/` shared with other lines, `AGENTS.md`, `docs/design-decisions.md`, `docs/decisions/**`): don't land. Write a review note `work/review/<line>-<yyyymmdd-hhmm>.md` and send its path to the Line2 session. Keep working meanwhile; the landing waits for review.
-4. Before asking for review, run `tests/test-line.test.ts` plus the targeted tests of the other lines your shared change could affect.
-5. For a shared-core rewrite (replacing a batch of rules with one mechanism, rewriting an engine part), send the design to the Line2 session before writing the code.
+2. `git rebase claude/nifty-faraday-mdr3ug`, then run the checks the verification table requires. If you touched shared code (`src/sim/**`, `src/ui/**`, `src/data/` outside `lines/`, `scripts/**`, shared tests), also run `tests/test-line.test.ts` and the targeted tests and plan validation of the other lines it could affect.
+3. Land: `git -C D:/ShmetroLine2ATS merge --ff-only <your branch>`, then push main. Take the next D number at this point (after the rebase you see the latest one).
+4. If another line's timetable or behavior changed, the D entry says where and why. If that change is user-visible on the other line, ask the user first (per "What goes to the user"), not Line2.
+5. For a shared-core rewrite, hold yourself to the big-rewrite discipline: walk through normal operation (intermediate stops, terminal turnback, origin departure) on every line, and judge by a full-day diff against the previous plan, not the first deviation.
+6. If git refuses the merge because of uncommitted files in the main folder, wait a bit and retry; message Line2 only if it stays blocked. Don't touch those files.
 
-Review note (short, Chinese):
-```
-结论：一句话
-公共文件：只列公共文件的 diff --stat；每个文件改了什么、为什么
-对别的线：跑了哪些测试、结果；2/11/14 号线运行图变没变，变在哪、为什么
-D 条目草稿：D??? <标题>（写在 docs/decisions/<主题>.md 末尾，编号留空）
-120× 要看什么：（可选）
-```
+Message Line2 only when you are blocked, or when you want a second opinion on a hard design question. Not for commits, landing, D numbers, or routine shared-code changes.
 
-**Line2 session (review):**
-- Read the note and only the shared-file diff: `git diff claude/nifty-faraday-mdr3ug...<branch> -- <shared paths>`. Skip the line's own data files.
-- Check: the 7 hard rules (especially branches on station names / clock times / line IDs, duplicated logic, comparing direction by station index); the pitfalls list; cheating (loosened checks, failures marked "known", test expectations changed without a reason for each); effects on other lines. Rerun a key check yourself only when the note's numbers look off.
-- Pass: fast-forward merge, replace `D???` with the next D number, commit, push, rebuild the exe if app code changed.
-- Fail: write the issues (file:line) into the review note and message the line session.
-- Batch notes that arrive close together into one review.
+**Line2 session (after-the-fact review):** when the user asks, or at the end of a phase, review shared-code commits landed since the last review: `git log <last>..claude/nifty-faraday-mdr3ug -- src/sim src/ui scripts src/data/current.ts tests` (record the reviewed commit in `work/review/last-reviewed`). Read only those diffs. Check the 7 hard rules (branches on station names / clock times / line IDs, duplicated logic, direction by station index or chainage), the pitfalls list, cheating (loosened checks, failures marked "known", test expectations changed without a reason each), and effects on other lines. Fix what you find yourself, or message the line session with file:line.
 
 ## Decision entries
 
 - Line-only decisions: `docs/design-decisions-line11.md` / `-line14.md`, numbered L11-xx / L14-xx, owned by that line's session.
-- Shared-code decisions: numbered Dxxx. `docs/design-decisions.md` is the index (one row per entry: number, title, topic, status); the entry text goes at the end of the matching topic file in `docs/decisions/`, fully superseded entries move to `docs/decisions/archive.md`. The number is assigned when the change lands on main (by the Line2 session for reviewed changes); drafts use `D???`.
+- Shared-code decisions: numbered Dxxx. `docs/design-decisions.md` is the index (one row per entry: number, title, topic, status); the entry text goes at the end of the matching topic file in `docs/decisions/`, fully superseded entries move to `docs/decisions/archive.md`. The session that lands the change takes the next number when it lands.
 - One entry, one decision: what was decided, why, and which shared files changed. Mark user decisions as "用户决定, date"; mark inferences as 【假设】 with the basis. No process logs or long output; those go in `work/`. When a later decision overrides an earlier one, note "superseded by Dxxx" in the old entry. Write in Chinese, matching the existing files.
 
 **Pending cleanup:** split into topic files with an index, and the ten largest entries (D142, D138, D73, D74, D137, D173, D135, D115, D166, D122) cut down to the current decision with a status line; their full text is in `docs/decisions/logs.md` (2026-11-22). D190–D226 status lines cross-checked against later entries (18 added, 2026-11-22). D1–D189: scanned for code names that no longer exist; the four that read as current but cite replaced parameters (D52, D120, D121, D136) got status lines; the rest are false hits or duty/yield entries wholly replaced by D142/D178/D184 and were left as is (2026-11-22). `timetable.md`: the eleven entries over ~5 KB (D72, D83, D126, D81, D139, D171, D129, D165, D79, D78, D76) condensed the same way (184→122 KB, 2026-11-22). Delete this paragraph once done.
