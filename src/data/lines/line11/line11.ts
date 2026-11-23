@@ -124,13 +124,15 @@ export const STATION_EN: Record<string, string> = {
  *   嘉定新城站南的 X；花桥站东、兆丰路两端、上海汽车城、马陆、祁连山路、康新公路的
  *   单渡线。
  */
+/** 站后折返的近位：车长 140＋余量 6＋数值裕量 1，整列过 X 清出咽喉即停（2 号线 D171 同一算法；2 号线车长 186 得 193）。 */
+const NORMAL_TURNBACK_DISTANCE_M = 147;
 const tails: TailDef[] = [
   // 花桥：站西两条尾轨就是两正线延长线，尾轨之间只有一组交叉渡线（图上单个 X）。
-  { station: 0, side: 'west', length: 420, scissors: true, scissorsSpacing: 0 },
+  { station: 0, side: 'west', length: 420, scissors: true, scissorsSpacing: 0, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
   // 嘉定北：站东（数据 west）两正线延长到车挡，站台东端外一组 X；城北路停车场
   // 两条出入段线在 X 两侧从下行正线分出，见 sidings。站西往嘉定西方向
   // 没有渡线（图上那条带 X 的横线是嘉闵线城北路，不是 11 号线）。
-  { station: 7, side: 'west', length: 700, scissors: true, scissorsSpacing: 0, scissorsApproach: 200 },
+  { station: 7, side: 'west', length: 700, scissors: true, scissorsSpacing: 0, scissorsApproach: 200, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
   // 迪士尼：站东两正线各自延长到车挡（存车，不折返）；折返走两正线之间的
   // 两条中间折返线，见 pairs。两正线之间没有渡线（站东从 1 道正线往北去的
   // 那根斜线接的是 21 号线，不是 11 号线自己的渡线）。
@@ -140,8 +142,8 @@ const pairs: PairDef[] = [
   // 迪士尼：站台东端外两正线各分出一个Y，内侧两腿交叉，进两条中间折返线
   // （和 2 号线蟠祥路同一种双Y）：任一正线都能进任一条折返线。
   { id: 'DSL', station: 39, side: 'east', at: 205, stubs: [
-    { id: 'DSL1', name: '迪士尼1道折返线', length: 400 },
-    { id: 'DSL2', name: '迪士尼2道折返线', length: 400 },
+    { id: 'DSL1', name: '迪士尼1道折返线', length: 400, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
+    { id: 'DSL2', name: '迪士尼2道折返线', length: 400, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
   ] },
   // 罗山路站北（往御桥一端）：两正线各分出一个Y，内侧两腿交叉进两条中间线，
   // 两条中间线往北再折向东进川杨河定修段，就是出入段线；任一正线都能进出
@@ -152,8 +154,8 @@ const pairs: PairDef[] = [
   ] },
   // 罗山路站南（往秀沿路一端）：同样的双Y进两条中间折返线，尽头车挡。
   { id: 'LSH', station: 36, side: 'east', at: 205, stubs: [
-    { id: 'LSH1', name: '罗山路1道折返线', length: 420 },
-    { id: 'LSH2', name: '罗山路2道折返线', length: 420 },
+    { id: 'LSH1', name: '罗山路1道折返线', length: 420, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
+    { id: 'LSH2', name: '罗山路2道折返线', length: 420, turnbackDistance: NORMAL_TURNBACK_DISTANCE_M },
   ] },
 ];
 const sidings: SidingDef[] = [
@@ -273,7 +275,8 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   lastBigWestboundDep: H(22, 30),
   lastBigWestboundArrival: H(24, 0),
   peakCoreHeadway: 120, // 官方 南翔—三林 早高峰往三林 平均2分
-  minTurnback: { HQ: 240, JDB: 240, DSL: 300, NX: 240, SL: 300, LSH: 240, AT: 240 }, // 【假设】按尾轨/中间线作业加余量
+  minTurnback: { HQ: 240, JDB: 240, DSL: 240, NX: 240, SL: 300, LSH: 240, AT: 240 }, // 【假设】站后折返按 2 号线 D171 的近位预算 240 s（清客 60＋走行约 150＋始发 22.7）；迪士尼过 X 进中间线、整列清出咽喉即停，不开到尽头
+  rearTurnback: { entryRunS: 41, changeEndsS: 56, exitRunS: 38 }, // 【假设】沿用 2 号线 D171 的站后折返三段（机场视频）；11 号线没有自己的实测
   // 用户决定（2026-11-15）：始发站平峰在站台停（开门候车），高峰看排图；站台上站这么久算正常折返作业，不算长候班
   originStandS: 180,
   longWaitPlatformStations: ['NX'], // 南翔小交路在中间线站台上候发换端（没有别的折返线）

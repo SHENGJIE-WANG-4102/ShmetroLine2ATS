@@ -1,3 +1,4 @@
+import { EVENING_SECTION_RUN_BANDS } from './running';
 import type { SimulationData, ServiceData } from '../../simulation';
 import type { Period, Template } from '../../../sim/timetable';
 import { LINE11_PHYSICS, LINE11_ENERGY } from './physics';
@@ -129,6 +130,7 @@ export const LINE11_SIMULATION: SimulationData = {
     dayPeriods, shownPeriods: dayPeriods,
     dwellBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },
     runBands: { weekday: [{ from: 0, to: Infinity, value: 1 }], weekend: [{ from: 0, to: Infinity, value: 1 }] },
+    sectionRunBands: { weekday: EVENING_SECTION_RUN_BANDS },
     serviceData: { weekday: { ...service(), peaks: weekdayPeaks }, weekend: service() },
     // 【假设】车库整备/出车窗口，不代表新增营业首班。
     opening: { outerAlternation: 0, stockUntil: H(12), redirectFrom: H(5), emptyFeedersFrom: H(20), feederUntil: H(26), stableUntil: H(10), dayStart: H(4), defaultStableDeparture: H(6) },
