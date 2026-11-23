@@ -93,7 +93,7 @@ npm run typecheck   # 应用和 scripts/ 两个工程
 npx vitest run tests/driver.test.ts tests/dmi.test.ts tests/stopview.test.ts
 ```
 
-按改动选择测试文件。改运行图还须做两种日型计划校验、官方首末班及高德车数对比。分工和审查方式见 [CLAUDE.md](CLAUDE.md)，执行方的仓库约束和完整验证要求见 [AGENTS.md](AGENTS.md)。
+按改动选择测试文件。改运行图还须做两种日型计划校验、官方首末班及高德车数对比。分工、审查方式、工程规矩和完整验证要求见 [CLAUDE.md](CLAUDE.md)。
 
 ## 授权
 

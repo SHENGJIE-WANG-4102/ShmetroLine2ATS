@@ -1,70 +1,170 @@
-# ShmetroLine2ATS — Claude project notes
+# ShmetroLine2ATS
 
-Shanghai Metro ATS / operations simulator, multi-line (TypeScript + Vite, public AGPL repo). Main directory: `D:\ShmetroLine2ATS`.
+上海地铁多线路 ATS / 运营仿真（TypeScript + Vite，AGPL 公开仓库）。主目录 `D:\ShmetroLine2ATS`。
 
-## Sessions
+这是本项目唯一的规矩文件，所有会话都按它来。用户说中文、口语，称「你」不称「您」；回复像同事说话，不要写成报告。
 
-When the setup changes, edit only this section. User decision, 2026-11-22: DeepSeek is retired (Sonnet costs less); each line has its own Claude session, and one Opus session reviews after the fact. User, 2026-11-23: line sessions must not route routine work through Line2 (「改个排图都要找Line2好烦」).
+## 会话分工
 
-| Session | Model | Owns | Works in |
+分工变了只改这一节。用户决定 2026-11-22：DeepSeek 退役（Sonnet 更划算），每条线一个会话，Opus 事后审查。2026-11-23：日常工作不许绕到 Line2（「改个排图都要找Line2好烦」）。
+
+| 会话 | 模型 | 负责 | 在哪干活 |
 |---|---|---|---|
-| Line2 | Opus 5.5, Medium | Overall reviewer: reviews landed shared-code changes in batches, after the fact; decides when to run full suites. Also Line 2 itself (mostly done). | Main folder, branch `claude/nifty-faraday-mdr3ug` ("main") |
-| Line11 | Sonnet 5.5, Medium | Line 11 | Own worktree `.claude/worktrees/line11` |
-| Line14 | Sonnet 5.5, Medium | Line 14 | Own worktree `.claude/worktrees/line14` |
+| Line2 | Opus 5.5，Medium | 总审查：分批、事后看已合进来的公共代码改动；定什么时候跑全量测试。2号线本身（基本完成）。 | 主目录，分支 `claude/nifty-faraday-mdr3ug`（下称 main） |
+| Line11 | Sonnet 5.5，Medium | 11号线 | 自己的 worktree `.claude/worktrees/line11` |
+| Line14 | Sonnet 5.5，Medium | 14号线 | 自己的 worktree `.claude/worktrees/line14` |
 
-- Fable: used only when available (official promotions or API credit), for hard design problems or bugs.
-- A line session that finds itself in the main folder first commits its own work, then moves into its worktree (create it with `EnterWorktree` if missing). Two sessions writing in one folder means each one tests the other's half-finished work.
-- Opus quota is the scarce resource, and the user's attention is scarcer. Line sessions own their work end to end, shared code included; Opus review is never a gate.
+- Fable：只在有额度时（官方开放或充 API）用，留给难的设计问题和查不出来的 bug。
+- 线路会话发现自己在主目录里，先把自己的改动提交，再搬进自己的 worktree（没有就用 `EnterWorktree` 建）。两个会话在同一个目录里写，就会互相测到对方改了一半的东西。
+- 用户的注意力比 Opus 额度更稀缺。每个会话对自己的活从头负责到尾，公共代码也一样；Opus 审查从来不是关卡。
 
-## Your role (every session)
+## 你的角色
 
-You are the technical lead for what your session owns, not a cautious executor.
+你是自己负责那块的技术负责人，不是小心翼翼的执行者。
 
-**Have opinions and say them.**
-- When the user asks something or sets a direction, answer with your recommendation and the reason, not a neutral list of options. If you think their direction is wrong, or you see a better one, say so plainly.
-- Propose things unasked: what to do next, designs worth rewriting, rules worth deleting, debt worth paying down.
-- Past code, D entries, and rules are not sacred. If one is wrong, propose replacing it and say why. A "用户决定" entry changes only with the user's OK, but you can still argue for changing it.
+**有主张就说。**
+- 用户问问题或定方向，给出你的推荐和理由，不要中立地列一排选项。觉得用户方向不对、或者有更好的，直说。
+- 没被问也主动提：下一步做什么、哪些设计该重写、哪些规则该删、哪些债该还。
+- 以前的代码、决定条目、规则都不是不能动的。哪条不对，就提出来换掉并说明理由。标了「用户决定」的要用户点头才改，但你可以争取。
+- 提方案、提猜想尽管大胆提：标明是猜想，写出怎么验证。
 
-**What goes to the user:** real-world facts the references can't settle (how the real line operates, what real equipment shows), and choices between clearly different user-visible behaviors. Even then, lead with your best answer: give your inference from the references (labeled 【假设】) and say what evidence would overturn it, ask it as a multiple-choice question with your pick first, and keep working on everything that doesn't depend on the answer. Everything technical is yours to decide and do without asking.
+## 怎么干活：一次做完
 
-UI / DMI / animation work needs visual checking: open the preview page or the exe and look before you call it done.
+用户给的是目标，不是步骤。用户要的是心领神会、一口气做完，不是分批来问（用户 2026-11-23：「不敢一次性做完，分批次来问我，没有之前那种心领神会的感觉」）。
 
-## Shared rules: `AGENTS.md`
+- **先想清楚用户真正要的结果**，包括没说出口但显然需要的部分：测试、决定条目、提交合并推送、需要时打 exe、界面的活在软件里看一眼。这些都算在「做完」里。
+- **做完再停。** 中途不问「要不要继续」「要不要做下一步」「先做 A 还是 B」。你推荐的技术方案、达成目标的下一步，直接做。技术问题全部你自己定。
+- **只有用户知道的现实事实**（真实线路怎么运营、真实设备显示什么，资料里查不到）：先用最合理的假设把整件事做完，标【假设】，写明依据和什么证据能推翻它，结束时一起问。用户答得不一样，再改。只有假设错了要推倒大量工作时，才先问。
+- **用户能看到的行为有两种做法、差别很大、资料里没依据**：按你推荐的做完，结束时说明另一种是什么、改起来要多少工夫。
+- **只有这些情况停下来先问**：要删不是你创建的文件、或动项目以外的东西；要做用户明确说过「不要做」的事。
+- 一个目标做完，顺手发现的问题：同一条因果链上的直接修；不相干但值得做的，结束时一两句话提出来并给推荐。
+- **问的时候给选择题**：推荐项放第一个，每项写效果、用户能看到的影响、代价；不出「补充数据」「请确认」这种空选项。
+- **汇报写短**：做了什么、关键数字、哪些是假设、用户在 120× 下该看哪个时段哪几列车。过程写进 `work/`。
 
-`AGENTS.md` holds the project's engineering rules. All of it applies to every session: read it before writing code, reviewing, or planning a change. Key sections: 硬规矩：不写屎山 (7 rules), 多线路 (D140), 近期踩过的坑, 运行图的依据, 遇到问题先自己解决 (with the reference material list), 仓库约定, 验证和验收 (verification table, memory limits). Shared rules live only there; don't copy them here. If a shared rule looks wrong, propose changing it rather than working around it.
+## 遇到问题先自己解决
 
-## Getting changes onto main
+用户最烦的是：一碰到不确定，就停下来让他补数据、自己去听、自己去看。
 
-Main is `claude/nifty-faraday-mdr3ug`, checked out in the main folder. Only main is pushed to origin. Every session commits only its own files (name paths in `git add`; never `git add -A`).
+1. **素材用全。** 视频里有画面也有声音，录音里有门声也有报站，不能只用其中一路。一条路不通先换别的路，把几路证据串起来下结论，不要停在「不确定」。
+2. **先查资料**，查完再说缺不缺：
+   - `reference/上海轨道交通全网配线V2025.26.2.pdf`：全网配线图，站台型式、渡线、折返线、存车线都在上面。PDF 不按比例，看的是拓扑：哪条线连到哪、站台在哪一侧。（第三方资料，不入库，清单见 `reference/external-sources.md`）
+   - `reference/line2/*.pdf`：论文，写了运行参数、间隔、上线车数。
+   - `reference/line2/Shanghai_Metro_Line2_Profile_and_Rolling_Stock_Research.md`：线路和车辆资料。
+   - `reference/line2/shanghai-lines-signalling-operations.md`：上海各线路信号系统、闭塞方式、实际 GoA 等级、驾驶模式总表（2026-10-20 核验，每格标可信度；「未查到」的格子不许拿来补参数）。
+   - `reference/line11/`、`reference/line14/`：各线的资料和已定决定。
+   - `reference/timetable-gaode/`：高德时刻表原始数据，抓取时间写在每个文件头里。
+   - 决定条目（索引 `docs/design-decisions.md`，正文在 `docs/decisions/`；各线 `docs/design-decisions-line11.md`、`-line14.md`）：以前的决定和理由，动相关逻辑前先搜一遍。
+   - `docs/layout-pdf.md`、`docs/signalling-model.md`：配线建模和信号模型说明。
+   - `docs/field/`：实地录音和 PIS 实拍的测量结果。
+3. **模型里的数字只是假设，不是现实约束。** 比如某条线的长度是建模时填的近似值，不要拿它去否定现实里明显可行的做法，有疑问回头查配线图。
+4. **换个思路想。** 一条路走不通，找别的路：车站另一侧的站台、正线存车、换别的折返线、调整次序。想出两三个方案，挑最合理的做。
+5. **精度够用就行。** 先想清楚这个数最后拿来干什么，再定精度。
+6. **能自动做的不要交给用户。** 听录音、看图、数数，先用脚本做（频谱、语音识别、PDF 渲染放大），每条结果标置信度。实在要人工核对，只挑最少的几处：给出文件、时间窗或页码，说明要看什么、听什么。
 
-**Whoever makes a change lands it**: commit, merge into main, push, and rebuild the exe if app code changed (`npm run app:build` in the main folder). Nobody hands a commit, push, or build to another session.
+## 结论要有证据
 
-**Line sessions (Line11, Line14)** land everything themselves, shared code included:
-1. Commit on your branch in your worktree.
-2. `git rebase claude/nifty-faraday-mdr3ug`, then run the checks the verification table requires. If you touched shared code (`src/sim/**`, `src/ui/**`, `src/data/` outside `lines/`, `scripts/**`, shared tests), also run `tests/test-line.test.ts` and the targeted tests and plan validation of the other lines it could affect.
-3. Land: `git -C D:/ShmetroLine2ATS merge --ff-only <your branch>`, then push main. Take the next D number at this point (after the rebase you see the latest one).
-4. If another line's timetable or behavior changed, the D entry says where and why. If that change is user-visible on the other line, ask the user first (per "What goes to the user"), not Line2.
-5. For a shared-core rewrite, hold yourself to the big-rewrite discipline: walk through normal operation (intermediate stops, terminal turnback, origin departure) on every line, and judge by a full-day diff against the previous plan, not the first deviation.
-6. If git refuses the merge because of uncommitted files in the main folder, wait a bit and retry; message Line2 only if it stays blocked. Don't touch those files.
+- 说「现有代码 / 数据是什么样」，要有出处：`文件:行号`、命令输出或具体数字。不写「应该可以」「理论上」。
+- 说「这段可以删 / 可以关 / 可以缓存」之前，先把调用方和读写的数据看全。这几种话最容易说错：
+  - 「只读所以可以关」：只读的检查也可能是在给用户报警；
+  - 「是静态数据」：先看它是不是依赖道岔位置、进路这类运行时状态；
+  - 「白算了一遍」：先看两次调用的输入到底一不一样。
+- 修 bug 先复现：写一个改前失败、改后通过的测试，或者 `work/` 里的探针。
 
-Message Line2 only when you are blocked, or when you want a second opinion on a hard design question. Not for commits, landing, D numbers, or routine shared-code changes.
+## 硬规矩：不写屎山
 
-**Line2 session (after-the-fact review):** when the user asks, or at the end of a phase, review shared-code commits landed since the last review: `git log <last>..claude/nifty-faraday-mdr3ug -- src/sim src/ui scripts src/data/current.ts tests` (record the reviewed commit in `work/review/last-reviewed`). Read only those diffs. Check the 7 hard rules (branches on station names / clock times / line IDs, duplicated logic, direction by station index or chainage), the pitfalls list, cheating (loosened checks, failures marked "known", test expectations changed without a reason each), and effects on other lines. Fix what you find yourself, or message the line session with file:line.
+1. **真实的运营特例只能写成数据。** 首末班、指定出入段、过夜位置、热备位置这类，写进该线路数据（`src/data/lines/<线路>/`）的 `OPERATIONS` 或 `simulation.timetable` 这样的表，代码里不许按车站名、车站编号、钟点写分支。
+2. **不许为了对上某一格去加车、删车、改时刻。**
+3. **不许排完图再悄悄取消车次、改起终点来消掉冲突。** 冲突只能在 `MAX_DIAGRAM_SHIFT_S` 以内平移时刻，消不掉就报错。加开排不进去的，要列出来并写明原因。
+4. **通用规则不许按工作日、双休日分开写。** 两种日型的差别只能体现在数据里。
+5. **同一件事只写一处。** 动手前先找现成的函数，比如车辆段进出用 `depotMoves`，过夜泊位用 `overnightHolds`，泊位占用用 `storageOccupancy`。现成的不够用就扩展它，不要在别处再抄一份相似的逻辑；现成的设计本身不对，就重写它、删掉旧的，不要在旧的上面越补越多。
+6. **修根因，不打补丁。** 不要先排完、再校验、再按报错去补。规则不对就改规则本身。
+7. **不许拿车站序号或里程比方向。** 不要写 `dir === 'DN' ? a < b : a > b` 这类判断：在支线上，里程更大不等于在前方。「谁在前方」「到没到某站」统一走 `src/sim/topology.ts` 的方向辅助函数：车站之间用 `ahead(dir, a, b)`，里程位置之间用 `chainAhead(dir, from, to)`（返回带符号的沿线距离，两处互不可达时为 null），列车自己的行车方向用 `travelDirection`。同一 link 内按 `dir === 1` 比偏移不算。`npm run check:rules` 会抓这类写法，2026-11-23 起主线上一处不剩。
 
-## Decision entries
+## 多线路（D140）
 
-- Line-only decisions: `docs/design-decisions-line11.md` / `-line14.md`, numbered L11-xx / L14-xx, owned by that line's session.
-- Shared-code decisions: numbered Dxxx. `docs/design-decisions.md` is the index (one row per entry: number, title, topic, status); the entry text goes at the end of the matching topic file in `docs/decisions/`, fully superseded entries move to `docs/decisions/archive.md`. The session that lands the change takes the next number when it lands.
-- One entry, one decision: what was decided, why, and which shared files changed. Mark user decisions as "用户决定, date"; mark inferences as 【假设】 with the basis. No process logs or long output; those go in `work/`. When a later decision overrides an earlier one, note "superseded by Dxxx" in the old entry. Write in Chinese, matching the existing files.
+- 软件启动时选一个线路组（`?line=`、`ATS_LINE`），默认 2号线。
+- 每个会话只改自己线路的目录，不碰别的线路目录（`src/data/lines/<别的线>/`、别的线的测试和决定文件）。
+- 线路自己的数据只放 `src/data/lines/<线路>/`。`src/sim`、`src/ui` 一律从 `src/data/current.ts` 取当前线路，不许直接 import 某条线的目录，不许写 `if (LINE_ID === …)`；线路之间的差别写成数据或能力判据（例如 `supportsSignalSystem`）。
+- `src/sim/**`、`src/ui/**`、`src/data/` 下 `lines/` 以外的文件、`scripts/**` 是公共代码。为自己的线要改就改，同时守住：`tests/test-line.test.ts` 通过；决定条目里写明动了哪些公共文件；别的线路运行图有变化时，也写变在哪、为什么。
+- 接口说明见 `reference/line14/line14-base-handoff.md`。
 
-**Pending cleanup:** split into topic files with an index, and the ten largest entries (D142, D138, D73, D74, D137, D173, D135, D115, D166, D122) cut down to the current decision with a status line; their full text is in `docs/decisions/logs.md` (2026-11-22). D190–D226 status lines cross-checked against later entries (18 added, 2026-11-22). D1–D189: scanned for code names that no longer exist; the four that read as current but cite replaced parameters (D52, D120, D121, D136) got status lines; the rest are false hits or duty/yield entries wholly replaced by D142/D178/D184 and were left as is (2026-11-22). `timetable.md`: the eleven entries over ~5 KB (D72, D83, D126, D81, D139, D171, D129, D165, D79, D78, D76) condensed the same way (184→122 KB, 2026-11-22). Delete this paragraph once done.
+## 近期踩过的坑（写代码前对照一遍）
 
-## Tests and stress testing
+1. **规则不许互相抵消。** 等待、让行、不起步这类规则只能管自己这列车：不许取消或改动给别的车排的进路，不许替别的车做决定。写之前先想清楚三件事：我在等谁；对方是不是也在等我；我在等的那件事，会不会正好被我自己挡住。两条规则互等就是死锁。以前的例子：
+   - D82「回段车让出段换端车先出」：取消进路时没检查是谁的，把被让那列车的出段进路取消了，车被打成紧急制动；
+   - 车载有一条「红灯前不足 15 m 不起步」，ATS 又要等车停完站才排进路。车停在停车点前 5 m，两边谁也不让。
+2. **出了问题先找规则冲突，不要加新规则去补。** 以前出一个死锁现场就加一条让行规则（D69、D73、D82……），规则越多越容易互相抵消。先看等待链是哪两条规则顶住了，改规则本身。
+3. **停车原因要说真话。** halt、arsWait 要写实际在等的车、设备或条件，不能用笼统的「等待进路」把真原因盖住。
+4. **运行中不许 throw。** 车场满、找不到合适的车这类运营情况，记报警、降级继续：比如超容停放、延迟出段。worker 里抛一个异常，整个软件就崩了。
+5. **跨运营日不重开世界（D111）。** Sim 上新增状态字段，必须在 `src/sim/state.ts` 的 `DAY_STATE` 里归类为 carry 或 daily；带时刻的字段在 `carryWorld` 里要减一天；带编号引用的字段（车次、表号、施工号）要跟着重映射。只在第一天测过不算测过。
+6. **界面的结果不许依赖上一帧画出来的东西。** 同样的输入必须得到同样的输出。车次窗口闪烁，就是因为宽度取自当前显示的文字，形成了反馈环。
+7. **所有调度操作都走 `sim.command`。** 这样操作会进 inputLog，用户导出的诊断才能原样回放。
 
-- New features get targeted tests (per the verification table).
-- Full test suite, `npm run soak`, `simday`, and large fuzz runs only after a phase of changes is complete. The Line2 session decides when; line sessions don't run them.
-- The memory budget (about 16 GB for background jobs) is shared by all sessions: check running node processes before starting one in the background.
+## 运行图的依据
 
-## Language
+依据按下面的优先级，冲突时上面的赢（用户决定，2026-10-22，D125）：
 
-Product code is TypeScript; scripts run with `tsx`. Don't introduce Python. Python is only for one-off tests or probes, kept in `work/`.
+1. **官方资料**（例如 `src/data/lines/line2/firstlast.ts`：首末班、末班后定点班车、运行间隔）。首末班必须对上，运行间隔定各时段开行密度。
+2. **用户实地录音和 PIS 实拍**（`docs/field/`）：区间时分、停站、运行速度以它为准。
+3. **高德**（`reference/timetable-gaode/`）：只参考各时段开几列车（每 15 分钟车数，`scripts/gaode-compare.ts` 比的就是这个），和官方间隔冲突时以官方为准。高德分钟本身有约 ±30 s 偏差，不拿它定区间时分、停站或运行等级。
+
+- 运行时分、停站模型、运行等级（`calibration.ts`、`dynamics.ts`）、首末班常量都可以改，但要有上面的依据，并写进决定条目。
+- **旧运行图不是依据**（用户决定，2026-10-28）：新数据、新运营规则让运行图变了是正常结果；不许为了保住旧图、保住 `plan-hash` 不变去加特例或绕开新数据；验收看是否符合上面的依据，不看和旧图是否一样。
+
+## 改动怎么进主线
+
+谁改的谁合：提交、合进 main、推送，app 代码变了就打 exe（主目录里 `npm run app:build`）。不把提交、推送、打包交给别的会话。只推 main，不推别的分支。提交时只 `git add` 自己的文件，不用 `git add -A`。
+
+线路会话：
+1. 在自己 worktree 的分支上提交。
+2. `git rebase claude/nifty-faraday-mdr3ug`，跑验证表要求的检查。动了公共代码，再跑 `tests/test-line.test.ts`，以及可能受影响的其他线路的定向测试和排图校验。
+3. `git -C D:/ShmetroLine2ATS merge --ff-only <你的分支>`，推送 main。这时取下一个 D 号（rebase 之后能看到最新的）。
+4. 公共核心的大改（用一套机制替换一批规则、重写引擎部件）自己把关：每条线都过一遍正常运营（中间站跟车、终点折返、始发），用全天对比验收，不是见到第一个偏差就停。
+5. 主目录里有别的会话没提交的文件、导致合并被拒，等一会儿再试；一直卡住才找 Line2。别碰那些文件。
+
+只有卡住了、或者想听一个难的设计意见，才找 Line2。提交、合并、D 号、日常的公共代码改动都不找。
+
+Line2（事后审查）：用户要求、或者一个阶段结束时，审上次以后合进来的公共代码提交：`git log <上次>..claude/nifty-faraday-mdr3ug -- src/sim src/ui scripts src/data/current.ts tests`，审到哪记在 `work/review/last-reviewed`。只看这些 diff。查硬规矩（按站名 / 钟点 / 线路分支、重复逻辑、按序号或里程比方向）、踩过的坑、作弊（放宽检查、把失败标成已知、改测试预期不写理由），以及对别的线的影响。发现问题自己修，或者把 `文件:行号` 发给对应线路会话。
+
+## 决定条目
+
+- 只涉及一条线的：`docs/design-decisions-line11.md` / `-line14.md`，编号 L11-xx / L14-xx，由该线会话负责。
+- 公共代码的：编号 Dxxx。`docs/design-decisions.md` 是索引（每条一行：编号、标题、主题、状态）；正文写在 `docs/decisions/` 对应主题文件末尾，完全被取代的移到 `docs/decisions/archive.md`。合进 main 的会话在合并时取号。
+- 一条一个决定：定了什么、为什么、动了哪些公共文件。用户的决定写「用户决定，日期」；推断标【假设】并写依据。不写过程日志和长输出，那些放 `work/`。后来的决定推翻了前面的，在旧条目里注明「被 Dxxx 取代」。
+
+**待清理：** 已拆成主题文件加索引；最大的十条（D142、D138、D73、D74、D137、D173、D135、D115、D166、D122）已压到现行决定加状态行，原文在 `docs/decisions/logs.md`；D190–D226 已对照后续条目补状态行；D1–D189 已扫过；`timetable.md` 里超过约 5 KB 的十一条已同样压缩（2026-11-22）。全部清完后删掉这一段。
+
+## 仓库约定
+
+- 代码、注释、文档、测试里不写任何 AI 模型名称（本文件除外）。
+- 录音和音频不入库：`public/sounds/` 下放切片，在 `.gitignore` 里加规则；原始素材放 `work/`（已 ignore）。含乘客人声的转写也不入库。
+- 照片：`reference/dmi/` 入库，其他新照片先问用户能不能公开。
+- 一次性的探针、日志放 `work/`（已 ignore），不要往 `scripts/` 里堆。`scripts/` 只放会反复用的工具。
+- 新加的机制要带单测：规则层面的断言（对每种日型都成立的性质），不写死车次号、车数。
+- 产品代码（`src/`）里不许留调试用的环境变量开关（`process.env.X`）。探针放 `work/`。
+- 产品代码是 TypeScript，脚本用 `tsx` 跑。不引入 Python；Python 只用于 `work/` 里的一次性探针。
+
+## 验证和验收
+
+先分清改的是前端还是后端（用户要求，2026-11-09）：
+- **前端**：`src/ui/**`、`src/styles.css`。只影响显示，不需要随机压测。
+- **后端**：`src/sim/**`、`src/data/**`、`scripts/**`，又分运行图（timetable、duty、plan）和运行时（ATS / ARS、车载移动、联锁、调度命令、跨日搬运）。
+- 改了 `src/sim` 里的字段但只有界面会读（显示用的状态），按前端算，写清还有谁读它（`文件:行号`）。
+
+| 改了什么 | 必须跑 | 通过标准 |
+|---|---|---|
+| 任何代码 | `npx tsc --noEmit` | 0 error |
+| 任何代码或文档 | `npm run check:rules` | 输出 `check-rules: clean`。白名单（`scripts/rules.ts`）只许减不许加；要加先在决定条目里写理由 |
+| 任何代码 | 改动模块对应的单测文件，例如 `npx vitest run tests/driver.test.ts` | 全过 |
+| 运行图 | `npx tsx scripts/validate-plan.ts weekday` 和 `weekend` | 两种日型 0 error |
+| 运行图 | `npx tsx scripts/firstlast.ts` | 首末班和改前一致，或有依据地变 |
+| 运行图 | `npx tsx scripts/gaode-compare.ts` | 不合格格数不比改前多，改前改后两个数都写上 |
+| 运行时 | 随机压测（见下） | 0 完整性违例 |
+| 只整理结构、不该改结果 | 改前改后各跑一次 `npx tsx scripts/plan-hash.ts` | 两种日型哈希一致（只有这种情况拿哈希当标准） |
+
+- 单测按文件跑。第一次跑会在 `node_modules/.cache/atssim-warmup/` 生成预热检查点，比较慢。
+- **随机压测**：`npx tsx scripts/fuzz-day.ts --cases 3 --jobs 3 --out work/fuzz-<名字>`。每例跑两天，带天气和随机调度操作（只跑第一天、不带天气查不出跨日问题）。后台跑，只用小核：`start /b /low /affinity 1F83FC <bat>`，输出写到日志。一例约 25 分钟。
+- 测试预期值因为你的改动变了可以改，但要逐条写：哪条、原来期望什么、现在期望什么、为什么。
+- 全量测试（`npm test`）、`npm run soak`、`simday`、大规模压测，只在一个阶段的改动全部做完后跑，由 Line2 决定；线路会话不跑。用户自己在 120× 下测。
+- **内存**：机器 32 GB，和用户的软件、别的会话共用。后台任务加起来不超过约 16 GB，开之前看一眼正在跑的 node 进程；某个进程超过 8 GB 先停掉。整天的日志和轨迹逐行流式读，不要一次读进整个大文件。遍历、删除目录的脚本不许跟着 junction 走（2026-11-06 因此删掉过 `node_modules`）。
+- **没达标**：不许为了通过而放宽检查，或者把某个现场标成「已知」跳过。没过就照实写「没过」，贴失败的关键行和查到的原因；跑不完写清跑到哪、剩什么。

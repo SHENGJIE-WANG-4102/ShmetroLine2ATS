@@ -85,7 +85,7 @@ describe.each(['weekday', 'weekend'] as const)('D173 official headways (%s)', da
         // departure of an uneven pattern (150/300 s) waits the local gap
         const leaving = sim.plan.trips.filter(t => !t.cancelled && t.from === st && t.stops[0].dep < o.to - 1e-3).map(t => t.stops[0].dep);
         const local = leaving.length ? o.to - Math.max(...leaving) : 0;
-        // (+ the conflict shift a planned departure may still take after the duty, AGENTS rule 3)
+        // (+ the conflict shift a planned departure may still take after the duty, CLAUDE.md hard rule 3)
         const limit = minTurn(st) + Math.max(terminalHeadway(dayType, st, o.from), local) + MAX_DIAGRAM_SHIFT_S;
         if (o.to - o.from > limit) bad.push(`${STATIONS[st].name} ${Math.floor(o.from / 3600)}:${String(Math.floor(o.from % 3600 / 60)).padStart(2, '0')} 停${Math.round(o.to - o.from)}s 限${limit}s`);
       }

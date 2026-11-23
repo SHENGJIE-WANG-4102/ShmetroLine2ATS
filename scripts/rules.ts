@@ -1,11 +1,11 @@
 /**
- * Machine-checkable rules from AGENTS.md, checked by `npm run check:rules` (scripts/check-rules.ts).
+ * Machine-checkable rules from CLAUDE.md, checked by `npm run check:rules` (scripts/check-rules.ts).
  * The allow-lists only shrink: an entry names a file and a piece of the offending line, never a
  * line number.
  */
 export interface Rule {
   id: string;
-  /** the AGENTS.md rule, quoted in the report */
+  /** the CLAUDE.md rule, quoted in the report */
   rule: string;
   /** repo-relative path prefixes the rule applies to, and file extensions */
   paths: string[];
@@ -33,12 +33,12 @@ export const RULES: Rule[] = [
   {
     id: 'process-env', rule: '产品代码（src/）里不许留调试用的环境变量开关',
     paths: ['src/'], ext: /\.ts$/, hit: matches(/\bprocess\??\.env\b/),
-    // ATS_LINE picks the line group at start-up (AGENTS.md 多线路), not a debug switch
+    // ATS_LINE picks the line group at start-up (CLAUDE.md 多线路), not a debug switch
     allow: [['src/data/startup.ts', 'env: host.process?.env']],
   },
   {
     id: 'model-name', rule: '代码、注释、文档、测试里不写任何 AI 模型名称',
-    paths: ['src/', 'scripts/', 'tests/', 'docs/', 'README', 'AGENTS.md'], ext: /\.(ts|js|mjs|py|md)$/,
+    paths: ['src/', 'scripts/', 'tests/', 'docs/', 'README'], ext: /\.(ts|js|mjs|py|md)$/,
     hit: line => MODEL.test(line.replace(NOT_A_MODEL, '')),
   },
   {
