@@ -54,7 +54,7 @@ function overviewParams(topo: Topology, vw: number, vh: number, zone = -1, drawn
   const [lo, hi] = lineWindow(topo);
   // one ZC area (D188): its own stretch of line, twice the overview's room, intervals to length
   const z = topo.zones[zone];
-  const a = z ? Math.max(lo, z.chainFrom) : lo, b = z ? Math.min(hi, z.chainTo) : hi;
+  const a = z ? Math.max(lo, z.chainFrom) : lo, b = z ? Math.min(hi, z.viewChainTo) : hi;
   const NEED = LINE.ui.overviewWidth * (z ? 0.5 : 1); // world width the whole line needs for readable station names
   const fixed = z ? undefined : LINE.ui.overviewRows;
   const BASE = 500; // minimum row height
@@ -83,7 +83,7 @@ function overviewParams(topo: Topology, vw: number, vh: number, zone = -1, drawn
     chainFrom: a, chainTo: b, rows, width, marginL: 150, marginR: 150, rowH, top: 0,
     upY: 200 + off, midY: 240 + off, dnY: 280 + off,
     depotDy: { q: 50, z: 66, j1: 80, j2: 94, gate: 108 + off }, detail: false, padBottom: fits ? 0 : PAD, padTop: fits ? 0 : PAD,
-    ...(z ? { lengthScale: true, nodeMargin: 300, marginMainsOnly: true } : {}),
+    ...(z ? { lengthScale: true, nodeMargin: 300, marginMainsOnly: true, skip: z.viewSkip } : {}),
   };
 }
 

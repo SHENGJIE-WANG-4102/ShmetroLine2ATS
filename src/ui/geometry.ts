@@ -44,6 +44,8 @@ export interface GeomParams {
   padTop?: number;
   /** station intervals drawn closer to their real lengths (a ZC area view, D188) instead of the compact line overview */
   lengthScale?: boolean;
+  /** chainage left out of the window: its nodes are not drawn and it takes no width, so the two ends meet */
+  skip?: [from: number, to: number];
 }
 
 export interface RowDef { from: number; to: number; x0: number; x1: number; top: number }
@@ -79,9 +81,10 @@ export class Geometry {
     const chains = topo.stations.map((s) => s.chain);
     const mainNodes = topo.nodes.filter((n) => n.links.some((l) => isMain(topo.links[l])));
     const swCh = topo.nodes.filter((n) => n.kind === 'switch' && n.links.some((l) => isMain(topo.links[l]))).map((n) => n.chain);
-    const inWin = (c: number) => c >= p.chainFrom - 0.5 && c <= p.chainTo + 0.5;
-    const stIn = chains.filter((c) => c > p.chainFrom + 1 && c < p.chainTo - 1);
-    const bounds = [p.chainFrom, ...stIn, p.chainTo];
+    const skipped = (c: number) => !!p.skip && c > p.skip[0] && c < p.skip[1];
+    const inWin = (c: number) => c >= p.chainFrom - 0.5 && c <= p.chainTo + 0.5 && !skipped(c);
+    const stIn = chains.filter((c) => c > p.chainFrom + 1 && c < p.chainTo - 1 && !skipped(c));
+    const bounds = [p.chainFrom, ...(p.skip ? [p.skip[0], p.skip[1]] : []), ...stIn, p.chainTo].sort((x, y) => x - y);
     // interval weights
     const weights: number[] = [];
     for (let k = 0; k + 1 < bounds.length; k++) {
@@ -90,7 +93,8 @@ export class Geometry {
       const d = b - a;
       const nsw = swCh.filter((c) => c > a && c < b).length;
       const isStationInterval = chains.includes(a) && chains.includes(b);
-      if (p.detail) weights.push(0.6 + Math.pow(d / 1000, 0.5) * 0.5 + 0.12 * nsw);
+      if (p.skip && a >= p.skip[0] && b <= p.skip[1]) weights.push(0);
+      else if (p.detail) weights.push(0.6 + Math.pow(d / 1000, 0.5) * 0.5 + 0.12 * nsw);
       else if (p.lengthScale) weights.push(0.3 + 0.5 * d / 1000 + 0.3 * nsw);
       else weights.push((isStationInterval ? 1 : 0.42) + 0.13 * Math.min(4, d / 1000) + 0.075 * nsw);
     }
@@ -101,7 +105,7 @@ export class Geometry {
     let r = 1;
     for (let k = 0; k < weights.length && r < p.rows; k++) {
       const target = (total * r) / p.rows;
-      if (acc + weights[k] >= target) {
+      if (weights[k] > 0 && acc + weights[k] >= target) {
         const a = bounds[k];
         const b = bounds[k + 1];
         // largest switch-free gap inside the interval, preferring the middle
@@ -192,7 +196,7 @@ export class Geometry {
     const { topo, p } = this;
     const pos: (P | null)[] = topo.nodes.map(() => null);
     const m = p.nodeMargin ?? 1;
-    const inWin = (c: number) => c >= p.chainFrom - m && c <= p.chainTo + m;
+    const inWin = (c: number) => c >= p.chainFrom - m && c <= p.chainTo + m && !(p.skip && c > p.skip[0] && c < p.skip[1]);
     const inside = (c: number) => c >= p.chainFrom - 1 && c <= p.chainTo + 1;
     /** a node off the mains, or a switch on them, in the margin is left out with marginMainsOnly */
     const placeable = (n: Topology['nodes'][number], onMain: boolean) =>

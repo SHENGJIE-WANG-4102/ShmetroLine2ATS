@@ -287,7 +287,9 @@ export interface TDepot {
  *  that platform against its normal direction and changes ends there. */
 export interface DepotPortal { station: number; reverse: boolean; /** transferPaths index used */ path: number }
 
-export interface TZone { id: number; key: string; name: string; chainFrom: number; chainTo: number }
+/** chainFrom..chainTo is what the zone controls. The overview shows the same stretch, and when the data names one more
+ * station (`viewStation`) also that station: the window then runs on to `viewChainTo`, leaving out `viewSkip`. */
+export interface TZone { id: number; key: string; name: string; chainFrom: number; chainTo: number; viewChainTo: number; viewSkip?: [number, number] }
 
 export interface TStation {
   index: number;
@@ -1254,7 +1256,16 @@ export function buildTopology(): Topology {
     const way = joins.filter((jb) => runLast(jb.run) === z.toStation).flatMap((jb) => jb.plain.map((lid) => Math.max(links[lid].chainA, links[lid].chainB)));
     return Math.max(mid, ...way.map((c) => c + 1));
   });
-  const zones: TZone[] = LAYOUT.zones.map((z, i) => ({ id: i, key: z.id, name: z.name, chainFrom: i === 0 ? -1e9 : zoneEnds[i - 1], chainTo: zoneEnds[i] }));
+  const zones: TZone[] = LAYOUT.zones.map((z, i) => {
+    const zone: TZone = { id: i, key: z.id, name: z.name, chainFrom: i === 0 ? -1e9 : zoneEnds[i - 1], chainTo: zoneEnds[i], viewChainTo: zoneEnds[i] };
+    if (z.viewStation !== undefined) {
+      // the station's own stretch: halfway to the neighbours on both sides
+      const s = z.viewStation;
+      zone.viewSkip = [zoneEnds[i], (chains[s - 1] + chains[s]) / 2];
+      zone.viewChainTo = (chains[s] + chains[s + 1]) / 2;
+    }
+    return zone;
+  });
   const zoneOf = (ch: number) => {
     for (const z of zones) if (ch >= z.chainFrom && ch < z.chainTo) return z.id;
     return zones.length - 1;

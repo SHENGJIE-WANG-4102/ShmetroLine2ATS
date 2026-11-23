@@ -265,3 +265,4 @@
 | D225 | [回段配车按总代价最小分配（2026-11-22）](decisions/rolling-stock.md) | 车底 |  |
 | D226 | [调车并入载客车次在排班器里一遍完成（2026-11-22）](decisions/rolling-stock.md) | 车底 |  |
 | D227 | [里程位置的方向判断统一走 `chainAhead`；规则检查脚本（2026-11-23）](decisions/platform.md) | 平台 |  |
+| D228 | [区域视图可以多接一个下一区的车站：ZC1 接上嘉定新城（2026-11-23）](decisions/ui-audio.md) | 界面 | |

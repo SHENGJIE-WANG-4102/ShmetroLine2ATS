@@ -409,3 +409,12 @@ ZC 不按长度重分（用户决定，维持 ZC1 蟠祥路—娄山关路、ZC2
 - 11号线故障处置说明（`line11/ui.ts faultProcedures`）：原来继承14号线随车人员/FAM 版，通信中断、ZC 故障、ATO 故障、站台门联动四条改为本线司机驾驶、无 TBTC 后备的说法，只写仿真里真会发生的处置（通信中断、ZC 故障都是原地等恢复）；其他沿用通用司机版。
 - 公共文件：`src/ui/tooltip.ts`、`src/ui/cmdpanel.ts`、`src/ui/help.ts`、`src/sim/model.ts`、`src/sim/movement.ts`。2号线（有 TBTC、DTO）显示不变；14号线跟着去掉「恢复CBTC」、帮助页按 UTO 写。
 - 没动：11号线列车内部仍按 2 号线的 DTO 模式跑（终点站不需要司机换端、发车不按 ATO 按钮），见待定。
+
+## D228 区域视图可以多接一个下一区的车站：ZC1 接上嘉定新城（2026-11-23）
+
+- 用户决定（2026-11-16）：11 号线 ZC1「花桥—嘉定新城」视图在上海赛车场后面接上嘉定新城车站，车站归属仍是 ZC2。2026-11-23 做出来；第一版把窗口直接拉到嘉定新城，连带画出了嘉定北、嘉定西、白银路，用户指出只要嘉定新城，改成只画这一个站。
+- 数据：`LAYOUT.zones[].viewStation`（可选，下一区的一个站）。11 号线 ZC1 设为嘉定新城。别的线不设，视图不变。
+- 拓扑：`TZone` 加 `viewChainTo`、`viewSkip`。窗口从区域起点一直到该站与下一站的中点，中间从区域终点到该站与上一站的中点这一段 `viewSkip` 不画；区域管辖范围 `chainFrom/chainTo` 和 `link.zone` 不变。
+- 画图：`GeomParams.skip`（`geometry.ts`）。跳过段里的节点不放、没有宽度，两头直接相接；换行不会落在跳过段里。分界线和 ZC1/ZC2 标记照原样。
+- 公共文件：`src/data/types.ts`、`src/sim/topology.ts`、`src/ui/app.ts`、`src/ui/geometry.ts`、`src/data/lines/line11/line11.ts`。排图不受影响；2 号线、14 号线没有 `viewStation`，视图和以前一样。
+- 验证：`tsc`、`check:rules`、`geometry`、`line-capabilities`、`test-line` 通过；开发页面看了 ZC1 视图，赛车场右端标「接嘉定新城」，嘉定新城左端标「接上海赛车场」，中间是 ZC1/ZC2 分界线。

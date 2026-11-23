@@ -337,7 +337,7 @@ export const LINE11_CORE: CoreLineData = {
   LAYOUT: {
     tails, pairs, sidings, loops, crossovers, depots,
     zones: [
-      { id: 'ZC1', name: 'ZC1 花桥—嘉定新城', fromStation: 0, toStation: 6 }, // 含支线到嘉定新城的区间（用户 2026-11-14）
+      { id: 'ZC1', name: 'ZC1 花桥—嘉定新城', fromStation: 0, toStation: 6, viewStation: 10 }, // 含支线到嘉定新城的区间（用户 2026-11-14）；视图只在赛车场后面接上嘉定新城一个站，站归属仍是 ZC2（用户 2026-11-16）
       { id: 'ZC2', name: 'ZC2 嘉定北—南翔', fromStation: 7, toStation: 13 },
       { id: 'ZC3', name: 'ZC3 桃浦新村—龙华', fromStation: 14, toStation: 27 },
       { id: 'ZC4', name: 'ZC4 云锦路—迪士尼', fromStation: 28, toStation: 39 },

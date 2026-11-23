@@ -215,6 +215,8 @@ export interface CoreLineData {
         name: string;
         fromStation: number;
         toStation: number;
+        /** The overview of this area also shows this one station of the next area (drawn right after its own last station); ownership stays with the next area. */
+        viewStation?: number;
     }[];
     maxSectionLength: number;
 };
