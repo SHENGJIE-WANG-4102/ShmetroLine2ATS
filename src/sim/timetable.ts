@@ -2774,6 +2774,13 @@ export function blockTasks(topo: Topology, plan: Plan, block: Block, fromTrip = 
     if (before && dep && before.dir === trip.dir && before.to === trip.from && dep.station === trip.from && dep.stopIndex === 0) {
       const came = before.stops.at(-2)?.st;
       if (came !== undefined) dep.berth = platformBerth(topo, trip.from, trip.dir, came);
+      // a number change running on with its passengers (罗山路): one stop, timed like a call
+      // on the way to the new trip's departure, then that departure with the doors closed
+      const arrival = tasks[first - 1];
+      if (before.revenue && trip.revenue && arrival?.k === 'stop' && arrival.station === dep.station && arrival.berth === dep.berth && arrival.doors) {
+        if (arrival.dep === null) arrival.dep = dep.dep;
+        dep.doors = false;
+      }
     }
     const nextRaw = ids.slice(k + 1).map(i => plan.trips[i]).find(t => !t.cancelled);
     const next = nextRaw && effectiveTrip(nextRaw);
