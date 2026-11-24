@@ -446,6 +446,6 @@ validate-plan两日型、firstlast、gaode-compare的完整输出与基线逐字
   - `core` 备车两项：取第一列在线车办退出服务，这列车正进折返线，按规定拒绝；改为跳过正在进折返线的车。
   - `features` MA 一项：133 次不吻合都是「折返线图定候班」（用户决定 2026-11-08 的早高峰后终点候班），和已排除的「折返发车站台有车」同类，一起排除。
   - `interlocking-guide-commit` 三项：拓扑签名随后来的线路数据变了，夹具的进路、停车位、初始校验都不变，只更新签名。
-  - `core` 全线 ATO 一项：仍失败，单独脚本跑同样步骤时全部转 AM，没复现，待查。
+  - `core` 全线 ATO 一项：见 D230。
 - 公共文件：`src/sim/resourceArbitration.ts`；测试 `tests/core.test.ts`、`tests/features.test.ts`、`tests/interlocking-guide-commit.test.ts`。
 - 验证：`tsc` 0 error，`check:rules` 通过；定向 19 个测试文件 364 项过 363（剩上面那项 ATO）。随机压测 2 号线 3/3 过；11 号线 2/3 过，种子 102 第二天失败（11:53 人工折返到真如，唯一折返股道中间线上停着存车 018-0047，038 一直等，下午全线堵死，27:45 还有 10 列没跑完），不带本改动的代码跑同一个种子失败得一模一样，是另一个问题，另行处理。

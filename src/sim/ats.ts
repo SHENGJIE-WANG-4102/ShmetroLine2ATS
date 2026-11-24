@@ -2086,6 +2086,15 @@ function candidateCut(trip: Trip, tr: Train, station: number, cause: NonNullable
   return { station, stopIndex, cause };
 }
 
+/** The train on the berth's track is still there at `at`: stored, or standing for a later departure. */
+function heldUntilArrival(sim: Sim, berth: number, self: number, at: number): boolean {
+  const holder = sim.trains.get(berthHolder(sim, berth, self, true));
+  if (!holder) return false;
+  if (holder.phase === 'stabled') return true;
+  const next = holder.tasks[0];
+  return holder.phase === 'dwell' && next?.k === 'stop' && next.dep !== null && next.dep > at;
+}
+
 /** 人工折返 */
 export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   const { topo, plan } = sim;
@@ -2111,6 +2120,19 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   const fake: Trip = { id: -1, no: '', dir: d, kind: 'adj', from: station, to: station, stops: [], revenue: true, block: -1 };
   addTurnback(topo, fake, tasks);
   const commandReverse = tasks.at(-1);
+  // A track whose train is still standing there when this one arrives is not free for this
+  // turn (真如中间线上的备车 22:10 才发，fuzz 102 day 2 11:53).
+  if (commandReverse?.k === 'reverse') {
+    const free = commandReverse.berths.filter(b => !heldUntilArrival(sim, b, tr.id, est));
+    if (!free.length)
+      return { ok: false, msg: `${STATIONS[station].name} 折返股道有车停放，到达时不能空出，无法折返`, reasonCode: 'TURNBACK_UNAVAILABLE' };
+    commandReverse.berths = free;
+    if (!free.includes(commandReverse.chosen)) {
+      const was = commandReverse.chosen;
+      commandReverse.chosen = free[0];
+      for (const t of tasks) if (t.k === 'stop' && t.station === station && t.berth === was) t.berth = free[0];
+    }
+  }
   // Build the entire continuation on a shallow plan copy: all modified trips
   // and the affected block have their own objects. No live plan or task is
   // changed until the actual retargeted route has passed every phase.

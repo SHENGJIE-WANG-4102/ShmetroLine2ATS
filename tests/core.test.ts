@@ -1614,8 +1614,10 @@ describe('ATO with a driver under CBTC (D52)', () => {
     expect(sim.command({ c: 'lineAto', on: true }).ok).toBe(true);
     expect(sim.command({ c: 'lineAto', on: true }).ok).toBe(false);
     let reversals = 0;
+    const stopped = new Set<number>();
     for (let i = 0; i < 9000; i++) {
       sim.step();
+      for (const t of sim.trainList) if (t.phase === 'dwell') stopped.add(t.id);
       for (const t of sim.trainList) if (t.phase === 'reversing' && t.phaseSince === sim.t) {
         const task = t.tasks[0];
         if (task?.k === 'reverse' && t.mode === 'AM') {
@@ -1632,7 +1634,9 @@ describe('ATO with a driver under CBTC (D52)', () => {
       }
     }
     expect(reversals).toBeGreaterThan(0);
-    const cbtc = sim.trainList.filter(t => t.inService && t.level === 'CBTC' && !t.manual);
+    // a train changes at its next stop: one still running through stations it passes
+    // (early trips non-stop from 22 to 28) has not had that stop yet
+    const cbtc = sim.trainList.filter(t => t.inService && t.level === 'CBTC' && !t.manual && stopped.has(t.id));
     expect(cbtc.length).toBeGreaterThan(10);
     expect(cbtc.every(t => t.mode === 'AM')).toBe(true);
     expect(sim.command({ c: 'lineAto', on: false }).ok).toBe(true);

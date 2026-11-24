@@ -267,3 +267,4 @@
 | D227 | [里程位置的方向判断统一走 `chainAhead`；规则检查脚本（2026-11-23）](decisions/platform.md) | 平台 |  |
 | D228 | [区域视图可以多接一个下一区的车站：ZC1 接上嘉定新城（2026-11-23）](decisions/ui-audio.md) | 界面 | |
 | D229 | [折返咽喉：按图先发的出线车先走，进线车后排（2026-11-24）](decisions/platform.md) | 平台 |  |
+| D230 | [人工折返不进到达时仍有车停着的折返股道（2026-11-24）](decisions/operations.md) | 运营 |  |
