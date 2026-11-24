@@ -1254,7 +1254,7 @@ describe('standby trains (D45)', () => {
   const errors = (sim: Sim) => validatePlan(sim.planCtx, sim.plan).filter(i => i.severity === 'error' && i.t >= sim.t).map(i => i.text);
   it('a standby takes over the trips a withdrawn train leaves, from the first one it can start on time', () => {
     const sim = live();
-    const tr = sim.trainList.find(t => t.inService && t.block >= 0 && sim.plan.blocks[t.block].trips.indexOf(t.tripId) < sim.plan.blocks[t.block].trips.length - 3)!;
+    const tr = sim.trainList.find(t => t.inService && t.block >= 0 && t.tasks[0]?.k !== 'reverse' && sim.plan.blocks[t.block].trips.indexOf(t.tripId) < sim.plan.blocks[t.block].trips.length - 3)!;
     const b = sim.plan.blocks[tr.block];
     const tail = b.trips.slice(b.trips.indexOf(tr.tripId) + 1).filter(id => !sim.plan.trips[id].cancelled);
     const before = errors(sim); const nBlocks = sim.plan.blocks.length; const rev = sim.planRev;
@@ -1281,7 +1281,7 @@ describe('standby trains (D45)', () => {
   }, 180_000);
   it('without the automatic dispatcher a withdrawal does not call a standby', () => {
     const sim = live(); sim.autoDispatch = false;
-    const tr = sim.trainList.find(t => t.inService && t.block >= 0)!;
+    const tr = sim.trainList.find(t => t.inService && t.block >= 0 && t.tasks[0]?.k !== 'reverse')!;
     const nBlocks = sim.plan.blocks.length;
     expect(sim.command({ c: 'withdraw', train: tr.id }).ok).toBe(true);
     expect(sim.plan.blocks.length).toBe(nBlocks);

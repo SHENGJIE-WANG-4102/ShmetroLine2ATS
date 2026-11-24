@@ -2,7 +2,7 @@
  * still sets and releases each physical route separately. No driving mode or
  * automation grade participates in resource ownership. */
 import type { Sim } from './engine';
-import { STANDBY_CALL, type Task, type Train, type StopTask } from './model';
+import { STANDBY_CALL, type Task, type Train, type StopTask, type ReverseTask } from './model';
 import type { TrackPoint, RouteStep, WaitingStage } from './topology';
 import { berthFits, pointAhead, reversedBerthPoint, downstreamTerminal, safeWaitingPoint, turnbackLeadBerth, topologyResourceLinks, sharedTransferLink, turnbackBerthsForConsist, occupiedTurnbackBerth, stablingBerth } from './topology';
 import { approachLocked, committedTo, committedTrain } from './interlocking';
@@ -1039,6 +1039,41 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   });
 }
 
+/** Rule 3 at a turnback throat: a train running into the turnback tracks takes the
+ * throat only after a service due out earlier through it, when their movements share
+ * a section, unless that service's movement runs over this train itself (迪士尼 19:06, D229).
+ * A train that has still to run into the turnback tracks is not due out yet: it queues behind
+ * this one (fuzz 102 day 2, 22:33).
+ * (Not the transitive physical queue: through a departing train's interval it flickers on
+ * for a second and the turnback entry slips in, 迪士尼 20:45.) */
+function earlierExit(sim: Sim, requests: ResourceRequest[], request: ResourceRequest, option: ResourceOption): { id: number } | undefined {
+  if (request.inside || request.committed) return undefined;
+  const at = request.tasks.findIndex(t => t.k === 'reverse');
+  if (at < 0) return undefined;
+  const reverse = request.tasks[at] as ReverseTask;
+  if (!option.phases.some(p => reverse.berths.includes(p.goal))) return undefined;
+  const next = request.tasks.slice(at + 1).find((t): t is StopTask => t.k === 'stop' && t.dep !== null);
+  if (!next) return undefined;
+  const own = new Set(request.train?.body.map(b => sim.topo.links[b.link].section));
+  return requests.find(other => other.id !== request.id
+    && !approachingTurn(sim, other, reverse.station) && other.options.some(o => {
+    if (o.unreachable) return false;
+    const origin = optionOrigin(sim, o, other.tasks)?.task;
+    if (!origin || origin.station !== reverse.station || origin.dep! >= next.dep!) return false;
+    let shared = false;
+    for (const sec of o.sections) { if (own.has(sec)) return false; shared ||= option.sections.has(sec); }
+    return shared;
+  }));
+}
+
+/** The applicant has still to turn at the station and is not yet standing on one of its turnback berths. */
+function approachingTurn(sim: Sim, request: ResourceRequest, station: number): boolean {
+  const reverse = request.tasks.find((t): t is ReverseTask => t.k === 'reverse' && t.station === station);
+  if (!reverse) return false;
+  const links = new Set(reverse.berths.map(b => sim.topo.berths[b].link));
+  return !request.train?.body.some(b => links.has(b.link));
+}
+
 /** An admitted applicant's tasks changed: drop its movement lookups. */
 function forgetMovement(sim: Sim, tr: Train) {
   const cache = queryCache(sim), slot = cache.slots?.get(tr);
@@ -1129,6 +1164,8 @@ export function arbitrateResources(sim: Sim, requests?: ResourceRequest[]): Reso
       const first = earlierOrigin(sim, requests, physical, request, option);
       if (!blocker && first) blocker = { train: first.id,
         detail: `按图先发列车先进入始发站台：${resourceApplicantLabel(sim, first.id)}`, code: 'REGULATION' };
+      const exit = blocker ? undefined : earlierExit(sim, requests, request, option);
+      if (exit) blocker = { train: exit.id, detail: `按图先发列车先出折返线：${resourceApplicantLabel(sim, exit.id)}`, code: 'REGULATION' };
       if (!blocker && (option.readyAt ?? request.readyAt) > sim.t && !request.committed) blocker = { train: -1, detail: '在安全等候点等待始发窗口', code: 'REGULATION' };
       const alternative: WaitAlternative = { entrySignal: option.entry,
         choices: option.choices.map(c => ({ ...c })),

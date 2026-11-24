@@ -498,9 +498,10 @@ describe('DMI logic: movement authority, permitted speed, fleet, message log', (
         if (ma < MA_NEAR - 50) expect(Math.abs(ma - tr.maDist)).toBeLessThan((tr.v + 25) * (tr.v > 0 ? 0.1 : 1) + 1);
         // other protections (occupied non-CBTC sections, platform doors…) can only shorten it
         expect(ma).toBeLessThanOrEqual(Math.max(0, e.d) + 0.01);
-        // a turnback waiting for its departure platform is held short by a
-        // protection this model leaves out; the bound above still applies
-        if (scanAhead(sim, tr, goalBerth(tr)).maReason === '折返发车站台有车，等待平台出清') { checked--; continue; }
+        // a turnback waiting for its departure platform, or a train standing in a turnback
+        // track for a later departure (用户决定 2026-11-08), is held short by a protection
+        // this model leaves out; the bound above still applies
+        if (['折返发车站台有车，等待平台出清', '折返线图定候班'].includes(scanAhead(sim, tr, goalBerth(tr)).maReason)) { checked--; continue; }
         if (Math.abs(ma - Math.max(0, e.d)) < 0.01) matched++;
         lengths.add(Math.round(ma));
         if (ma > 1400) beyondOld++;
