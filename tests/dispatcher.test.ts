@@ -78,7 +78,10 @@ describe('dispatcher commands', () => {
     // (not one entering a turnback track: withdrawal waits for its reversal there)
     const w = pickTrain(sim, (t) => dirOf(sim, t) === 'UP' && t.id !== tr.id && t.tasks[0]?.k !== 'reverse');
     expect(sim.command({ c: 'withdraw', train: w.id }).ok).toBe(true);
-    const end = sim.t + 3600;
+    // the train picked here is east of 龙阳路 running west: it turns at 淞虹路 before it can
+    // enter 龙阳路 (about 2 h); an early train at 徐泾东 takes the next departure (D231)
+    // instead of standing on the last free turnback track, so the west end keeps turning
+    const end = sim.t + 3 * 3600;
     while (sim.trains.has(w.id) && sim.t < end) runFor(sim, 10, stepCheck);
     expect(sim.trains.has(w.id)).toBe(false);
   },240_000);

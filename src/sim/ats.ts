@@ -7,7 +7,7 @@ import { doorCloseHold, departureHold, DOOR_CUT_DWELL } from './vehicle';
  * regulation and dispatcher train commands.
  */
 import type { Sim } from './engine';
-import { cancelTrip, type Block, type DepotTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
+import { cancelTrip, type Block, type DepotTask, type Plan, type ReverseTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import { settleDroppedCalls } from './connections';
 import type { Dir, Topology, TrackPoint, RouteStep } from './topology';
 import { berthFits, nextLink, signalAtEntry, travelDirection, ahead, chainAhead, terminalsAhead, linkChain, reversedBerthPoint, occupiedTurnbackBerth, stablingBerth } from './topology';
@@ -17,7 +17,7 @@ import { takeVehicle, putVehicle, peekVehicle } from './yard';
 import { callRmPreset, unsafeAhead, openCall } from './radio';
 import { applyEB, grantRM, setMode, autoMode, cbtcAvailable, distToNextSignal, turnbackDwell, simulatedAmDriver, driverTurnbackKind, calibratedRearTurnback } from './onboard';
 import { openDoors, closeDoors, psdSafe, doorOpenExtra } from './psd';
-import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, depotLeadTasks, TEMPLATES, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip } from './timetable';
+import { blockTasks, addTurnback, turnbackAt, buildStops, platformBerth, entryStation, departureBerthAfterReverse, depotTasks, depotLeadTasks, TEMPLATES, DEPOT_ENTRY_CLEAR, serviceEnd, overnightPlaces, effectiveStops, effectiveEnd, effectiveTrip, minTurn } from './timetable';
 import { STATIONS, LINE_INFO, OPERATIONS } from '../data/current';
 import { boardAndAlight, boardWhileOpen, planPassengerExchange, exchangeDwell } from './passengers';
 import { DOOR_CLOSE_S, MIN_DWELL, regulatedDwell, meanRange, plannedCloseBudget, COUNTDOWN_LEAD_S, driverCloseDraw, driverDepartureDelayS } from './calibration';
@@ -1025,7 +1025,11 @@ function arriveAtBerth(sim: Sim, tr: Train, task: Task) {
         && tr.dir === berth.dir;
       const choice = long && actual ? plannedWaitBerth(topo, a!, d!, tr.tasks, 0, [task.chosen], task.chosen,
         { point: { link: tr.link, off: tr.off, dir: tr.dir }, incoming: tr.hist, length: tr.len }) : undefined;
-      if (choice?.safe && !next.standby && !next.stabledOut) cowTask(tr, next).turnbackWaitBerth = task.chosen;
+      if (choice?.safe && !next.standby && !next.stabledOut) {
+        // 用户决定 2026-11-24 (A): do not stand on the last free turnback track; take the
+        // earliest departure from here whose own train has not arrived yet instead
+        if (!takeEarlierDeparture(sim, tr, task, d!)) cowTask(tr, next).turnbackWaitBerth = task.chosen;
+      }
       else if (next.turnbackWaitBerth !== undefined) { const copy = cowTask(tr, next); delete copy.turnbackWaitBerth; }
       if (long && actual && choice && !choice.safe)
         sim.log('C', '运营', `列车 ${trainLabel(tr)} 所选 ${berth!.name} 不能全列安全候班，继续原折返作业`,
@@ -2086,13 +2090,15 @@ function candidateCut(trip: Trip, tr: Train, station: number, cause: NonNullable
   return { station, stopIndex, cause };
 }
 
-/** The train on the berth's track is still there at `at`: stored, or standing for a later departure. */
-function heldUntilArrival(sim: Sim, berth: number, self: number, at: number): boolean {
+/** Until when the train on the berth's track stands there: for good when stored, until its
+ * departure when it stands for one from this station (热备, 图定候班); otherwise it is only
+ * passing through, and the track counts as free now. */
+function heldTill(sim: Sim, berth: number, self: number): number {
   const holder = sim.trains.get(berthHolder(sim, berth, self, true));
-  if (!holder) return false;
-  if (holder.phase === 'stabled') return true;
+  if (!holder) return sim.t;
+  if (holder.phase === 'stabled') return Infinity;
   const next = holder.tasks[0];
-  return holder.phase === 'dwell' && next?.k === 'stop' && next.dep !== null && next.dep > at;
+  return next?.k === 'stop' && next.station === sim.topo.berths[berth].station && next.dep !== null ? Math.max(sim.t, next.dep) : sim.t;
 }
 
 /** 人工折返 */
@@ -2123,7 +2129,7 @@ export function cmdTurnback(sim: Sim, tr: Train, station: number) {
   // A track whose train is still standing there when this one arrives is not free for this
   // turn (真如中间线上的备车 22:10 才发，fuzz 102 day 2 11:53).
   if (commandReverse?.k === 'reverse') {
-    const free = commandReverse.berths.filter(b => !heldUntilArrival(sim, b, tr.id, est));
+    const free = commandReverse.berths.filter(b => heldTill(sim, b, tr.id) <= est);
     if (!free.length)
       return { ok: false, msg: `${STATIONS[station].name} 折返股道有车停放，到达时不能空出，无法折返`, reasonCode: 'TURNBACK_UNAVAILABLE' };
     commandReverse.berths = free;
@@ -2746,6 +2752,63 @@ export function cmdExchangeDuty(sim: Sim, tr: Train, other: number) {
   const msg = `车次调整：列车${tr.vehicle}晚点${late}分钟，改按${tw.no}（表号${bw.svc}）运行；后续列车${w.vehicle}改按${tx.no}（表号${bx.svc}）运行`;
   sim.log('C', '运营', msg);
   return { ok: true, msg };
+}
+
+/** Block `a` from trip `fromA` on and block `b` from trip `fromB` on change places, ends included. */
+function swapBlockTails(plan: Plan, a: Block, fromA: number, b: Block, fromB: number) {
+  const tailA = a.trips.splice(a.trips.indexOf(fromA)), tailB = b.trips.splice(b.trips.indexOf(fromB));
+  a.trips.push(...tailB);
+  b.trips.push(...tailA);
+  for (const id of tailB) plan.trips[id].block = a.id;
+  for (const id of tailA) plan.trips[id].block = b.id;
+  [a.end, b.end] = [b.end, a.end];
+}
+
+/**
+ * A train early at its terminal (D231, 用户决定 2026-11-24 A) would stand on its turnback track
+ * for `d` while a train still on its way to turn here, due out earlier, finds every other
+ * turnback track of this turn still held: it takes that train's departure (the earliest it
+ * can make) instead, and that train takes `d` in exchange. The blocks swap their trips from the
+ * station on (and their ends), so each train keeps its 表号 and the trip it is running.
+ */
+function takeEarlierDeparture(sim: Sim, tr: Train, task: ReverseTask, d: Trip): boolean {
+  const { plan } = sim, station = task.station, own = plan.blocks[tr.block];
+  const firstDep = effectiveStops(d)[0]?.dep;
+  if (!own || own.relieved || firstDep === undefined) return false;
+  // every turnback track of this turn at the station, not only those left on this train's task
+  const tb = turnbackAt(sim.topo, station, d.dir === 'UP' ? 'DN' : 'UP');
+  const tracks = tb?.kind === 'rear' ? tb.berths : task.berths;
+  const freeAt = Math.min(...tracks.filter(b => b !== task.chosen).map(b => heldTill(sim, b, tr.id)));
+  let best: { w: Train; trip: Trip; dep: number } | undefined;
+  for (const w of sim.trainList) {
+    if (w === tr || w.block < 0 || w.block === tr.block || !exchangeable(sim, w) || plan.blocks[w.block].relieved) continue;
+    const at = w.tasks.findIndex(x => x.k === 'reverse' && x.station === station);
+    if (at < 1) continue;
+    const stop = w.tasks.slice(at + 1).find((x): x is StopTask => x.k === 'stop' && x.station === station && x.revenue && x.doors && x.dep !== null);
+    const trip = stop && plan.trips[stop.trip];
+    if (!stop || !trip || trip.cancelled || trip.block !== w.block || trip.from !== station || !sameRoute(trip, d, station)) continue;
+    if (stop.dep! < sim.t + minTurn(station) || stop.dep! >= firstDep || (best && stop.dep! >= best.dep)) continue;
+    if (sim.t + estimateRun(sim, w, station) >= freeAt) continue;
+    best = { w, trip, dep: stop.dep! };
+  }
+  if (!best) return false;
+  const { w, trip } = best, theirs = plan.blocks[w.block];
+  const hold = w.tasks.findIndex(x => x.k === 'stop' && x.trip === trip.id && x.station === station && x.revenue && x.doors);
+  if (!own.trips.includes(d.id) || !theirs.trips.includes(trip.id) || hold < 0) return false;
+  swapBlockTails(plan, own, d.id, theirs, trip.id);
+  const tailX = serviceDutyTail(sim, own, trip, station), tailW = serviceDutyTail(sim, theirs, d, station);
+  if (!tailX || !tailW) { swapBlockTails(plan, own, trip.id, theirs, d.id); return false; }
+  tr.tasks = [task, ...tailX];
+  w.tasks = [...w.tasks.slice(0, hold), ...tailW];
+  for (const t of [tr, w]) {
+    setTripFromTasks(sim, t);
+    const keep = new Set(t.tasks.flatMap(x => x.k === 'stop' ? [x.berth] : x.k === 'reverse' ? [x.chosen] : []));
+    for (const [berth, train] of sim.berthRes) if (train === t.id && !keep.has(berth)) sim.berthRes.delete(berth);
+  }
+  sim.planRev++;
+  sim.planDirty = true;
+  sim.log('C', '运营', `车次调整：列车${tr.vehicle}提前到达${STATIONS[station].name}，改开${trip.no}；${d.no}改由后续列车${w.vehicle}担当`);
+  return true;
 }
 
 /** R2: at the terminal, cancel the missed whole cycle and take the train's
