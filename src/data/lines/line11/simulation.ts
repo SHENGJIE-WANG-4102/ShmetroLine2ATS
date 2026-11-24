@@ -9,7 +9,7 @@ const H = (h: number, m = 0) => h * 3600 + m * 60;
 /** 分时段开行花样。交路见 docs/design-decisions.md D213（用户 2026-11-18）：
  * - 平峰/双休日：嘉定北、花桥两条支线全程车，主干每 6/5 分钟一班，两条支线各 12/10 分钟；
  * - 工作日高峰：再加南翔—罗山路、花桥—罗山路两种小交路；参考站（南翔）早 2 分 30 秒、晚 3 分钟；
- * - 夜间（21:30 起）：每 6 班里一班嘉定北车只到三林东，进浦三路中间线过夜。
+ * - 夜间（21:30 起）：只有一班嘉定北车只到三林东，进浦三路中间线过夜（用户 2026-11-24：三林东只有一班）。
  * 小交路写进 pattern，按 terminals.routes 的名字生成；排图主体的 core 取南翔—罗山路。 */
 const templates: Record<string, Template> = {
   opening: { id: 'opening', name: '早间过渡', desc: '嘉定北/花桥两条支线往迪士尼，逐渐接近高峰【假设】', pattern: ['big', 'branch'], headway: 600 },
@@ -18,7 +18,8 @@ const templates: Record<string, Template> = {
   evening: { id: 'evening', name: '工作日晚高峰', desc: '嘉定北/花桥全程 + 南翔/花桥—罗山路（两趟都在罗山路再出库一趟往迪士尼），参考站约3分钟', pattern: ['branch','big','relayNX','branch','big','relayHQ','big','relayHQ','branch','big','relayHQ','big'], headway: 180, peak: true },
   weekend: { id: 'weekend', name: '双休日日间', desc: '嘉定北/花桥全程，主干约5分钟、支线约10分钟', pattern: ['big', 'branch'], headway: 300, peak: true },
   closing: { id: 'closing', name: '夜间过渡', desc: '全程车，至末班逐渐放疏【假设】', pattern: ['big', 'branch'], headway: 600 },
-  late: { id: 'late', name: '末班前', desc: '全程车；每三班嘉定北车有一班只到三林东，进浦三路中间线过夜（夜间特殊交路）【假设】', pattern: ['big', 'branch', 'night', 'branch', 'big', 'branch'], headway: 600 },
+  lateNight: { id: 'lateNight', name: '夜间特殊交路', desc: '一班嘉定北车只到三林东，进浦三路中间线过夜（夜间特殊交路，全天只有这一班，用户 2026-11-24）', pattern: ['big', 'branch', 'night'], headway: 600 },
+  late: { id: 'late', name: '末班前', desc: '全程车至末班逐渐放疏', pattern: ['big', 'branch'], headway: 600 },
 };
 const dayPeriods: Record<'weekday' | 'weekend', Period[]> = {
   weekday: [
@@ -33,8 +34,12 @@ const dayPeriods: Record<'weekday' | 'weekend', Period[]> = {
     { from: H(15, 30), to: H(19, 15), template: 'evening', label: '晚高峰' },
     // 晚间 21:33 起东方体育中心约 3 分、22:00 后约 4～5 分一班（折算到南翔提前 43 分）。
     { from: H(19, 15), to: H(20, 45), template: 'closing', label: '夜间过渡', headway: 190, headwayTo: 230 },
-    { from: H(20, 45), to: H(21, 30), template: 'closing', label: '夜间过渡', headway: 230, headwayTo: 255 },
-    { from: H(21, 30), to: H(24), template: 'late', label: '末班前', headway: 255, headwayTo: 300 },
+    { from: H(20, 45), to: H(21, 46) + 26, template: 'closing', label: '夜间过渡', headway: 230, headwayTo: 244 },
+    // 夜间特殊交路只有一班（嘉定北—三林东）：窗口只放下一个 big、branch、night 的循环，之后接普通末班前。
+    // 用户给的实际：这班 21:32 到嘉定北站台停稳，21:38 关门起步。窗口起点（参考站时刻）按排图的偏移推到让嘉定北 21:38 发；
+    // 到三林东在浦三路中间线 22:30 的入位时刻（nightAfter）之后。
+    { from: H(21, 46) + 26, to: H(22, 3) + 26, template: 'lateNight', label: '夜间特殊交路', headway: 255 },
+    { from: H(22, 3) + 26, to: H(24), template: 'late', label: '末班前', headway: 265, headwayTo: 300 },
   ],
   weekend: [
     { from: H(4), to: H(7), template: 'opening', label: '早间过渡', headway: 650 },
