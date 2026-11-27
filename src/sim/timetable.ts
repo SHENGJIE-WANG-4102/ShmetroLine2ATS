@@ -1423,9 +1423,47 @@ function buildPlan(ctx: PlanContext): Plan {
   const { requests, periods, firstService: published, issues: layoutIssues } = layoutService(ctx);
   const fixedDraft = CARRY_MOVES ? draftFixedPassengerSupply(ctx, requests, published, ctx.fixedRuns ?? FIXED_LATE_TRAINS) : {pairs: [], anchors: [], starts:new Map<number,number>(), issues: []};
   const patrols = draftPatrols(ctx, requests);
+  const transfers = draftTransfers(ctx, requests);
   const standbyIssues = draftStoredStandby(ctx, requests);
-  return buildPoolPlan(ctx, requests, periods, published, [...layoutIssues, ...patrols.issues, ...standbyIssues], fixedDraft,
-    new Map([...fixedDraft.starts, ...patrols.starts]), patrols.chains);
+  return buildPoolPlan(ctx, requests, periods, published, [...layoutIssues, ...patrols.issues, ...transfers.issues, ...standbyIssues], fixedDraft,
+    new Map([...fixedDraft.starts, ...patrols.starts, ...transfers.starts]), patrols.chains, transfers.ends);
+}
+
+/** the furthest a scheduled yard transfer moves off its clock to find a clear slot (s) */
+const TRANSFER_SLOT_SPAN = 600;
+
+/** Scheduled yard-to-yard transfers (SIMULATION.timetable.depotTransfers, 调车): one empty request per
+ * departure, out of one yard and into the other, on stopping timings, at the clear slot nearest its clock. One that finds
+ * no slot is reported, not dropped silently. */
+function draftTransfers(ctx: PlanContext, requests: ServiceRequest[]) {
+  const { topo } = ctx;
+  const starts = new Map<number, number>(), ends = new Map<number, number>(), issues: PlanIssue[] = [];
+  const index = new DepIndex(requests);
+  const factor = (t: number) => dwellFactorAt(ctx.dayType, t);
+  for (const transfer of SIMULATION.timetable.depotTransfers ?? []) {
+    if (!transfer.days.includes(ctx.dayType)) continue;
+    const from = depotIndex(topo, transfer.from), to = depotIndex(topo, transfer.to);
+    const way = from < 0 || to < 0 ? undefined : (['DN', 'UP'] as const)
+      .map(dir => ({ dir, ex: exitStation(topo, from, dir), en: entryStation(topo, to, dir) }))
+      .find(w => w.ex >= 0 && w.en >= 0 && w.ex !== w.en && ahead(w.dir, w.ex, w.en));
+    for (const clock of transfer.dep) {
+      const fail = (why: string) => issues.push({ severity: 'error', code: 'UNASSIGNED', t: clock, text: `调车 ${transfer.from}→${transfer.to}：${why}` });
+      if (!way) { fail('车场写错，或两车场之间没有顺行方向的路径'); continue; }
+      let stops: PlanStop[] | undefined;
+      for (let shift = 0; shift <= TRANSFER_SLOT_SPAN && !stops; shift += 10) {
+        for (const at of shift ? [clock - shift, clock + shift] : [clock]) {
+          // (stopping timings, boarding nobody: a non-stopping car would close on the train ahead over a long run)
+          const candidate = buildStops(ctx, way.dir, way.ex, way.en, at, true, factor);
+          if (index.clear(candidate, way.dir)) { stops = candidate; break; }
+        }
+      }
+      if (!stops) { fail(`前后 ${TRANSFER_SLOT_SPAN / 60} 分钟内没有空的运行时隙`); continue; }
+      const trip: ServiceRequest = { id: requests.length, dir: way.dir, kind: 'empty', from: way.ex, to: way.en, stops, revenue: false, locked: true };
+      requests.push(trip); index.add(trip);
+      starts.set(trip.id, from); ends.set(trip.id, to);
+    }
+  }
+  return { starts, ends, issues };
 }
 
 /** 驻站备车 (a hotStandby place with `serves`, no yard source): in each window the first trip past the place that
@@ -1544,7 +1582,7 @@ function draftPatrols(ctx: PlanContext, requests: ServiceRequest[]) {
 /** D178: the day duty from the terminal pools (duty/planner.ts). */
 function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], periods: Period[], published: ReadonlySet<number>, layoutIssues: PlanIssue[],
   fixedDraft: { pairs: [number, number, number, number, (number | undefined)?][]; anchors: number[]; issues: PlanIssue[] },
-  reservedStarts: Map<number, number>, patrols: readonly number[][] = []): Plan {
+  reservedStarts: Map<number, number>, patrols: readonly number[][] = [], draftedEnds: ReadonlyMap<number, number> = new Map()): Plan {
   const W = 0;
   const locked = new Set(requests.filter(r => r.locked || published.has(r.id) || isPublishedOrigin(ctx, r)).map(r => r.id));
   const anchors = new Set([...published, ...fixedDraft.anchors, ...locked]);
@@ -1562,7 +1600,7 @@ function buildPoolPlan(ctx: PlanContext, requests: readonly ServiceRequest[], pe
       if (request.patrol) trip.patrol = true;
     }
     for (const chain of patrols) for (let k = 0; k + 1 < chain.length; k++) { drafts[chain[k]].next = chain[k + 1]; drafts[chain[k + 1]].prev = chain[k]; }
-    const fixedEnds = new Map<number, number>();
+    const fixedEnds = new Map<number, number>(draftedEnds);
     for (const [a, b, c, depot, returning] of fixedDraft.pairs) {
       if (a >= 0) { drafts[a].next = b; drafts[b].prev = a; }
       drafts[b].next = c; drafts[c].prev = b;

@@ -163,6 +163,10 @@ export const LINE11_SIMULATION: SimulationData = {
       maxPresent: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 3, DSL: 3 },
     },
     firstOrigins, patrols,
+    // 用户 2026-11-27 现场所见：工作日约 14–16 点嘉定北按组出车，每组「出库空放、折返大交路、出库罗山路」，不止三组；
+    // 空放是调车（用户判断：南翔、真如平峰已有备车，嘉定新城没有专用折返线）。【假设】去川杨河定修段，全程空车下行；
+    // 4 组，各排在高德嘉定北成对载客班（14:03/14:07、14:24/14:28、14:38/14:42、15:10/15:15）之前。推翻：现场看到空放停在别处。
+    depotTransfers: [{ from: 'CBL', to: 'CYL', dep: [H(14, 0), H(14, 20), H(14, 34), H(15, 6)], days: ['weekday'] }],
     lastRuns: [{ dir: 'UP', from: 'DSL', to: 'AT', dep: H(22, 25) }, { dir: 'DN', from: 'HQ', to: 'DSL', dep: H(22, 0) }],
     // 官方末班往迪士尼一列，嘉定新城之后的分钟是花桥 22:00 那趟的（赛车场 22:19 → 嘉定新城 22:23，4 分钟）；嘉定北 22:10 那趟比它早一站间隔
     columnOwners: [{ column: 'lastE', station: 'JDC', from: 'HQ' }],

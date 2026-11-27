@@ -253,4 +253,18 @@ describe('line 11 branch, layout and plan', () => {
     expect(out).toHaveLength(1);
     if (dayType === 'weekday') expect(STATIONS[into[0].from].id).toBe('SLD');
   });
+  // 调车（depotTransfers）：数据里列的每个钟点在列出的日型各有一趟空车，从一个车场出、进另一个车场，离钟点不超过 10 分钟；别的日型没有
+  for (const dayType of ['weekday', 'weekend'] as const) it(`${dayType}: runs each scheduled yard transfer empty from one yard into the other`, async () => {
+    const { SIMULATION } = await import('../src/data/current');
+    const sim = new Sim({ dayType, dateLabel: '11号线', startTime: 14400, seed: 7 });
+    const depot = (key: string) => topo.depots.findIndex(d => d.key === key);
+    for (const transfer of SIMULATION.timetable.depotTransfers ?? []) {
+      const moved = sim.plan.blocks.filter(b => b.start.kind === 'depot' && b.start.depot === depot(transfer.from)
+        && b.end.kind === 'depot' && b.end.depot === depot(transfer.to) && b.trips.length === 1 && !sim.plan.trips[b.trips[0]].revenue);
+      const departures = moved.map(b => sim.plan.trips[b.trips[0]].stops[0].dep);
+      if (!transfer.days.includes(dayType)) { expect(departures).toHaveLength(0); continue; }
+      expect(departures).toHaveLength(transfer.dep.length);
+      for (const clock of transfer.dep) expect(departures.some(t => Math.abs(t - clock) <= 600)).toBe(true);
+    }
+  });
 });

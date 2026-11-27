@@ -84,6 +84,10 @@ export interface TimetableData {
    * passing every station along `via` (changing ends at each inner station), then waiting at
    * the last one for the first departure there, which the car then works. */
   patrols?: { depot: string; via: string[] }[];
+  /** Scheduled yard-to-yard transfers (调车, e.g. 停车场→定修段) on the day types `days`: each car runs empty
+   * from `from`'s exit to `to`'s entry, the way that reaches it, leaving the exit station at the clear slot
+   * nearest each of `dep`; the yards' evening returns then balance their counts. */
+  depotTransfers?: { from: string; to: string; dep: number[]; days: DayType[] }[];
   /** 截短回库: a car's run home that would start in [from, to) is made by its last passenger trip instead:
    * that trip ends at the depot's entry station (cut short, or run on to it), where it sets down and goes in,
    * rather than reaching its own end and running back empty. */
