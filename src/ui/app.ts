@@ -632,6 +632,7 @@ export class App {
       if (ev.phase === 'up') continue;
       if (ev.action === 'pause') { this.header.setPaused(!this.header.paused); continue; }
       if (ev.action === 'cancel') { this.onKey(new KeyboardEvent('keydown', { key: 'Escape' })); continue; }
+      if (tr?.atoDriver && (ev.action === 'doorL' || ev.action === 'doorR')) { this.pressDoor(tr.id, ev.action === 'doorL' ? 'L' : 'R'); continue; }
       if (!tr || !isPlayerDriving(tr)) continue;
       switch (ev.action) {
         case 'notchUp': this.moveHandle(tr, 'up'); break;
@@ -667,6 +668,12 @@ export class App {
       if (!e.repeat) this.atoPress(tr.id, key);
       return;
     }
+    // door buttons (用户 2026-11-16): Y left, U right; the same side again closes. ATO 驾驶的司机同样开关门，只是不操纵手柄
+    if (tr && (isPlayerDriving(tr) || tr.atoDriver) && (key === 'y' || key === 'u')) {
+      e.preventDefault();
+      if (!e.repeat) this.pressDoor(tr.id, key === 'y' ? 'L' : 'R');
+      return;
+    }
     if (tr && isPlayerDriving(tr)) {
       const k = e.key.toLowerCase();
       if (['j', 'k', 'l'].includes(k) && !e.repeat) {
@@ -677,12 +684,6 @@ export class App {
       // single master controller, JRETS layout: Z power / release, Q brake, S neutral, E emergency
       const up = e.key === 'ArrowUp' || k === 'z';
       const step = up ? 'up' : e.key === 'ArrowDown' || k === 'q' ? 'down' : k === 's' ? 'neutral' : k === 'e' ? 'emergency' : null;
-      // door buttons (用户 2026-11-16): Y left, U right; the same side again closes
-      if ((k === 'y' || k === 'u') && !e.repeat) {
-        e.preventDefault();
-        this.pressDoor(tr.id, k === 'y' ? 'L' : 'R');
-        return;
-      }
       if (step) {
         e.preventDefault();
         if (e.repeat && k !== 'z' && k !== 'q' && !e.key.startsWith('Arrow')) return;

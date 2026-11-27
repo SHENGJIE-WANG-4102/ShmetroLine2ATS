@@ -30,7 +30,7 @@ import { Dmi } from './dmi';
 import { renderPis } from './pisview';
 
 const ROLE: Record<string, string> = { start: '出站信号机', home: '进站/防护信号机', rev: '反向信号机', exit: '折返/存车线出口信号机', depot: '出段信号机' };
-const ASPECT: Record<string, string> = { R: '红灯（禁止）', G: '绿灯（正线通过）', Y: '黄灯（侧向）', GUIDE: '红+白（引导）', DARK: '灭灯（CBTC 列车接近）', FAIL: '故障' };
+const ASPECT: Record<string, string> = { R: '红灯（禁止）', G: '绿灯（正线通过）', Y: '黄灯（侧向）', GUIDE: '红+白（引导）', DARK: '灭灯（对 CBTC 列车）', FAIL: '故障', W: '白灯（折返/侧线/出入段）' };
 
 export interface PanelHooks {
   openStation(st: number): void;
@@ -387,7 +387,7 @@ export class CommandPanel {
     // DMI 下面的列车信息、按钮顺着排到它左边，不留空白
     const flow = h('div', { class: 'drv-flow' }, this.stopView.el, this.dmi.el);
     this.el.append(flow);
-    if (t0.atoDriver) flow.append(h('div', { class: 'keys' }, 'ATO启动：发车条件满足后同时按住 F + G'));
+    if (t0.atoDriver) flow.append(h('div', { class: 'keys' }, 'ATO启动：关门锁闭、发车条件满足后同时按住 F + G · Y 左门 · U 右门（再按同侧关门）'));
     if (isPlayerDriving(t0)) flow.append(h('div', { class: 'keys' }, '手柄：', h('b', {}, 'Z ↑'), ' 加牵引 · ', h('b', {}, 'Q ↓'), ' 加制动 · ', h('b', {}, 'S'), ' 中立位 · ', h('b', {}, 'E'), ' 紧急制动 · ', h('b', {}, 'Y'), ' 左门 · ', h('b', {}, 'U'), ' 右门 · 鼠标滚轮/点击手柄档位'));
     if (isPlayerDriving(t0)) flow.append(h('div', { class: 'cmdgrid' }, ...([[-1, '后 J'], [0, '零 K'], [1, '前 L']] as const).map(([position, label]) => this.btn(`换向器 ${label}`, { title: `换向器 ${label}`, cmd: { c: 'reverser', train: id, position } }))));
     const scores = h('div', { class: 'scores' });

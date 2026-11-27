@@ -56,11 +56,8 @@ export function drawTeal(c: CanvasRenderingContext2D, t: TrainSnap, d: DmiData |
   // still standing at the stop it was released from (a manual train is released at door lock)
   const standing = stopped && board?.departedAt !== undefined && board.headLeftAt === undefined;
   const docked = stopped && d?.stopWin === 'aligned' && !!(t.platSide || (standing && board?.side));
-  const doorOpen = !!d && ['open', 'opening', 'closing'].includes(d.trainDoor);
-  // 用户（2026-11-16）：出发跟 2 号线起步箭头一样，给了发车授权就 YES，不等车动
-  const depart = stopped ? departureCue(t, d, now)
-    : !t.eb && !t.failed && !t.hold && !d?.stationHold && (!t.halt || (t.halt.code === 'MANUAL' && !!d?.manualReady)) && !doorOpen && !t.doorsAwait
-      && t.phase === 'run' && t.maDist > 3 && t.vTarget > 0.1;
+  // 用户（2026-11-16、11-28）：出发跟 2 号线起步箭头一样，停着给了发车授权才 YES，一起步就变 NO
+  const depart = stopped && departureCue(t, d, now);
 
   // top fields
   const fields: [string, string, string][] = [

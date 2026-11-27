@@ -436,6 +436,7 @@ npx tsx scripts/fuzz-day.ts 103 --level 3 --wind 1 --density 3:4 --day-type week
 - 站台对标特写的编组、车长、停车牌数字取线路数据（`LINE_INFO.cars`、`trainLength`）：11号线 6 节 140 m，停车牌写 6；2号线仍 8 节 186 m。随机车门/车辆故障的车号也按编组抽（11号线不再出「第8车」）。
 - 公共文件：`src/data/types.ts`、`src/data/current.ts`、`src/sim/{onboard,ats,movement,dmi,model,vehicle}.ts`、`src/ui/{dmi,dmiTeal,departCue,cmdpanel,trackview,app,help,stopview}.ts`、`src/styles.css`。
 - 验证：11号线工作日全天（无故障，种子 5）改前改后逐小时最大晚点完全一致，462 趟载客全部跑完、0 违例；07:00 在线 63 列全部 AM。带随机故障（种子 2783861847）两边都是 15:25 ZC2 故障造成的大晚点（改前就有），车门故障车号变了之后随机序列分叉，数字略有出入。浏览器实测：接管 ATO 驾驶，U 开关右门、Y 开关左门，出发 YES 后按钮闪，点按钮/F+G 后常亮发车。
+- 补记（用户 2026-11-28 试驾）：ATO 驾驶的司机也用 Y/U 开关门（键盘和手柄，原来只有人工驾驶能按，ATO 下关不了门）；「出发」只在停着、给了发车授权时 YES，一起步就变 NO（原来行车中另有一套条件会一直亮 YES）；信号面板补上白灯 W 的说明，灭灯说明改为「对 CBTC 列车」（D237 后没车接近也灭）。公共文件：`src/ui/{app,cmdpanel,dmiTeal}.ts`。
 
 ## D206 手柄支持：可扫描绑定、组合键（2026-11-17，用户决定）
 - 前端功能，不动 `src/sim`。Gamepad API 每帧轮询，取第一个已连接手柄；窗口失焦、手柄断开、弹窗打开时释放所有按住的动作（含 ATO F/G）。
