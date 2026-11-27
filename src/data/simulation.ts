@@ -63,9 +63,10 @@ export interface TimetableData {
     /** further through routes a template's pattern may name, DN-ward (a branch's whole route,
      * a second short route); each must pass the reference stations */
     routes?: Record<string, [string, string]>;
-    /** a named route that ends at its far end X also sends a revenue train on from X to the station given here in
-     * the same slot, out of a depot (罗山路出库往迪士尼): the route's own train turns back as before */
-    relays?: Record<string, string>;
+    /** named routes that run one way only, by their direction: a car that stays at its far end (夜间交路进存车线过夜,
+     * 回库) runs DN only, a car pulled out at the far end (出库) runs UP only; the other direction leaves the slot empty.
+     * Any other route runs back on its slot, from its far end, even one turning short of the westbound reference */
+    oneWay?: Record<string, 'DN' | 'UP'>;
     core: [string, string]; insertOrigin?: string; overflowWithdrawal?: string; circulate: string[];
     /** the eastern line end balances its cars with the core by short and extended
      * service routes (截短/延伸交路, timetable.ts layoutService); unset: off */

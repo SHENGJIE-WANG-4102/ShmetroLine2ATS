@@ -193,12 +193,13 @@ describe('line 11 branch, layout and plan', () => {
     expect(up.some(path => path.startsWith('DSL ') && path.endsWith(' HQ'))).toBe(true);
     // the short routes run in the weekday peaks only (official weekend table has no small route)
     if (dayType === 'weekday') {
-      // 用户决定（2026-11-18）：高峰小交路是南翔—罗山路、花桥—罗山路；不再有南翔—三林小交路；夜间有嘉定北—三林东
+      // 用户决定（2026-11-18）：高峰小交路是南翔—罗山路、花桥—罗山路；夜间有嘉定北—三林东。
+      // 用户决定（2026-11-27，D234）：早高峰恢复南翔—三林小交路（三林中间线折返）
       expect(dn.some(path => path.startsWith('NX ') && path.endsWith(' LSH'))).toBe(true);
       expect(dn.some(path => path.startsWith('HQ ') && path.endsWith(' LSH'))).toBe(true);
       expect(up.some(path => path.startsWith('LSH ') && path.endsWith(' NX'))).toBe(true);
       expect(up.some(path => path.startsWith('LSH ') && path.endsWith(' HQ'))).toBe(true);
-      expect(dn.some(path => path.startsWith('NX ') && path.endsWith(' SL'))).toBe(false);
+      expect(dn.some(path => path.startsWith('NX ') && path.endsWith(' SL'))).toBe(true);
       expect(dn.some(path => path.startsWith('JDB ') && path.endsWith(' SLD'))).toBe(true);
     }
     // every trip calls only at stations on its own way, and never repeats one
@@ -242,9 +243,6 @@ describe('line 11 branch, layout and plan', () => {
     const lastDN = (id: string) => revenue.filter(trip => trip.dir === 'DN' && STATIONS[trip.from].id === id && STATIONS[trip.to].id === 'DSL').sort((x, y) => x.stops[0].dep - y.stops[0].dep).at(-1)!;
     expect([lastDN('HQ').stops[0].dep, Math.floor(lastDN('HQ').stops.at(-1)!.arr / 60) * 60]).toEqual([clock(22, 0), clock(23, 44)]);
     expect([lastDN('JDB').stops[0].dep, Math.floor(lastDN('JDB').stops.at(-1)!.arr / 60) * 60]).toEqual([clock(22, 10), clock(23, 39)]);
-    // 罗山路出库往迪士尼（D215）：工作日有，周末没有
-    const outOfLSH = revenue.filter(trip => trip.dir === 'DN' && STATIONS[trip.from].id === 'LSH' && STATIONS[trip.to].id === 'DSL');
-    expect(outOfLSH.length > 0).toBe(dayType === 'weekday');
     // 浦三路中间线过夜一列：夜里最后一批到站的车空车进去，次日清晨空车出来（工作日是嘉定北—三林东夜间交路的车）
     const PSR = station('PSR');
     const into = sim.plan.trips.filter(trip => !trip.revenue && !trip.cancelled && trip.to === PSR && trip.stops[0].dep >= 22.5 * 3600);

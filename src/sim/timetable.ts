@@ -251,8 +251,6 @@ export function overnightPlaces(topo: Topology) {
   });
 }
 
-/** a relay train leaves the turn-back station this long after the route's own train arrives there */
-const RELAY_DWELL = 40;
 const FIRST_LAST_COLUMNS = [['firstE', 'DN'], ['firstW', 'UP'], ['lastE', 'DN'], ['lastW', 'UP'], ['lastG', 'DN'], ['firstW2', 'UP'], ['lastW2', 'UP'], ['lastW3', 'UP']] as const;
 const officialClock = (s: string) => { const [h, m] = s.split(':').map(Number); return h * 3600 + m * 60; };
 
@@ -632,6 +630,8 @@ export function layoutService(ctx: PlanContext) {
   const [W, E] = SIMULATION.timetable.terminals.trunk?.map(stationIndex) ?? [0, nS - 1];
   /** a pattern entry that names a route of the line's data: its ends, DN-ward */
   const namedRoute = (kind: string) => SIMULATION.timetable.terminals.routes?.[kind]?.map(stationIndex);
+  /** a named route published for the other direction only (terminals.oneWay): its slot is left empty */
+  const otherWayOnly = (kind: string, dir: TrackDir) => { const only = SIMULATION.timetable.terminals.oneWay?.[kind]; return only !== undefined && only !== dir; };
   /** A named route stops with the published last train of its own terminal: its eastbound
    * origin may not leave after that station's last eastbound departure, its westbound
    * arrival may not come after its last westbound one (a minute of slack). Later slots
@@ -746,6 +746,15 @@ export function layoutService(ctx: PlanContext) {
     const stops = stopsAtReference(origin => buildStops(ctx, dir, from, to, origin, true, factorAt, undefined, false), ref, departure);
     return buildStops(ctx, dir, from, to, stops[0].dep, true, factorAt);
   };
+  /** Westbound stops of a named route on the slot passing the reference at `t`: a route that turns back short of
+   * the reference (三林) leaves its turn-back when a train from the reference would pass it; undefined where
+   * the route lies off the reference's way altogether. */
+  const upRouteStops = (from: number, to: number, t: number) => {
+    if (stationPath(from, to).includes(UP_REF)) return atReference('UP', from, to, UP_REF, t);
+    if (!stationPath(UP_REF, to).includes(from)) return undefined;
+    const passing = atReference('UP', UP_REF, to, UP_REF, t).find(s => s.st === from);
+    return passing && buildStops(ctx, 'UP', from, to, passing.dep, true, factorAt);
+  };
   const nextSlot = (t: number, dir: TrackDir) => {
     const p = streamAt(t, dir);
     const candidate = t + headwayAt(p.steady ? t : t + headwayAt(t, dir) / 2, dir);
@@ -787,16 +796,12 @@ export function layoutService(ctx: PlanContext) {
       if (tpl.openingAlternation && t < OPENING.outerAlternation) kind = idx % 2 === 0 ? 'big' : 'small';
       if (guard === 0) kind = 'big'; // preserve the published PXL 05:25 opener
       let route = namedRoute(kind);
+      if (route && otherWayOnly(kind, 'DN')) { idx++; t = nextSlot(t, 'DN'); continue; }
       if (route && !routeOpen('DN', route, atReference('DN', route[0], route[1], DN_REF, t))) { route = undefined; kind = 'big'; }
       if (route) {
         const stops = atReference('DN', route[0], route[1], DN_REF, t);
         if (!precedesLast('DN', stops)) break;
         addTrip('DN', 'big', route[0], route[1], stops, true);
-        const relayTo = stationIndex(SIMULATION.timetable.terminals.relays?.[kind]);
-        if (relayTo >= 0) {
-          const relay = buildStops(ctx, 'DN', route[1], relayTo, stops.at(-1)!.arr + RELAY_DWELL, true, factorAt);
-          if (precedesLast('DN', relay)) addTrip('DN', 'big', route[1], relayTo, relay, true);
-        }
       } else if (kind === 'big' || kind === 'late') {
         const to = E;
         const stops = guard === 0 ? firstCurves.DN : atReference('DN', W, to, DN_REF, t);
@@ -885,7 +890,7 @@ export function layoutService(ctx: PlanContext) {
       let tpl = TEMPLATES[p.template];
       const entering = p.label !== lastPeriod;
       if (entering) {
-        if (!tpl.continuePattern) idx = 0;
+        if (!tpl.continuePattern) idx = tpl.phase?.UP ?? 0;
         lastPeriod = p.label;
       }
       // Balanced once on entering: moving the phase again mid-period would
@@ -897,8 +902,7 @@ export function layoutService(ctx: PlanContext) {
         t = balancedUpSlot(t, h);
         p = streamAt(t, 'UP'); tpl = TEMPLATES[p.template];
       }
-      if (p.steady) idx = Math.round((t - p.from - (tpl.openingAlternation ? upPhase : 0)) / peakHw(p, 'UP'));
-      idx += tpl.phase?.UP ?? 0;
+      if (p.steady) idx = Math.round((t - p.from - (tpl.openingAlternation ? upPhase : 0)) / peakHw(p, 'UP')) + (tpl.phase?.UP ?? 0);
       let kind = tpl.pattern[idx % tpl.pattern.length] as 'big' | 'small' | 'late';
       if (tpl.openingAlternation && t < peaks[0].from) {
         // Anchor the outer 5-minute grid to the official airport first train.
@@ -910,16 +914,14 @@ export function layoutService(ctx: PlanContext) {
       // morning build-up do not insert another departure within 90 seconds.
       if (Math.abs(t - firstThrough) < 120) { idx++; t = nextSlot(t, 'UP'); continue; }
       let route = namedRoute(kind);
-      // a relay route (its DN train went on past the turn-back) comes back up from where the relay train ended
-      const upFrom = route && stationIndex(SIMULATION.timetable.terminals.relays?.[kind]) >= 0 ? stationIndex(SIMULATION.timetable.terminals.relays![kind]) : route?.[1] ?? -1;
-      if (route && stationPath(upFrom, route[0]).includes(UP_REF) && !routeOpen('UP', route, atReference('UP', upFrom, route[0], UP_REF, t))) { route = undefined; kind = 'big'; }
-      // A route that ends short of the westbound reference station (a night run that
-      // stays at its terminus) has no westbound counterpart: its slot is left empty.
-      if (route && !stationPath(upFrom, route[0]).includes(UP_REF)) { idx++; t = nextSlot(t, 'UP'); continue; }
+      if (route && otherWayOnly(kind, 'UP')) { idx++; t = nextSlot(t, 'UP'); continue; }
+      const upFrom = route?.[1] ?? -1;
+      let routeStops = route && upRouteStops(upFrom, route[0], t);
+      if (route && !routeStops) { idx++; t = nextSlot(t, 'UP'); continue; }
+      if (route && !routeOpen('UP', route, routeStops!)) { route = undefined; routeStops = undefined; kind = 'big'; }
       if (route) {
-        const stops = atReference('UP', upFrom, route[0], UP_REF, t);
-        if (!precedesLast('UP', stops)) break;
-        addTrip('UP', 'big', upFrom, route[0], stops, true);
+        if (!precedesLast('UP', routeStops!)) break;
+        addTrip('UP', 'big', upFrom, route[0], routeStops!, true);
       }
       if (kind === 'big') {
         const stops = atReference('UP', E, W, UP_REF, t);

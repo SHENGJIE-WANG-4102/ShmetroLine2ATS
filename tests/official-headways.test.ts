@@ -32,13 +32,13 @@ function middleDepartures(plan: Plan, topo: Topology, a: string, b: string, dir:
 /** Named official windows of a day, and the gaps between them inside SERVICE. */
 function windows(dayType: 'weekday' | 'weekend') {
   const rows = OFFICIAL_HEADWAYS[dayType];
-  const named = rows.filter(r => r.from && r.to).map(r => ({ name: r.name, from: clock(r.from!), to: clock(r.to!), sections: r.sections, byGaode: r.byGaode }))
+  const named = rows.filter(r => r.from && r.to).map(r => ({ name: r.name, from: clock(r.from!), to: clock(r.heldUntil ?? r.to!), sections: r.sections, dir: r.dir }))
     .sort((x, y) => x.from - y.from);
   const other = rows.find(r => !r.from)!;
   const gaps: typeof named = [];
   let at = SERVICE.from;
-  for (const w of named) { if (w.from > at) gaps.push({ name: other.name, from: at, to: w.from, sections: other.sections, byGaode: other.byGaode }); at = Math.max(at, w.to); }
-  if (at < SERVICE.to) gaps.push({ name: other.name, from: at, to: SERVICE.to, sections: other.sections, byGaode: other.byGaode });
+  for (const w of named) { if (w.from > at) gaps.push({ name: other.name, from: at, to: w.from, sections: other.sections, dir: other.dir }); at = Math.max(at, w.to); }
+  if (at < SERVICE.to) gaps.push({ name: other.name, from: at, to: SERVICE.to, sections: other.sections, dir: other.dir });
   return [...named, ...gaps];
 }
 
@@ -57,10 +57,8 @@ describe.each(['weekday', 'weekend'] as const)('D173 official headways (%s)', da
   it('keeps every official window, section and direction within the average-interval band', () => {
     const report: string[] = [], bad: string[] = [];
     for (const w of windows(dayType)) for (const [a, b, h] of w.sections) {
-      // peak counts that follow the Gaode tables (用户决定 2026-11-18) are checked by the line's own Gaode test
-      if (w.byGaode?.some(([x, y]) => x === a && y === b)) continue;
       const [low, high] = typeof h === 'number' ? [h, h] : h;
-      for (const dir of ['DN', 'UP'] as const) {
+      for (const dir of w.dir ? [w.dir] : ['DN', 'UP'] as const) {
         const { station, count, from } = middleDepartures(sim.plan, sim.topo, a, b, dir, w.from, w.to);
         const average = count ? (w.to - from) / count : Infinity;
         const line = `${w.name} ${a}—${b} ${dir} @${station}: ${count}列 平均${Math.round(average)}s 官方${typeof h === 'number' ? h : h.join('–')}s`;

@@ -432,16 +432,18 @@ export interface FirstLastRow {
 }
 export interface OfficialHeadway {
     name: string;
+    /** the row is published for one direction only (往迪士尼 / 往郊区); unset: both */
+    dir?: 'DN' | 'UP';
     from: string | null;
     to: string | null;
+    /** the published average holds only up to this clock: from it the line's verified timetable already builds up
+     * to the next peak inside the published period, and the rest of the period is checked as the general row */
+    heldUntil?: string;
     sections: [
         string,
         string,
         number | readonly [number, number]
     ][];
-    /** sections (as named in `sections`) whose peak counts follow the Gaode arrival tables instead of the official
-     * average (用户决定 2026-11-18: 高峰以高德为主); the headway test leaves them to the line's own Gaode test */
-    byGaode?: [string, string][];
 }
 
 export interface FirstLastData {

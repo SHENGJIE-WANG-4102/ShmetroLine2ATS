@@ -237,7 +237,7 @@ const H = (h: number, m = 0) => h * 3600 + m * 60;
 /** 南翔、真如中间线停车的窗口（驻站热备 from–to；need 不用）【假设】。晚间 21 点前回段：
  * 之后夜间回段车要在南翔中间线折返。 */
 const OFF_PEAK_STORAGE = {
-  weekday: [{ from: H(10), need: H(14), to: H(14) }],
+  weekday: [{ from: H(10), need: H(15, 30), to: H(15, 30) }],
   weekend: [{ from: H(6, 30), need: H(21, 30), to: H(21, 30) }],
 };
 export const OPERATIONS: CoreLineData['OPERATIONS'] = {
@@ -308,7 +308,7 @@ export const OPERATIONS: CoreLineData['OPERATIONS'] = {
   ],
   // 用户决定（2026-11-22）：南翔中间线只能停 1 列。晚高峰前没活的小交路车停在中间线等发车，不在正线上空放来回【等待上限为假设】。
   longStand: { NX: H(2) },
-  // 用户决定（2026-11-21）：早高峰结束（模板 09:45）前不回库，也就不会一边空车回库一边空车出库。
+  // 用户决定（2026-11-21）：早高峰结束前（09:45，南翔 09:05 收尾的车约此时跑完）不回库，也就不会一边空车回库一边空车出库；回库槽（in*）是排进图的。
   noDepotReturnBefore: '09:45',
   platformPassKmh: 45,
   platformStopKmh: Infinity,
