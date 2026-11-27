@@ -183,8 +183,14 @@ export function portalReversal(topo: Topology, depot: number, kind: 'exit' | 'en
   const clock = parseTime(kind === 'exit' ? rule.pullOutBefore : rule.pullInFrom);
   return (kind === 'exit' ? at < clock : at >= clock) ? 'fallback' : 'no';
 }
-/** extra time a depot move spends changing ends at its junction station (s) */
+/** time a depot exit that changes ends on its junction platform stands there, arrival to departure (s):
+ * the driver change and the system switch, passengers boarding meanwhile (runtime: 10 s to the
+ * stop, 40 s change of ends, 40 s doors) */
 const PORTAL_REVERSE = 90;
+/** time a depot exit stands at its first platform before its departure (s) */
+function exitPlatformTime(reverse: boolean, stop: boolean): number {
+  return reverse ? PORTAL_REVERSE : stop ? 75 : 30;
+}
 /** 【假设】extra time a move over a 牵出线 lead spends running to its end and changing ends (s) */
 const SHUNT_REVERSE = 150;
 
@@ -1955,9 +1961,9 @@ export function depotStartTime(ctx: Pick<PlanContext, 'topo'>, depot: number, fi
   const dir: TrackDir = first.dir ?? (first.stops.length > 1 && first.stops[1].st < st0 ? 'UP' : 'DN');
   const work = OPERATIONS.depotLeadWork?.[topo.depots[depot].key]?.exitS ?? 0;
   const portal = topo.depots[depot].portals.exit[dir];
-  const travel = 95 + dist / 13 + 25 + work + (portal.reverse ? PORTAL_REVERSE : 0)
+  const travel = 95 + dist / 13 + 25 + work
     + (topo.depots[depot].transferPaths[portal.path].shuntBerths?.length ? SHUNT_REVERSE : 0);
-  return Math.round(refTime - travel - (first.stops[0].stop ? 75 : 30));
+  return Math.round(refTime - travel - exitPlatformTime(portal.reverse, first.stops[0].stop));
 }
 
 export function numberPlan(plan: Plan, startSvc = 1) {
@@ -2574,7 +2580,7 @@ export function addExtraTrain(ctx: PlanContext, plan: Plan, depot: number, dir: 
     // other direction, and no train of `dir` still has the departure
     // platform while it comes in (ARS lets the earlier departure go first).
     if (topo.depots[depot].portals.exit[dir].reverse) {
-      const at = out[0].dep - PORTAL_REVERSE - 75;
+      const at = out[0].dep - exitPlatformTime(true, true);
       if (!index.clear([{ st: ex, arr: at, dep: at, stop: false }], back)
         || plan.trips.some(t => !t.cancelled && t.dir === dir && t.stops.some(p => p.st === ex && p.dep > at - 30 && p.dep < out[0].dep))) continue;
     }

@@ -193,8 +193,8 @@ export const LINE11_SIMULATION: SimulationData = {
       circulate: ['JDB', 'HQ', 'NX', 'SL', 'LSH', 'DSL'],
       depot: { JDB: 'CBL', HQ: 'SSC', NX: 'CBL', SL: 'CYL', LSH: 'CYL', DSL: 'CYL' },
       // 花桥/嘉定北/迪士尼各两条尾轨，三林中间折返线，罗山路两条尾轨。
-      capacity: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 3, DSL: 3 },
-      maxPresent: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 3, DSL: 3 },
+      capacity: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 2, DSL: 3 },
+      maxPresent: { JDB: 3, HQ: 3, NX: 2, SL: 2, LSH: 2, DSL: 3 },
     },
     firstOrigins, patrols,
     // 用户 2026-11-27 现场所见：工作日约 14–16 点嘉定北按组出车，每组「出库空放、折返大交路、出库罗山路」，不止三组；

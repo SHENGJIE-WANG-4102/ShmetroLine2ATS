@@ -119,6 +119,8 @@ function newQueryCache() {
      * movementStops. Only the storage differs, never the stored values. */
     slots: undefined as Map<Train, number> | undefined,
     rows: new Map<number, (StopTask | null | undefined)[]>(),
+    /** pendingExits, built on first use (the plan and sim.t do not change during one allocation) */
+    pendingExits: undefined as Map<string, { id: number; dep: number }[]> | undefined,
   };
 }
 type QueryCache = ReturnType<typeof newQueryCache>;
@@ -575,6 +577,32 @@ function entersOrigin(sim: Sim, option: ResourceOption, origin: StopTask): boole
 
 /** Project the same departure platform that arrival will commit after a
  * cab change, without mutating a future stop during admission. */
+/** The origin a yard exit reaches by changing ends on its 牵出线: the lead clips the movement at
+ * the change of ends, but the departure belongs to the same run out of the yard (嘉定北 05:31, D238). */
+function originPastShunt(sim: Sim, option: ResourceOption, tasks: Task[]): StopTask | undefined {
+  const last = option.choices.at(-1);
+  if (!last || tasks[last.index]?.k !== 'reverse'
+    || !sim.topo.depots.some(d => d.transferPaths.some(p => p.shuntBerths?.includes(last.berth)))) return undefined;
+  const next = tasks[last.index + 1];
+  return next?.k === 'stop' && next.dep !== null && next.arr === null ? next : undefined;
+}
+
+/** Yard exits whose gate time is still to come (they apply only from then), by the station and
+ * direction of their first departure (D238) */
+function pendingExits(sim: Sim, cache: QueryCache): Map<string, { id: number; dep: number }[]> {
+  if (cache.pendingExits) return cache.pendingExits;
+  const out = cache.pendingExits = new Map<string, { id: number; dep: number }[]>();
+  for (const b of sim.plan.blocks) {
+    if (b.start.kind !== 'depot' || b.train !== undefined || b.start.time <= sim.t || sim.blockDone.has(b.id)) continue;
+    const first = b.trips.map(id => sim.plan.trips[id]).find(t => !t.cancelled);
+    const stop = first && effectiveStops(first)[0];
+    if (!stop) continue;
+    const key = `${stop.st}:${first.dir}`;
+    (out.get(key) ?? out.set(key, []).get(key)!).push({ id: -(b.id + 1), dep: stop.dep });
+  }
+  return out;
+}
+
 function optionOrigin(sim: Sim, option: ResourceOption, tasks: Task[]): { task: StopTask; index: number } | undefined {
   for (const choice of option.choices) {
     const task = tasks[choice.index];
@@ -994,7 +1022,7 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   // for an entrant whose every reachable movement needs that occupied place.
   const needsThisOccupant = (id: number) => physicallyNeeds(physical, id, request.id);
   const departsHere = (other: ResourceRequest, before: boolean) => other.options.some(o => {
-    const candidate = optionOrigin(sim, o, other.tasks)?.task;
+    const candidate = optionOrigin(sim, o, other.tasks)?.task ?? originPastShunt(sim, o, other.tasks);
     return candidate && (before ? candidate.dep! < origin.dep! : candidate.dep! >= origin.dep!) && sim.topo.berths[candidate.berth].platform === platform;
   });
   // Precedence is real only if it can be taken: an earlier service queued
@@ -1028,6 +1056,11 @@ function earlierOrigin(sim: Sim, requests: ResourceRequest[], physical: Physical
   // it. Inspect only the service's current movement, never later circulations;
   // ordinary through trains receive no resource claim of their own.
   const cache = queryCache(sim), listed = sim.trainList.length && trainSlot(sim, cache, sim.trainList[0]) === 0;
+  // A yard exit due out of this station earlier precedes it too, before its gate time: an early
+  // train would otherwise hold the platform it needs (嘉定北 05:31, D238).
+  const trip = sim.plan.trips[origin.trip];
+  const exit = trip && pendingExits(sim, cache).get(`${origin.station}:${trip.dir}`)?.find(x => x.dep < origin.dep!);
+  if (exit) return exit;
   return sim.trainList.find((tr, i) => {
     if (tr.id === request.id || tr.failed) return false;
     // (while building, a train's place in trainList is its slot)
