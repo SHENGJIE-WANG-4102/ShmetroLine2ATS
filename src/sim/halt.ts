@@ -171,9 +171,10 @@ export function classify(sim: Sim, tr: Train): { code: HaltCode; train: number; 
     return wait ? r(wait.code, -1, wait.detail) : r('COUPLING');
   }
   if (tr.phase === 'dwell') {
+    // an applied emergency brake outranks the stop work, whoever drives; its cause (SPAD, comm or ZC still lost) decides the exemption
+    if (tr.eb) return { ...emergency(), plannedUntil: tr.dwellUntil };
     const work = tr.tasks[0]?.k === 'stop' ? tr.tasks[0].depotWork : undefined;
     if (work) {
-      if (tr.eb) return emergency();
       if (tr.hold) return r('HOLD');
       if (sim.t >= tr.dwellUntil && (tr.doorsOpen || tr.doorSide || tr.doorMotion || sim.t < (tr.doorLockedAt ?? 0)))
         return r(tr.manual ? 'MANUAL' : 'DWELL', -1, '等待车门关闭锁闭');

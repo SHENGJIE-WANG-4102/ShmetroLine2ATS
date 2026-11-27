@@ -280,6 +280,12 @@ describe('automatic dwell and ATO regulation',()=>{
   expect(departure.delay).toBeGreaterThanOrEqual(DOOR_CLOSE_S+OPERATIONS.autoStartDelay[0]-PLANNED_CLOSE_BUDGET);
   expect(departure.delay).toBeLessThanOrEqual(DOOR_CLOSE_S+OPERATIONS.autoStartDelay[1]-PLANNED_CLOSE_BUDGET+.2);
  });
+ it('names the real cause of an emergency brake on a train standing at a platform',()=>{
+  const {s,tr}=fixture(16,0,40);expect(tr.phase).toBe('dwell');
+  tr.eb=true;tr.ebCause='comm';tr.ebReason='车地通信中断，MA失效';tr.comm=false;
+  expect(classify(s,tr).code).toBe('COMM_LOSS');
+  tr.comm=true;expect(classify(s,tr).code).toBe('EB');
+ });
  it('caps early platform regulation at ten seconds and keeps ATP speed supervision',()=>{
   const {s,tr}=fixture(5,-60,25,0,0);expect(tr.dwellUntil-s.t).toBeCloseTo(35,1);
   advance(s,35.3);expect(tr.delay).toBeLessThan(-49);advance(s,20);

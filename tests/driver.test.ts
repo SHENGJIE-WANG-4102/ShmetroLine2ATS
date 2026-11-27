@@ -581,8 +581,9 @@ describe('driver controls and physical enable',()=>{
  });
  it('buttons and halt use the same first ATO readiness failure, without arming vehicle work in a read',()=>{
   const {s,t,b}=fixture();t.manual=false;t.mode='AM';t.atoDriver=true;t.doorsAwait=false;t.dwellUntil=s.t;
-  const cases=[
-   {patch:{eb:true,ebReason:'测试紧急制动'},code:'EB'},
+  const cases:{patch:object;code:string;halt?:string}[]=[
+   // the halt names the brake's cause as for a running train: without auto radio it waits on the dispatcher (D235)
+   {patch:{eb:true,ebReason:'测试紧急制动'},code:'EB',halt:'DISPATCHER'},
    {patch:{pendingMode:'CM'},code:'MODE_CHANGE'},
    {patch:{hold:true},code:'HOLD'},
    {patch:{doorsOpen:true},code:'DWELL'},
@@ -590,7 +591,7 @@ describe('driver controls and physical enable',()=>{
   ];const cp=capture(s);
   for(const c of cases){restore(s,cp);const tr=s.trains.get(t.id)!;Object.assign(tr,c.patch);
    const ready=atoStartReady(s,tr);expect(ready.ready).toBe(false);expect(ready.code).toBe(c.code);
-   expect(classify(s,tr)).toMatchObject({code:ready.code,detail:ready.detail});
+   expect(classify(s,tr)).toMatchObject({code:c.halt??ready.code,detail:ready.detail});
    const r=s.command({c:'atoButton',train:tr.id,button:'f',down:true});expect(r.ok).toBe(false);expect(r.msg).toContain(ready.detail);
   }
   restore(s,cp);const tr=s.trains.get(t.id)!;

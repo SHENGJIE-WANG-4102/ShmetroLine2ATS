@@ -454,3 +454,11 @@ npx tsx scripts/fuzz-day.ts 103 --level 3 --wind 1 --density 3:4 --day-type week
 ## D219 玩家接管 AM（人工 ATO 驾驶）时车门不再自动关（2026-11-19）
 - 用户反馈：选「人工 ATO 驾驶」时车门是自动关的。原因：`ats.ts` 停站里的自动关门分支只排除了 CM/RM（`tr.manual`），没排除玩家接管的 AM（`tr.atoDriver`），到了图定关门时刻（倒计时到 0 前约 14 s）系统替司机把门关了。
 - 改为：玩家接管 AM 后车门由玩家按门键关，系统不再按时刻代关；模拟司机的 AM（`simulatedAmDriver`，11 号线日常）不变，仍按「剩 5～15 s 关门」随机关。回归测试在 `tests/am-driver-work.test.ts`。
+
+## D235 停站列车紧急制动时，停车原因按制动原因分（2026-11-27）
+
+- 起因：11 号线随机压测（种子 101，第二天 15:48）：列车进站停稳的同时车地通信中断、紧急制动，通信还没恢复，却按「紧急制动（待授权缓解）」算无豁免停车，5 分钟后报 LIVENESS。`halt.ts` `classify` 的停站分支只在车辆段作业那一支先看 `tr.eb`；ATO 司机走 `atoStartReady`，只回笼统的 `EB`；其余停站车在停站时间内报 `DWELL`。三条路都没有经过 `emergency()` 的细分（SPAD、通信仍中断 → `COMM_LOSS`、ZC 仍故障 → `ZC_FAULT`、无自动无线电 → `DISPATCHER`）。
+- 改：停站分支最前面统一判 `tr.eb`，走 `emergency()`，计划停到 `dwellUntil`。按钮判据 `atoStartReady` 不变（仍是「紧急制动未缓解」）。区间里的车本来就这样分，现在停站车和它一致。
+- 读停车码 `EB` 的只有显示和完整性检查（`radio.ts`、`dispatcher.ts` 不按 `EB` 分支），所以调度行为不变，只是停车原因说真话、豁免判对。
+- 测试：`tests/calibration.test.ts` 加「站台上紧急制动的车报真实原因」（改前失败：报 `DWELL`）。`tests/driver.test.ts`「按钮与停车原因同一判据」的紧急制动一项：按钮仍是 `EB`，停车原因原来期望 `EB`，现在期望 `DISPATCHER`（夹具没开自动无线电，和区间里的车一样等调度授权）。种子 101 的诊断回放到 15:48 不再违例。
+- 公共文件：`src/sim/halt.ts`。
