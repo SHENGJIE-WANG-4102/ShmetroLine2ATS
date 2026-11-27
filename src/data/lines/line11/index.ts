@@ -16,7 +16,7 @@ export const LINE_11: LineData = {
   unattended: { doorClose: false, turnback: false, wakeSleep: false, depotMoves: false },
   lineAtoFallback: false,
   dto: false, // 用户决定（2026-11-16）：GoA2 司机驾驶 ATO，换端、按 ATO 启动按钮发车（D205）
-  signalling: { primary: 'CBTC', fallback: [], onLoss: 'restrictedManual' }, // 【假设】缺11号线信号后备逐项资料
+  signalling: { primary: 'CBTC', fallback: [], onLoss: 'restrictedManual', wayside: 'lit' }, // 【假设】缺11号线信号后备逐项资料
   automation: 'ATO',
   core: LINE11_CORE,
   firstLast: LINE11_FIRST_LAST,

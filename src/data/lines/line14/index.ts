@@ -16,7 +16,7 @@ export const LINE_14: LineData = {
   unattended: { doorClose: true, turnback: true, wakeSleep: true, depotMoves: true },
   dto: true,
   lineAtoFallback: true, // 用户决定（2026-11-15）：14号线有ATO后备，全线和单车都能降
-  signalling: { primary: 'CBTC', fallback: [], onLoss: 'restrictedManual' }, automation: 'UTO',
+  signalling: { primary: 'CBTC', fallback: [], onLoss: 'restrictedManual', wayside: 'lit' }, automation: 'UTO',
   core: LINE14_CORE, firstLast: LINE14_FIRST_LAST, lastTrains: { OTHER_LAST_TRAINS: [] },
   // 用户试听确认的连续报站/门音；物理预算仍用原值，其他缺录音目录留空。
   audio: { ...silentAudio, soundbank, onboardbank: { ...silentAudio.onboardbank, ...onboardbank },

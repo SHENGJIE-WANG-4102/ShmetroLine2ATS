@@ -553,7 +553,10 @@ export interface ActiveRoute {
 }
 
 export interface SignalState {
+  /** what the signal shows (DARK included) */
   aspect: Aspect;
+  /** what it would show lit: the interlocking and the train logic read this, never the dark display */
+  lit: Aspect;
   route: number; // active route id or -1
   failed: boolean;
   ars: boolean; // automatic route setting allowed at this signal

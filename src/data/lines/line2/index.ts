@@ -23,7 +23,7 @@ export const LINE_2: LineData = {
   unattended: { doorClose: false, turnback: false, wakeSleep: false, depotMoves: false },
   lineAtoFallback: true,
   dto: true,
-  signalling: { primary: 'CBTC', fallback: ['TBTC'], onLoss: 'fallback' },
+  signalling: { primary: 'CBTC', fallback: ['TBTC'], onLoss: 'fallback', wayside: 'darkForCbtc' },
   automation: 'DTO',
   core, firstLast, lastTrains,
   audio: { soundbank, onboardbank, doorbank, vvvf, ridelog, onboardfield1021 },

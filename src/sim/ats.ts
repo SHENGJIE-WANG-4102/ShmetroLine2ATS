@@ -1821,7 +1821,7 @@ export function trainDesire(sim: Sim, tr: Train): Desire | null {
     }
     if (sg.route === rid) {
       const ar = sim.routes.get(rid)!;
-      if (sg.aspect === 'R' || sg.aspect === 'FAIL') {
+      if (sg.lit === 'R' || sg.lit === 'FAIL') {
         const blocker = routeBlocker(sim,rid,tr.id);
         const fault = blocker.train < 0 ? routeFaultCode(sim,rid) : null;
         if (blocker.train >= 0 || fault) {
@@ -1909,7 +1909,7 @@ export function driverRM(sim: Sim) {
     if (tr.phase !== 'run' || tr.v > 0.05 || tr.failed || tr.pendingMode
       || tr.manual && !(computerCrew(tr) && tr.mode === 'CM') || tr.eb) continue;
     if (tr.maDist > 35) continue;
-    if (tr.nextSignal >= 0 && tr.nextSignalDist < 40 && sim.sig[tr.nextSignal].aspect === 'GUIDE') {
+    if (tr.nextSignal >= 0 && tr.nextSignalDist < 40 && sim.sig[tr.nextSignal].lit === 'GUIDE') {
       const rid = sim.sig[tr.nextSignal].route;
       const len = rid >= 0 ? topo.routes[rid].length : 300;
       // the guide aspect is the per-signal RM authority for this one signal
@@ -2852,7 +2852,7 @@ export function cmdAuthRM(sim: Sim, tr: Train, signal?: number) {
   const unsafe = unsafeAhead(sim, tr);
   if (unsafe) return { ok: false, msg: unsafe };
   const equipment = ['SIGNAL_FAULT', 'SWITCH_FAULT', 'AXLE_FAULT', 'AXLE_PRESET', 'ZC_FAULT', 'COMM_LOSS'];
-  if (!equipment.includes(tr.maCode) && !equipment.includes(tr.arsWait?.code ?? '') && sim.sig[sig].aspect !== 'GUIDE') {
+  if (!equipment.includes(tr.maCode) && !equipment.includes(tr.arsWait?.code ?? '') && sim.sig[sig].lit !== 'GUIDE') {
     return { ok: false, msg: 'RM仅用于设备/信号故障；前车占用或未排进路须等待' };
   }
   const d = sig === tr.nextSignal ? tr.nextSignalDist : distToNextSignal(sim, tr);

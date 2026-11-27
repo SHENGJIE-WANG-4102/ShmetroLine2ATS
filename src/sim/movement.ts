@@ -344,7 +344,7 @@ export function scanAhead(sim: Sim, tr: Train, goal: number, cap = MA_SCAN_CAP):
           const rescuePass=tr.rmSig===sigId&&tr.rmAuth>d&&swOk&&rescueRouteReady(sim,tr,sigId);
           // RM is on sight but not over points still moving or without detection
           ok = (ar.state === 'locked' || ar.guide) && ar.cancelAt === 0 && (!consumed||rescuePass) && swOk
-            && (sg.aspect !== 'R' && sg.aspect !== 'FAIL' || (tr.rmSig === sigId && tr.rmAuth > d));
+            && (sg.lit !== 'R' && sg.lit !== 'FAIL' || (tr.rmSig === sigId && tr.rmAuth > d));
           if(rescuePass)res.constraints.push(0,PERF.vCouple);
         }
         // a committed train keeps the authority of a route cancelled in front of it
@@ -670,7 +670,7 @@ export function passAuthorised(sim: Sim, tr: Train, sigId: number, travelled: nu
   if (ar.state !== 'locked') return false;
   if (ar.entered && !ar.fleeting && ar.owner !== tr.id) return false;
   if (ar.cancelAt > 0 && ar.committed !== tr.id) return false;
-  return !rm || sg.aspect === 'G' || sg.aspect === 'Y' || sg.aspect === 'W' || sg.aspect === 'DARK';
+  return !rm || sg.lit === 'G' || sg.lit === 'Y' || sg.lit === 'W';
 }
 
 function spad(sim: Sim, tr: Train, sigId: number) {

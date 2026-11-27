@@ -7,6 +7,7 @@ import type { ActiveRoute, Train } from './model';
 import { withdrawAuthority, rescueRouteReady, retreatRouteBlocker } from './movement';
 import { checkArsCancellation } from './invariants';
 import { safeWaitingPoint } from './topology';
+import { LINE } from '../data/current';
 
 export const SWITCH_TIME = 5; // s, point machine throw time (approx)
 export const APPROACH_RELEASE = 30; // s, delayed release when approach-locked
@@ -325,11 +326,16 @@ export function moveSwitch(sim: Sim, sw: number, pos: 'N' | 'R'): CmdResult {
   return { ok: true, msg: `道岔 ${name} 转换至${pos === 'N' ? '定位' : '反位'}` };
 }
 
+/** a train running on CBTC movement authority: communicating, at CBTC level, inside a zone in CBTC */
+function communicating(sim: Sim, tr: Train): boolean {
+  return tr.comm && tr.level === 'CBTC' && sim.zoneState[sim.topo.links[tr.link].zone] === 'CBTC';
+}
+
 export function computeOccupancy(sim: Sim) {
   const { sec, topo } = sim;
   for (const s of sec) { s.trainOcc = false; s.commOnly = true; }
   for (const tr of sim.trainList) {
-    const commTrain = tr.comm && tr.level === 'CBTC' && sim.zoneState[topo.links[tr.link].zone] === 'CBTC';
+    const commTrain = communicating(sim, tr);
     for (const b of tr.body) {
       const s = sec[topo.links[b.link].section];
       s.trainOcc = true;
@@ -445,14 +451,47 @@ export function updateInterlocking(sim: Sim) {
     }
     if (ar.released.every((x) => x)) releaseRoute(sim, ar.route);
   }
-  // aspects
+  updateAspects(sim);
+}
+
+export function updateAspects(sim: Sim) {
+  const facing = facingTrains(sim);
   for (let i = 0; i < sim.sig.length; i++) {
     const sg = sim.sig[i];
-    sg.aspect = computeAspect(sim, i);
+    sg.lit = litAspect(sim, i, facing[i]);
+    sg.aspect = sg.lit !== 'FAIL' && sg.lit !== 'GUIDE' && darkForCbtc(sim, i, facing[i]) ? 'DARK' : sg.lit;
   }
 }
 
-function computeAspect(sim: Sim, i: number) {
+/** a train driven on its movement authority rather than on the wayside signals (RM drives on sight) */
+function onAuthority(sim: Sim, tr: Train): boolean {
+  return communicating(sim, tr) && tr.mode !== 'RM';
+}
+
+/** the nearest train each signal is the next signal of */
+function facingTrains(sim: Sim): (Train | undefined)[] {
+  const out: (Train | undefined)[] = new Array(sim.sig.length);
+  for (const tr of sim.trainList) {
+    const s = tr.nextSignal;
+    if (s >= 0 && (!out[s] || tr.nextSignalDist < out[s]!.nextSignalDist)) out[s] = tr;
+  }
+  return out;
+}
+
+/** 2 号线（用户决定 2026-11-28）：正线信号机对 CBTC 列车灭灯；折返、侧线、尽头线、出入段的调车进路照常点灯。
+ * 面对的是非通信车或 RM 车、或信号机所在区域不在 CBTC 时点灯，地面信号就是它的行车凭证。 */
+function darkForCbtc(sim: Sim, i: number, facing: Train | undefined): boolean {
+  if (LINE.signalling.wayside !== 'darkForCbtc') return false;
+  const { topo } = sim;
+  const def = topo.signals[i];
+  if (sim.zoneState[topo.links[def.link].zone] !== 'CBTC' || facing && !onAuthority(sim, facing)) return false;
+  const rid = sim.sig[i].route;
+  return rid >= 0 ? !topo.routes[rid].shunt : def.routes.length > 0 && def.routes.every(r => !topo.routes[r].shunt);
+}
+
+/** 点灯时的灯色（用户 2026-11-28）：没给进路红；进路开放绿/黄，调车进路白；车头越过信号机后回红。
+ * 进路里只有通信车占用时，对后面凭移动授权行车的车照样开放：它凭移动授权跟车，不再因为前车还在进路里亮红灯（D190 那条红灯取消）。 */
+function litAspect(sim: Sim, i: number, facing: Train | undefined) {
   const sg = sim.sig[i];
   const { topo } = sim;
   const rid = sg.route;
@@ -464,10 +503,10 @@ function computeAspect(sim: Sim, i: number) {
   if (ar.entered && !ar.fleeting) return 'R';
   const r = topo.routes[rid];
   for (const { sw, pos } of r.switches) if (swPos(sim, sw) !== pos) return 'R';
-  // 用户决定（2026-11-08，实拍折返红→白→红）：信号机一直点灯，CBTC 车压入进路也回红灯，不再灭灯
+  const following = !facing || onAuthority(sim, facing);
   for (const s of r.sections) {
     const st = sim.sec[s];
-    if (st.disturbed || st.preset || st.occ) return 'R';
+    if (st.disturbed || st.preset || st.occ && !(following && st.commOnly)) return 'R';
   }
   return r.shunt ? 'W' : r.diverging ? 'Y' : 'G';
 }

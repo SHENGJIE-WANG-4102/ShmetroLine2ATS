@@ -853,7 +853,11 @@ export interface LineData {
    * ends without a driver's work. false: GoA2, the driver runs ATO (AM), changes ends and presses
    * the ATO start buttons at every departure. */
   dto: boolean;
-  signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[]; onLoss: 'fallback' | 'restrictedManual' | 'wait' };
+  signalling: { primary: 'CBTC' | 'TBTC' | 'TACS' | 'fixed'; fallback: ('CBTC' | 'TBTC' | 'TACS' | 'fixed')[]; onLoss: 'fallback' | 'restrictedManual' | 'wait';
+    /** Wayside signals for CBTC trains. 'darkForCbtc': a signal whose route (or, with none set, every
+     * route it starts) is a running route stays dark for a communicating train in a CBTC zone; shunt
+     * routes (turnback, siding, tail, depot) stay lit. 'lit': every signal is always lit. */
+    wayside: 'darkForCbtc' | 'lit' };
   automation: 'DTO' | 'UTO' | 'ATO';
   core: CoreLineData;
   firstLast: FirstLastData;

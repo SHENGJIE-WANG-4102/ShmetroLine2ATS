@@ -241,7 +241,7 @@ export class Sim {
     this.sw = topo.switches.map(() => ({ pos: 'N', target: 'N', moveUntil: 0, failed: false, fieldLock: false, singleLock: false, lockCount: 0, blocked: false }));
     this.sec = topo.sections.map(() => ({ occ: false, trainOcc: false, commOnly: false, disturbed: false, preset: false, presetSeen: false, lockRoute: -1, tsr: 0, blocked: false, poss: -1, envTsr: 0,
       td: 0, tdRoute: -1, tdTrain: -1, directionEsp: false }));
-    this.sig = topo.signals.map(() => ({ aspect: 'R', route: -1, failed: false, ars: true, autoPass: true }));
+    this.sig = topo.signals.map(() => ({ aspect: 'R', lit: 'R', route: -1, failed: false, ars: true, autoPass: true }));
     this.plat = topo.platforms.map(() => ({ hold: false, skip: false, esp: false, psd: 'closed', psdFault: false, psdBypass: false, psdLinkFault: false, psdTrain: -1, waiting: 0, surge: 1, stranded: 0, lastDep: 0, lastArr: 0, limitUntil: 0 }));
     this.zoneState = topo.zones.map(() => 'CBTC');
     this.exposure = exposureOf(this);

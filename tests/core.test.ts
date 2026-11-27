@@ -421,7 +421,7 @@ describe('movement and radio regressions', () => {
     // would simply send the depot train in by the other lead.
     const at = route.steps.length >> 1, last = route.steps[at]; other.link = last.link; other.off = sim.topo.links[last.link].len-6;
     other.dir = last.dir; other.hist = route.steps.slice(0,at+1).map(step => ({...step})); other.failed = true; other.phase = 'failed'; other.v = 0;
-    computeBody(sim,tr); computeBody(sim,other); indexBodies(sim); computeOccupancy(sim); sim.sig[signal.id].aspect = 'R';
+    computeBody(sim,tr); computeBody(sim,other); indexBodies(sim); computeOccupancy(sim); sim.sig[signal.id].aspect = sim.sig[signal.id].lit = 'R';
     runARS(sim); updateHalts(sim);
     expect(tr.arsWait).toMatchObject({code:'TRAIN_AHEAD',train:other.id,t:sim.t});
     expect(rootCause(sim,tr).code).toBe('FAILED');
@@ -706,7 +706,7 @@ describe('occupied-route rescue',()=>{
     rescuer.tasks=[{k:'rescue',target:failed.id}];rescuer.inService=false;
     rescuer.nextSignal=signal.id;rescuer.nextSignalDist=6.1;rescuer.stopDist=Infinity;
     indexBodies(sim);computeOccupancy(sim);const ar=sim.routes.get(route.id)!;
-    ar.state='locked';ar.entered=true;ar.owner=failed.id;ar.fleeting=false;sim.sig[signal.id].aspect='R';
+    ar.state='locked';ar.entered=true;ar.owner=failed.id;ar.fleeting=false;sim.sig[signal.id].aspect=sim.sig[signal.id].lit='R';
     ar.released[0]=true;sim.sec[route.sections[0]].lockRoute=-1;
     if(preset){sim.sec[route.sections[0]].preset=true;sim.sec[route.sections[0]].presetSeen=false;}
     expect(sim.command({c:'fault',kind:'trainFail',target:failed.id,duration:0,recoverable:false}).ok).toBe(true);checkSafety(sim);
