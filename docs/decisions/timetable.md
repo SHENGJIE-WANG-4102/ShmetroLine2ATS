@@ -717,3 +717,16 @@ D139/D155 的两处超差（静安寺西行首班 +138 s、机场末班终到 +8
 - 测试预期改动：`tests/line11.test.ts`「工作日没有南翔—三林小交路」由 false 改 true（用户决定，本条）；D215 那条「罗山路—迪士尼出库车」断言删除。
 - 结果：11 号线工作日 700 班、用车 78、0 问题；周末 472 班、用车 45、0 问题；官方间隔两种日型 0 项不合格；首末班与改前一致（康新公路差几秒；「last→花桥」列 -30 分钟仍是 D214 记的脚本列对不上）。
 - 公共文件：`src/sim/timetable.ts`、`src/data/simulation.ts`、`src/data/types.ts`、`tests/official-headways.test.ts`。
+
+## D236 排图提速：车底运用的时隙扫描少做白工，结果逐位不变（2026-11-28）
+
+- 起因：用户反映 11 号线排图太慢。冷启动工作日排图实测（同机空载，`work/plan-time.ts`）：11 号线 20.2 s、2 号线 21.4 s，周末和 14 号线只要 1–6 s。CPU 剖析：大头在车底运用（`duty/moves.ts`）的车回车场找时隙（`homeBy → fitOutOf → fitAfter`）。11 号线工作日扫了 92 万个时隙、现场生成 16.7 万趟空车，其中 33 万次最后被「不许穿核心区」拒掉；这条只看起讫站，和时刻无关。
+- 改（只改怎么算，不改算什么）：
+  - `moves.ts`：`fitBefore`/`fitAfter` 加 `quiet` 参数，表示这趟要守外段交替和核心区（`outerQuiet`）。核心区那一半（`coreOpen`，只看起讫站）在扫描前测一次，不通就不扫；外段交替仍逐时隙测。原来各调用方在 accept 里自己写 `outerQuiet` 的，改成传 `quiet`。
+  - `moves.ts` `fitOutOf`：折返站占位（`placeX`，便宜，满的线路终点拒掉大多数时隙）排在 `safe`（要生成两趟车的任务）前面。都是无副作用的检查，次序只影响先算哪个。
+  - `timetable.ts` `connectionSafe`：等待不超过正常作业时间就不需要安全泊位（`connectionChoice` 的 `safe = !long || …`），直接返回，不再选泊位。
+  - `timetable.ts` `spaceServiceDepartures`：原来每处理一趟冲突车次、每试一个邻车平移，都把全天车次重建一次发车索引；改成同一个索引临时取出、试完放回（`DepIndex.holds` 和 `add` 用同一判据）。
+  - `timetable.ts` `terminalOverflows`：加 `first`（只问有没有溢出时，找到第一处就返回；`reserve` 和折返检查用）。事件不再拼成小数组排序，改成到达、离开两列归并（同一时刻离开在前，和原排序一样）。「到达站台等车要等第几列走」改成一次按到达扫描，数「已提前 HOLD_CLEAR 离开的在场车」，不再每列车筛全表、排序；判据与原来逐位等价（加常数保持单调）。
+  - `timetable.ts` `stationOpening`：求开站车最早一次停站不再建临时数组。
+- 结果：三条线两种日型运行图哈希全部不变（`scripts/plan-hash.ts`）。同机空载冷启动：11 号线工作日 20.2→5.7 s、周末 5.6→2.9 s；2 号线工作日 21.4→8.4 s；14 号线 0.7→0.4 s。剩下的主要是车回段逐时隙扫描本身和运行时分物理计算（`computeRunTimes`，约 1 s）。
+- 公共文件：`src/sim/duty/moves.ts`、`src/sim/timetable.ts`。

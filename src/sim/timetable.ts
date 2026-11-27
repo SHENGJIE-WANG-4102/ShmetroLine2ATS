@@ -1266,7 +1266,8 @@ export function connectionChoice(topo: Topology, dayType: Plan['dayType'], a: Tr
   return { ...choice, safe: !long || choice.safe, options: long ? choice.safeBerths : berths };
 }
 export function connectionSafe(topo: Topology, dayType: Plan['dayType'], a: Trip, d: Trip, candidates?: readonly number[]): boolean {
-  return connectionChoice(topo, dayType, a, d, candidates).safe;
+  // a wait within the normal work needs no safe berth (connectionChoice's `safe`), so no berth is chosen
+  return !plannedWaitLong(dayType, a, d) || connectionChoice(topo, dayType, a, d, candidates).safe;
 }
 
 /** D166 experiment: select passenger-carrying approaches to fixed departures
@@ -1739,10 +1740,12 @@ export function stationOpening(st:number,dir:TrackDir,openers:readonly Trip[]):n
   // a station not in service never opens: an empty move may pass it
   if(!stationOpened(st))return Infinity;
   const clock=officialFirst(st,dir);
-  const own=openers.filter(t=>t.dir===dir).flatMap(t=>t.stops.filter(s=>s.st===st&&s.stop&&s.st!==t.to).map(s=>s.dep));
+  // the first call there of an opening train (it is asked for every stop of every fitted move: no arrays)
+  let own=Infinity;
+  for(const t of openers)if(t.dir===dir)for(const s of t.stops)if(s.st===st&&s.stop&&s.st!==t.to&&s.dep<own)own=s.dep;
   // the published clock, or the first train itself when it calls a little ahead of that minute
-  if(CARRY_MOVES&&clock!==undefined)return Math.min(clock,...own);
-  if(own.length)return Math.min(...own);
+  if(CARRY_MOVES&&clock!==undefined)return Math.min(clock,own);
+  if(own<Infinity)return own;
   return clock??-Infinity;
 }
 
@@ -1770,12 +1773,17 @@ export function passesOpenStation(stops:readonly PlanStop[],dir:TrackDir,openers
 export function spaceServiceDepartures(trips: GenTrip[], protectedIds: Set<number>, original = trips.map(t => t.stops[0].dep)) {
   const shifted = (trip: GenTrip, delta: number) => trip.stops.map(p => ({ ...p, arr: p.arr + delta, dep: p.dep + delta }));
   const withinBudget = (trip: GenTrip, delta: number) => Math.abs(trip.stops[0].dep + delta - original[trip.id]) <= MAX_DIAGRAM_SHIFT_S;
+  // one index of every trip; a trip under test (and a neighbour sharing its shift) is taken out
+  // of it while tested and put back as it then runs
+  const take = (index: DepIndex, t: GenTrip) => { if (DepIndex.holds(t)) index.remove(t); };
+  const put = (index: DepIndex, t: GenTrip) => index.add(t);
   for (let round = 0; round < TIMING_ROUNDS; round++) {
     let moved = false;
-    let index = new DepIndex(trips);
+    const index = new DepIndex(trips);
     for (const trip of trips) {
       if (protectedIds.has(trip.id) || index.clear(trip.stops, trip.dir, MIN_HEADWAY + 0.01, trip.stops)) continue;
-      const others = new DepIndex(trips.filter(t => t !== trip));
+      take(index, trip);
+      const others = index;
       const neighbours = trips.filter(t => t !== trip && t.dir === trip.dir && !protectedIds.has(t.id)
         && !new DepIndex([t]).clear(trip.stops, trip.dir, MIN_HEADWAY + 0.01));
       let resolved = false;
@@ -1794,11 +1802,13 @@ export function spaceServiceDepartures(trips: GenTrip[], protectedIds: Set<numbe
           for (const neighbour of neighbours) {
             if (!withinBudget(neighbour, -delta)) continue;
             const otherStops = shifted(neighbour, -delta);
-            const index = new DepIndex(trips.filter(t => t !== trip && t !== neighbour));
-            if (!index.clear(stops, trip.dir, MIN_HEADWAY + 0.01) || !index.clear(otherStops, neighbour.dir, MIN_HEADWAY + 0.01)
-              || !new DepIndex([{ ...neighbour, stops: otherStops }]).clear(stops, trip.dir, MIN_HEADWAY + 0.01)) continue;
+            take(index, neighbour);
+            const fits = index.clear(stops, trip.dir, MIN_HEADWAY + 0.01) && index.clear(otherStops, neighbour.dir, MIN_HEADWAY + 0.01)
+              && new DepIndex([{ ...neighbour, stops: otherStops }]).clear(stops, trip.dir, MIN_HEADWAY + 0.01);
+            if (fits) neighbour.stops = otherStops;
+            put(index, neighbour);
+            if (!fits) continue;
             trip.stops = stops;
-            neighbour.stops = otherStops;
             resolved = true;
             break;
           }
@@ -1806,7 +1816,7 @@ export function spaceServiceDepartures(trips: GenTrip[], protectedIds: Set<numbe
         }
       }
       moved ||= resolved;
-      if (resolved) index = new DepIndex(trips);
+      put(index, trip);
     }
     if (!moved) break;
   }
@@ -2190,7 +2200,7 @@ export function applyOverlay(ctx: PlanContext, plan: Plan, preset: { id: string;
       const stops=buildStops(ctx,last.dir,last.from,last.to,last.stops[0].dep+offset,false,1);
       if (stops.at(-1)!.arr<after || !index.clear(stops,last.dir)) continue;
       const other=(terminalOccupancy(plan).get(last.from)??[]).filter(o=>o.block!==block.id);
-      if (terminalOverflows(ctx.topo,last.from,[...other,{from:previous.stops.at(-1)!.arr,to:stops[0].dep}]).length) continue;
+      if (terminalOverflows(ctx.topo,last.from,[...other,{from:previous.stops.at(-1)!.arr,to:stops[0].dep}],true).length) continue;
       last.stops=stops;
       break;
     }
@@ -3137,28 +3147,51 @@ const HOLD_CLEAR = 120;
  * Moments a terminal holds more trains than it can. TERMINAL_CAP keeps the
  * arrival platform free; at a line end (every train arriving there
  * terminates) one more may stand on it, provided the next arrival comes
- * HOLD_CLEAR after a place has freed up for it.
+ * HOLD_CLEAR after a place has freed up for it. `first`: stop at the first one (whether any)
  */
-export function terminalOverflows(topo: Topology, st: number, list: { from: number; to: number }[]): { t: number; cur: number; cap: number }[] {
+export function terminalOverflows(topo: Topology, st: number, list: { from: number; to: number }[], first = false): { t: number; cur: number; cap: number }[] {
   const cap = terminalCapacity(topo, st);
   const lineEnd = st === 0 || st === topo.stations.length - 1;
-  const evs = list.flatMap((o) => [[o.from, 1], [o.to, -1]] as [number, number][]).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  // the arrivals and departures in time order, a departure before an arrival at the same moment
+  const byFrom = [...list].sort((x, y) => x.from - y.from);
+  const froms = byFrom.map(o => o.from), tos = list.map(o => o.to).sort((x, y) => x - y);
   const out: { t: number; cur: number; cap: number }[] = [];
   let cur = 0;
   let held = -Infinity; // when the train held on the arrival platform can move on
-  for (const [t, dlt] of evs) {
+  for (let i = 0, j = 0; i < froms.length || j < tos.length;) {
+    const leave = j < tos.length && (i >= froms.length || tos[j] <= froms[i]);
+    const t = leave ? tos[j++] : froms[i++], dlt = leave ? -1 : 1;
     if (dlt > 0 && lineEnd && (cur > cap || (cur === cap && t < held))) out.push({ t, cur: cur + 1, cap });
     cur += dlt;
     if (!lineEnd && cur > cap) out.push({ t, cur, cap });
     if (lineEnd && dlt < 0 && cur === cap) held = t + HOLD_CLEAR;
+    if (first && out.length) return out;
   }
   // D203: the one held on the arrival platform reaches a turnback only once a train there has left,
   // so it cannot leave before the first of them (浦东机场 06:12: 1008 behind two later departures)
   const tracks = new Set(topo.stations[st].turnbackBerths.map(id => topo.berths[id].link)).size;
-  if (lineEnd && tracks) for (const o of list) {
-    const left = list.filter(p => p !== o && p.from <= o.from && p.to > o.from + 1e-6).map(p => p.to).sort((a, b) => a - b);
-    const need = left.length - tracks + 1;
-    if (need > 0 && o.to < left[need - 1] + HOLD_CLEAR) out.push({ t: o.from, cur: left.length + 1, cap });
+  if (lineEnd && tracks) {
+    // the others standing there when o arrives (begun by then, not yet left), in one sweep by arrival: a
+    // stand gone by one arrival is gone by every later one. With every track taken, o waits for the
+    // (others - tracks + 1)-th of them to leave: too soon unless more of them have left HOLD_CLEAR before it
+    const blocked = new Map<{ from: number; to: number }, number>();
+    const present: { from: number; to: number }[] = [];
+    let next = 0;
+    for (const o of byFrom) {
+      while (next < byFrom.length && byFrom[next].from <= o.from) present.push(byFrom[next++]);
+      let kept = 0, others = 0, early = 0;
+      for (const p of present) if (p.to > o.from + 1e-6) {
+        present[kept++] = p;
+        if (p !== o) { others++; if (p.to + HOLD_CLEAR <= o.to) early++; }
+      }
+      present.length = kept;
+      if (others >= tracks && early <= others - tracks) blocked.set(o, others);
+    }
+    for (const o of list) {
+      const others = blocked.get(o);
+      if (others !== undefined) out.push({ t: o.from, cur: others + 1, cap });
+      if (first && out.length) return out;
+    }
   }
   return out;
 }
@@ -3274,8 +3307,10 @@ export function storageOccupancy(topo: Topology, plan: Plan, waiting: ReturnType
 export class DepIndex {
   private m = new Map<string, number[]>();
   constructor(trips: Iterable<Pick<Trip, 'dir' | 'stops' | 'cancelled'> & { block?: number }>) { for (const t of trips) this.add(t); }
+  /** the trip's departures go into an index (add) */
+  static holds(t: Pick<Trip, 'cancelled'> & { block?: number }) { return !t.cancelled && t.block !== UNUSED_DEPOT_MOVE; }
   add(t: Pick<Trip, 'dir' | 'stops' | 'cancelled'> & { block?: number }) {
-    if (t.cancelled || t.block === UNUSED_DEPOT_MOVE) return;
+    if (!DepIndex.holds(t)) return;
     for (const p of t.stops) {
       const k = `${p.st}${t.dir}`;
       let a = this.m.get(k);
