@@ -10,7 +10,7 @@ import type { Sim } from './engine';
 import { cancelTrip, type Block, type DepotTask, type Plan, type ReverseTask, type StopTask, type Task, type Train, type Trip, type TrackDir } from './model';
 import { settleDroppedCalls } from './connections';
 import type { Dir, Topology, TrackPoint, RouteStep } from './topology';
-import { berthFits, nextLink, signalAtEntry, travelDirection, ahead, chainAhead, terminalsAhead, linkChain, reversedBerthPoint, occupiedTurnbackBerth, stablingBerth } from './topology';
+import { berthFits, nextLink, signalAtEntry, travelDirection, ahead, chainAhead, terminalsAhead, linkChain, reversedBerthPoint, occupiedTurnbackBerth, stablingBerth, lineEnd } from './topology';
 import { cancelRoute as cancelInterlockedRoute, swPos, trySetRoute, releaseRoute, approachLocked, bindRouteApproach, committedTrain, relockRescueApproach, signalPassed, type CmdResult } from './interlocking';
 import { computeBody, reverseTrain, goalBerth, stopError, berthError, moveBack, rescueRouteReady, reversePermission, retreatRouteBlocker, withdrawAuthority } from './movement';
 import { takeVehicle, putVehicle, peekVehicle } from './yard';
@@ -3177,7 +3177,7 @@ function completeCoupling(sim: Sim, tr: Train) {
     // Include the current terminal: its station centre is behind the head
     // when the failed train was already stopped at the arrival mark.
     const tbs = [...new Set([...(next === undefined ? [] : [next]), ...turnbackOptions(sim, tr)])];
-    const terminal = tbs.find(s => (s === 0 || s === topo.stations.length - 1) && turnbackAt(topo, s, d)?.kind === 'rear');
+    const terminal = tbs.find(s => lineEnd(s, topo.stations.length) && turnbackAt(topo, s, d)?.kind === 'rear');
     if (terminal !== undefined) {
       if (!tasks.some(t => t.k === 'stop' && t.station === terminal) && !passed(terminal)) tasks.push({ k: 'stop', berth: platformBerth(topo, terminal, d), station: terminal, trip: -1, arr: null, dep: null, doors: false, revenue: false, minDwell: peak ? 120 : 10, ...(peak ? { rescueClear: 'failed' as const } : {}) });
       addTurnback(topo, { id: -1, no: '', dir: d, kind: 'adj', from: terminal, to: terminal, stops: [], revenue: false, block: -1 }, tasks);

@@ -11,7 +11,7 @@
  */
 import { parseTime } from './calendar';
 import type { Topology } from './topology';
-import { ahead, directionToward, nextStations, stablingBerth, stationPath } from './topology';
+import { ahead, directionToward, lineEnd, nextStations, safeWaitingPoint, stablingBerth, stationPath, turnbackLeadBerth } from './topology';
 import type { RunTimes } from './dynamics';
 import { cancelTrip, type Block, type DayType, type Plan, type PlanStop, type StopTask, type Task, type Trip, type TripKind, type TrackDir } from './model';
 import { MIN_DWELL, plannedDwell } from './calibration';
@@ -2051,7 +2051,7 @@ export function applyOverlay(ctx: PlanContext, plan: Plan, preset: { id: string;
   const waitAt = (X: number) => { if (!waiting.has(X)) waiting.set(X, []); return waiting.get(X)!; };
   const occ0 = turnbackOccupancy(ctx.topo, plan);
   const paired: { st: number; from: number; to: number }[] = [];
-  const turnWait = (X: number) => X > 0 && X < ctx.topo.stations.length - 1 ? INTERMEDIATE_WAIT : MAX_LAYOVER;
+  const turnWait = (X: number) => lineEnd(X, ctx.topo.stations.length) ? MAX_LAYOVER : INTERMEDIATE_WAIT;
   const turnFree = (station: number, from: number, to: number, own?: number) => {
     const clear = OPERATIONS.platformTurnClear[STATIONS[station].id] ?? 0;
     const pending = waitAt(station).filter(t => t.id !== own).map(t => ({from:t.stops.at(-1)!.arr,to:t.stops.at(-1)!.arr+minTurn(station)}));
@@ -2586,7 +2586,7 @@ export function addExtraTrain(ctx: PlanContext, plan: Plan, depot: number, dir: 
     }
     // Opposing streams need not have a usable slot exactly 240 seconds after
     // arrival. Search the permitted terminal layover; never hold ordinary stops.
-    for(let wait=0;wait<=Math.max(0,(to===0||to===topo.stations.length-1?1500:450)-minTurn(to));wait+=10){
+    for(let wait=0;wait<=Math.max(0,(lineEnd(to,topo.stations.length)?1500:450)-minTurn(to));wait+=10){
       const into = buildStops(ctx, back, to, en, out[out.length - 1].arr + minTurn(to)+wait, true, 1);
       if(index.clear(into,back)){s1=out;s2=into;break;}
     }
@@ -3155,9 +3155,38 @@ const HOLD_CLEAR = 120;
  * terminates) one more may stand on it, provided the next arrival comes
  * HOLD_CLEAR after a place has freed up for it. `first`: stop at the first one (whether any)
  */
+/** turnback tracks at `st` where a train can wait longer than its normal turn, when some of them
+ * cannot (plannedWaitBerth's safe waiting point: 嘉定北下行尾轨 lies across the way into 城北路停车场);
+ * Infinity when every one can */
+function longWaitPlaces(topo: Topology, st: number): number {
+  const tracks = topo.stations[st].turnbackBerths.filter(b => topo.berths[b].kind !== 'platform');
+  const safe = tracks.filter(b => safeWaitingPoint(topo, b, LINE_INFO.trainLength, { turnbackLead: turnbackLeadBerth(topo, b) }));
+  return safe.length < tracks.length ? safe.length : Infinity;
+}
+
 export function terminalOverflows(topo: Topology, st: number, list: { from: number; to: number }[], first = false): { t: number; cur: number; cap: number }[] {
   const cap = terminalCapacity(topo, st);
-  const lineEnd = st === 0 || st === topo.stations.length - 1;
+  // a stand longer than the normal turn needs a place to wait in (plannedWaitLong): no more of
+  // them at once than such places. A line end dispatches its turning cars in arrival order
+  // (planner.ts), so there the stands are the k-th arrival to the k-th departure.
+  const longCap = longWaitPlaces(topo, st);
+  if (longCap < cap) {
+    const normal = minTurn(st) + (OPERATIONS.originStandS ?? 0);
+    const tos = list.map(o => o.to).sort((a, b) => a - b);
+    const stands = lineEnd(st, topo.stations.length) ? list.map(o => o.from).sort((a, b) => a - b).map((from, k) => ({ from, to: tos[k] })) : list;
+    const long = stands.filter(o => o.to - o.from > normal + 1e-6);
+    const edges = [...long.map(o => ({ t: o.from, d: 1 })), ...long.map(o => ({ t: o.to, d: -1 }))].sort((a, b) => a.t - b.t || a.d - b.d);
+    const over: { t: number; cur: number; cap: number }[] = [];
+    let cur = 0;
+    for (const e of edges) if ((cur += e.d) > longCap) over.push({ t: e.t, cur, cap: longCap });
+    if (over.length && first) return over.slice(0, 1);
+    if (over.length) return [...over, ...placeOverflows(topo, st, list, cap, false)];
+  }
+  return placeOverflows(topo, st, list, cap, first);
+}
+
+function placeOverflows(topo: Topology, st: number, list: { from: number; to: number }[], cap: number, first: boolean): { t: number; cur: number; cap: number }[] {
+  const end = lineEnd(st, topo.stations.length);
   // the arrivals and departures in time order, a departure before an arrival at the same moment
   const byFrom = [...list].sort((x, y) => x.from - y.from);
   const froms = byFrom.map(o => o.from), tos = list.map(o => o.to).sort((x, y) => x - y);
@@ -3167,16 +3196,16 @@ export function terminalOverflows(topo: Topology, st: number, list: { from: numb
   for (let i = 0, j = 0; i < froms.length || j < tos.length;) {
     const leave = j < tos.length && (i >= froms.length || tos[j] <= froms[i]);
     const t = leave ? tos[j++] : froms[i++], dlt = leave ? -1 : 1;
-    if (dlt > 0 && lineEnd && (cur > cap || (cur === cap && t < held))) out.push({ t, cur: cur + 1, cap });
+    if (dlt > 0 && end && (cur > cap || (cur === cap && t < held))) out.push({ t, cur: cur + 1, cap });
     cur += dlt;
-    if (!lineEnd && cur > cap) out.push({ t, cur, cap });
-    if (lineEnd && dlt < 0 && cur === cap) held = t + HOLD_CLEAR;
+    if (!end && cur > cap) out.push({ t, cur, cap });
+    if (end && dlt < 0 && cur === cap) held = t + HOLD_CLEAR;
     if (first && out.length) return out;
   }
   // D203: the one held on the arrival platform reaches a turnback only once a train there has left,
   // so it cannot leave before the first of them (浦东机场 06:12: 1008 behind two later departures)
   const tracks = new Set(topo.stations[st].turnbackBerths.map(id => topo.berths[id].link)).size;
-  if (lineEnd && tracks) {
+  if (end && tracks) {
     // the others standing there when o arrives (begun by then, not yet left), in one sweep by arrival: a
     // stand gone by one arrival is gone by every later one. With every track taken, o waits for the
     // (others - tracks + 1)-th of them to leave: too soon unless more of them have left HOLD_CLEAR before it
@@ -3529,7 +3558,7 @@ export function validatePlan(ctx: PlanContext, plan: Plan, checkDepotStock = tru
       if (a.dir !== d.dir && dep - arr < minTurn(a.to) - 1e-6) out.push({ severity: 'error', code: 'TURN_SHORT', t: arr, text: `车底 ${b.svc} 在 ${name(a.to)} 折返仅 ${(dep - arr).toFixed(1)} s（${a.no}→${d.no}，最小 ${minTurn(a.to)} s）` });
       if (a.dir !== d.dir && !storedTurn && !frontTurnClear(ctx, live, a, dep, new Set(ts.map(trip => trip.id))))
         out.push({severity:'error',code:'FRONT_CONFLICT',t:arr,blocks:[b.id],text:`${name(a.to)} 站前折返占用时段与正常方向列车冲突`});
-      if (a.overlay && a.dir !== d.dir && a.to > 0 && a.to < topo.stations.length - 1 && dep-arr > minTurn(a.to)+INTERMEDIATE_WAIT+.01)
+      if (a.overlay && a.dir !== d.dir && !lineEnd(a.to, topo.stations.length) && dep-arr > minTurn(a.to)+INTERMEDIATE_WAIT+.01)
         out.push({severity:'error',code:'LAYOVER_LONG',t:arr,blocks:[b.id],text:`${name(a.to)} 加开接续等待超过中间折返站能力`});
     }
   }

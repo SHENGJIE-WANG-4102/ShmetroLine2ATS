@@ -22,7 +22,7 @@ import {
 } from '../timetable';
 import { berthRoundTripReachable, buildRouteTable, type RouteTable } from '../routeTable';
 import { OPERATIONS, STATIONS } from '../../data/current';
-import { ahead, between, sharedTransferLink } from '../topology';
+import { ahead, between, lineEnd as terminus, sharedTransferLink } from '../topology';
 import { stationPath } from '../topologyOrder';
 import type { PoolCar, PoolDemand } from './pool';
 
@@ -90,7 +90,7 @@ export function createMoves(ctx: PlanContext, trips: GenTrip[], periods: Period[
   const { topo } = ctx;
   const notBefore = opts.notBefore ?? -Infinity;
   const E = topo.stations.length - 1;
-  const lineEnd = (st: number) => st === 0 || st === E;
+  const lineEnd = (st: number) => terminus(st, topo.stations.length);
   const factor = (t: number) => dwellFactorAt(ctx.dayType, t);
   const arr = (t: Trip) => t.stops.at(-1)!.arr;
   const dep = (t: Trip) => t.stops[0].dep;

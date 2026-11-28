@@ -176,6 +176,15 @@ describe('line 11 branch, layout and plan', () => {
     expect(reaches(platform(station('HQ'), 'UP'), platform(station('JDB'), 'UP'))).toBe(false);
   });
 
+  it('holds no more stands longer than a normal turn at 嘉定北 than it has tails a train may wait on', async () => {
+    const { terminalOverflows, minTurn } = await import('../src/sim/timetable');
+    const { OPERATIONS } = await import('../src/data/current');
+    const jdb = station('JDB'), normal = minTurn(jdb) + (OPERATIONS.originStandS ?? 0);
+    // two turns of normal length side by side fit; two long waits at once do not (one safe tail)
+    expect(terminalOverflows(topo, jdb, [{ from: 0, to: normal }, { from: 60, to: 60 + normal }])).toEqual([]);
+    expect(terminalOverflows(topo, jdb, [{ from: 0, to: 3 * normal }, { from: 60, to: 60 + 2 * normal }]).length).toBeGreaterThan(0);
+  });
+
   for (const dayType of ['weekday', 'weekend'] as const) it(`${dayType}: lays out both branches and the short routes without plan issues`, async () => {
     const sim = new Sim({ dayType, dateLabel: '11号线', startTime: 14400, seed: 7 });
     const paths = (dir: 'DN' | 'UP') => {

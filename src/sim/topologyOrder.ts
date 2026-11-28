@@ -53,6 +53,12 @@ export function nextStations(direction: 'DN' | 'UP', station: number, count: num
   return dnNext.flatMap((next, from) => next === station ? [from] : []);
 }
 
+/** Does every train arriving at `station` terminate there: a terminus, the line's or a branch's
+ * (no station beyond it one way)? */
+export function lineEnd(station: number, count: number): boolean {
+  return !nextStations('DN', station, count).length || !nextStations('UP', station, count).length;
+}
+
 /** Is `station` one of `a`, `b` or between them (either order) along the line? */
 export function between(station: number, a: number, b: number): boolean {
   if (dnNext) return stationPath(a, b).includes(station);

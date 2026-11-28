@@ -21,7 +21,7 @@ import {
 
 import { ahead, nextStations } from './topologyOrder';
 import { SIGNAL_MARGIN } from './safetyLimits';
-export { ahead, between, directionToward, nextStations, stationPath } from './topologyOrder';
+export { ahead, between, directionToward, lineEnd, nextStations, stationPath } from './topologyOrder';
 
 export type TrackKind = 'DN' | 'UP' | 'X' | 'SID' | 'CON' | 'DEP';
 export type Dir = 1 | -1;

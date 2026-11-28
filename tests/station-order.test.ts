@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { ahead, between, setStationOrder, stationPath } from '../src/sim/topologyOrder';
+import { ahead, between, lineEnd, setStationOrder, stationPath } from '../src/sim/topologyOrder';
 
 // 0-1-2-3-4 is the main run (DN = rising index); 5-6 is a branch that joins at 2:
 //   0 - 1 \
@@ -49,6 +49,12 @@ describe('station order', () => {
     expect(stationPath(6, 6)).toEqual([6]);
     expect(between(2, 0, 5)).toBe(true); expect(between(3, 0, 5)).toBe(false);
     expect(between(6, 5, 4)).toBe(true); expect(between(1, 5, 4)).toBe(false);
+  });
+
+  it('a line end is any station with nothing beyond it one way, a branch end too', () => {
+    expect([0, 1, 2, 3, 4].map(s => lineEnd(s, 5))).toEqual([true, false, false, false, true]);
+    setStationOrder(BRANCHED);
+    expect([0, 1, 2, 3, 4, 5, 6].map(s => lineEnd(s, 7))).toEqual([true, false, false, false, true, true, false]);
   });
 
   it('rejects an order that loops', () => {
